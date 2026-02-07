@@ -8,6 +8,7 @@ interface SidebarProps {
   onDeleteSession: (id: string) => void;
   onRestartSession: (id: string) => void;
   onLogout: () => void;
+  open?: boolean;
 }
 
 export function Sidebar({
@@ -18,9 +19,10 @@ export function Sidebar({
   onDeleteSession,
   onRestartSession,
   onLogout,
+  open,
 }: SidebarProps) {
   return (
-    <div className="sidebar">
+    <div className={`sidebar${open ? ' open' : ''}`}>
       <div className="sidebar-header">
         <h2>Sessions</h2>
         <button className="logout-btn" onClick={onLogout}>

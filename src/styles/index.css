@@ -465,3 +465,101 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-secondary);
 }
+
+/* Mobile: Sidebar toggle button (hidden on desktop) */
+.sidebar-toggle {
+  display: none;
+  position: fixed;
+  top: 10px;
+  left: 10px;
+  z-index: 60;
+  width: 40px;
+  height: 40px;
+  background: var(--bg-sidebar);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text-primary);
+  font-size: 20px;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+/* Mobile: Sidebar overlay (hidden on desktop) */
+.sidebar-overlay {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 39;
+}
+
+/* Mobile Responsive */
+@media (max-width: 768px) {
+  /* Login */
+  .login-box {
+    width: calc(100% - 32px);
+    max-width: 380px;
+    padding: 28px 20px;
+  }
+
+  .login-box input {
+    font-size: 16px;
+  }
+
+  /* Sidebar drawer */
+  .sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    z-index: 40;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+  }
+
+  .sidebar.open {
+    transform: translateX(0);
+  }
+
+  /* Hamburger button */
+  .sidebar-toggle {
+    display: flex;
+  }
+
+  /* Overlay */
+  .sidebar-overlay.visible {
+    display: block;
+  }
+
+  /* Session action buttons always visible on touch */
+  .session-item .restart-btn-small,
+  .session-item .close-btn {
+    opacity: 1;
+  }
+
+  /* Larger touch targets for session items */
+  .session-item {
+    padding: 12px;
+    min-height: 44px;
+  }
+
+  /* Modal */
+  .modal-content {
+    width: calc(100% - 32px);
+    max-width: 420px;
+  }
+
+  /* Terminal: leave space for hamburger button */
+  .terminal-wrapper {
+    padding-top: 56px;
+  }
+
+  /* Form inputs on mobile */
+  .form-group input {
+    font-size: 16px;
+  }
+}

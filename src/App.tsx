@@ -17,6 +17,7 @@ export function App() {
   const [sessions, setSessions] = useState<SessionInfo[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
   const [mountedSessions, setMountedSessions] = useState<Set<string>>(new Set());
 
   const refreshSessions = useCallback(async () => {
@@ -52,6 +53,7 @@ export function App() {
       setActiveSessionId(session.id);
       setMountedSessions((prev) => new Set(prev).add(session.id));
       setShowForm(false);
+      setSidebarOpen(false);
     } catch (err: any) {
       if (err.message === 'Unauthorized') { logout(); return; }
       alert(err.message || 'Failed to create session');
@@ -86,6 +88,7 @@ export function App() {
   const handleSelectSession = (id: string) => {
     setActiveSessionId(id);
     setMountedSessions((prev) => new Set(prev).add(id));
+    setSidebarOpen(false);
   };
 
   const handleSessionRestarted = async () => {
@@ -113,6 +116,13 @@ export function App() {
 
   return (
     <div className="app-layout">
+      <button className="sidebar-toggle" onClick={() => setSidebarOpen(!sidebarOpen)}>
+        ☰
+      </button>
+      <div
+        className={`sidebar-overlay${sidebarOpen ? ' visible' : ''}`}
+        onClick={() => setSidebarOpen(false)}
+      />
       <Sidebar
         sessions={sessions}
         activeSessionId={activeSessionId}
@@ -121,6 +131,7 @@ export function App() {
         onDeleteSession={handleDeleteSession}
         onRestartSession={handleRestartSession}
         onLogout={logout}
+        open={sidebarOpen}
       />
       <div className="terminal-area">
         {activeSessionId ? (
