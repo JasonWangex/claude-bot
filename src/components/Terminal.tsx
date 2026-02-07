@@ -100,26 +100,6 @@ export function Terminal({ sessionId, visible, onRestarted }: TerminalProps) {
     termRef.current = term;
     fitAddonRef.current = fitAddon;
 
-    // Intercept wheel events in capture phase — must run before xterm.js
-    // internal handlers to prevent forwarding to PTY application
-    const termEl = containerRef.current;
-    const handleWheel = (e: WheelEvent) => {
-      e.preventDefault();
-      e.stopPropagation();
-      const isAltScreen = term.buffer.active.type === 'alternate';
-      if (isAltScreen) {
-        // In alternate screen (Claude Code TUI etc.): send Page Up/Down
-        // so the application scrolls its own viewport
-        const key = e.deltaY < 0 ? '\x1b[5~' : '\x1b[6~'; // PageUp / PageDown
-        sendRef.current(key);
-      } else {
-        // In normal mode: scroll xterm's scrollback buffer
-        const lines = Math.sign(e.deltaY) * 3;
-        term.scrollLines(lines);
-      }
-    };
-    termEl.addEventListener('wheel', handleWheel, { capture: true, passive: false });
-
     // User input → WebSocket (via ref to avoid stale closure)
     term.onData((data) => {
       sendRef.current(data);
@@ -135,7 +115,6 @@ export function Terminal({ sessionId, visible, onRestarted }: TerminalProps) {
     resizeObserver.observe(containerRef.current);
 
     return () => {
-      termEl.removeEventListener('wheel', handleWheel, { capture: true });
       resizeObserver.disconnect();
       term.dispose();
       initializedRef.current = false;

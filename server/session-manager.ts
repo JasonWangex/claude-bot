@@ -28,6 +28,7 @@ function tmuxNewSession(name: string, cwd: string, cols: number, rows: number): 
   // Configure the tmux session; rollback on failure
   try {
     execFileSync('tmux', ['set-option', '-t', name, 'status', 'off']);
+    execFileSync('tmux', ['set-option', '-t', name, 'mouse', 'on']);
     execFileSync('tmux', ['set-option', '-t', name, 'history-limit', '50000']);
   } catch {
     tmuxKillSession(name);
