@@ -1,20 +1,24 @@
-import { useEffect, useRef, useCallback } from 'react';
+import { useEffect, useRef, useCallback, useState } from 'react';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { useWebSocket } from '../hooks/useWebSocket';
+import { restartSession } from '../lib/api';
 import '@xterm/xterm/css/xterm.css';
 
 interface TerminalProps {
   sessionId: string;
   visible: boolean;
+  onRestarted?: () => void;
 }
 
-export function Terminal({ sessionId, visible }: TerminalProps) {
+export function Terminal({ sessionId, visible, onRestarted }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const initializedRef = useRef(false);
+  const [showRestart, setShowRestart] = useState(false);
+  const [isRestarting, setIsRestarting] = useState(false);
 
   const onData = useCallback((data: string) => {
     termRef.current?.write(data);
@@ -23,8 +27,10 @@ export function Terminal({ sessionId, visible }: TerminalProps) {
   const onClose = useCallback((code: number, _reason: string) => {
     if (code === 4004) {
       termRef.current?.write('\r\n\x1b[33m[Session ended]\x1b[0m\r\n');
+      setShowRestart(true);
     } else if (code === 4005) {
       termRef.current?.write('\r\n\x1b[31m[Session is no longer alive]\x1b[0m\r\n');
+      setShowRestart(true);
     } else if (code === 4006) {
       termRef.current?.write('\r\n\x1b[33m[Disconnected, reconnecting...]\x1b[0m\r\n');
     }
@@ -56,6 +62,7 @@ export function Terminal({ sessionId, visible }: TerminalProps) {
 
     const term = new XTerm({
       cursorBlink: true,
+      scrollback: 10000,
       fontSize: 14,
       fontFamily: "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Menlo, monospace",
       theme: {
@@ -93,6 +100,26 @@ export function Terminal({ sessionId, visible }: TerminalProps) {
     termRef.current = term;
     fitAddonRef.current = fitAddon;
 
+    // Intercept wheel events in capture phase — must run before xterm.js
+    // internal handlers to prevent forwarding to PTY application
+    const termEl = containerRef.current;
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const isAltScreen = term.buffer.active.type === 'alternate';
+      if (isAltScreen) {
+        // In alternate screen (Claude Code TUI etc.): send Page Up/Down
+        // so the application scrolls its own viewport
+        const key = e.deltaY < 0 ? '\x1b[5~' : '\x1b[6~'; // PageUp / PageDown
+        sendRef.current(key);
+      } else {
+        // In normal mode: scroll xterm's scrollback buffer
+        const lines = Math.sign(e.deltaY) * 3;
+        term.scrollLines(lines);
+      }
+    };
+    termEl.addEventListener('wheel', handleWheel, { capture: true, passive: false });
+
     // User input → WebSocket (via ref to avoid stale closure)
     term.onData((data) => {
       sendRef.current(data);
@@ -108,6 +135,7 @@ export function Terminal({ sessionId, visible }: TerminalProps) {
     resizeObserver.observe(containerRef.current);
 
     return () => {
+      termEl.removeEventListener('wheel', handleWheel, { capture: true });
       resizeObserver.disconnect();
       term.dispose();
       initializedRef.current = false;
@@ -124,11 +152,42 @@ export function Terminal({ sessionId, visible }: TerminalProps) {
     }
   }, [visible]);
 
+  // Reset restart button when session changes
+  useEffect(() => {
+    setShowRestart(false);
+  }, [sessionId]);
+
+  const handleRestart = async () => {
+    setIsRestarting(true);
+    try {
+      await restartSession(sessionId);
+      setShowRestart(false);
+      termRef.current?.clear();
+      onRestarted?.();
+    } catch (err) {
+      termRef.current?.write(`\r\n\x1b[31m[Failed to restart: ${err instanceof Error ? err.message : 'Unknown error'}]\x1b[0m\r\n`);
+    } finally {
+      setIsRestarting(false);
+    }
+  };
+
   return (
     <div
-      className="terminal-wrapper"
-      style={{ display: visible ? 'block' : 'none' }}
-      ref={containerRef}
-    />
+      className="terminal-container"
+      style={{ display: visible ? 'flex' : 'none' }}
+    >
+      <div className="terminal-wrapper" ref={containerRef} />
+      {showRestart && (
+        <div className="terminal-restart-overlay">
+          <button
+            className="restart-btn"
+            onClick={handleRestart}
+            disabled={isRestarting}
+          >
+            {isRestarting ? 'Restarting...' : 'Restart Session'}
+          </button>
+        </div>
+      )}
+    </div>
   );
 }

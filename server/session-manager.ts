@@ -173,6 +173,31 @@ class SessionManager {
     return tmuxCapture(session.tmuxName, lines);
   }
 
+  restart(id: string): SessionInfo | null {
+    const session = this.sessions.get(id);
+    if (!session) return null;
+
+    // Kill old tmux session if it exists
+    tmuxKillSession(session.tmuxName);
+
+    // Create new tmux session with same tmuxName
+    const cols = 120;
+    const rows = 30;
+    try {
+      tmuxNewSession(session.tmuxName, session.cwd, cols, rows);
+    } catch (err) {
+      console.error(`Failed to restart session ${id}:`, err);
+      session.alive = false;
+      return null;
+    }
+
+    // Update alive status
+    session.alive = true;
+    this.saveMetas();
+
+    return this.toInfo(session);
+  }
+
   private loadMetas(): SessionMeta[] {
     if (!existsSync(SESSIONS_FILE)) return [];
     try {

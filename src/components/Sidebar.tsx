@@ -6,6 +6,7 @@ interface SidebarProps {
   onSelectSession: (id: string) => void;
   onNewSession: () => void;
   onDeleteSession: (id: string) => void;
+  onRestartSession: (id: string) => void;
   onLogout: () => void;
 }
 
@@ -15,6 +16,7 @@ export function Sidebar({
   onSelectSession,
   onNewSession,
   onDeleteSession,
+  onRestartSession,
   onLogout,
 }: SidebarProps) {
   return (
@@ -44,16 +46,30 @@ export function Sidebar({
                   {session.name}
                 </div>
               </div>
-              <button
-                className="close-btn"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDeleteSession(session.id);
-                }}
-                title="Close session"
-              >
-                &times;
-              </button>
+              <div className="session-actions">
+                {!session.alive && (
+                  <button
+                    className="restart-btn-small"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onRestartSession(session.id);
+                    }}
+                    title="Restart session"
+                  >
+                    ↻
+                  </button>
+                )}
+                <button
+                  className="close-btn"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDeleteSession(session.id);
+                  }}
+                  title="Close session"
+                >
+                  &times;
+                </button>
+              </div>
             </div>
           ))
         )}

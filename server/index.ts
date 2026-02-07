@@ -110,6 +110,16 @@ app.get('/api/sessions/:id/screen', requireAuth, (req, res) => {
   res.json({ content });
 });
 
+app.post('/api/sessions/:id/restart', requireAuth, (req, res) => {
+  const id = req.params.id as string;
+  const result = sessionManager.restart(id);
+  if (!result) {
+    res.status(404).json({ error: 'Session not found or failed to restart' });
+    return;
+  }
+  res.json(result);
+});
+
 // SPA fallback in production
 if (process.env.NODE_ENV === 'production') {
   app.get('*', (_req, res) => {

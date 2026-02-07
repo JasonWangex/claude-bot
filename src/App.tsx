@@ -8,6 +8,7 @@ import {
   getSessions,
   createSession,
   deleteSession,
+  restartSession,
   type SessionInfo,
 } from './lib/api';
 
@@ -87,6 +88,25 @@ export function App() {
     setMountedSessions((prev) => new Set(prev).add(id));
   };
 
+  const handleSessionRestarted = async () => {
+    try {
+      const updatedSessions = await getSessions();
+      setSessions(updatedSessions);
+    } catch (err: any) {
+      if (err.message === 'Unauthorized') logout();
+    }
+  };
+
+  const handleRestartSession = async (id: string) => {
+    try {
+      await restartSession(id);
+      await handleSessionRestarted();
+    } catch (err: any) {
+      if (err.message === 'Unauthorized') { logout(); return; }
+      alert(err.message || 'Failed to restart session');
+    }
+  };
+
   if (!authenticated) {
     return <Login onLogin={login} error={error} loading={loading} />;
   }
@@ -99,13 +119,19 @@ export function App() {
         onSelectSession={handleSelectSession}
         onNewSession={() => setShowForm(true)}
         onDeleteSession={handleDeleteSession}
+        onRestartSession={handleRestartSession}
         onLogout={logout}
       />
       <div className="terminal-area">
         {activeSessionId ? (
           <div className="terminal-container">
             {Array.from(mountedSessions).map((id) => (
-              <Terminal key={id} sessionId={id} visible={id === activeSessionId} />
+              <Terminal
+                key={id}
+                sessionId={id}
+                visible={id === activeSessionId}
+                onRestarted={handleSessionRestarted}
+              />
             ))}
           </div>
         ) : (

@@ -93,6 +93,22 @@ export async function deleteSession(id: string): Promise<void> {
   if (!res.ok) throw new Error('Failed to delete session');
 }
 
+export async function restartSession(id: string): Promise<SessionInfo> {
+  const res = await fetch(`${API_BASE}/sessions/${id}/restart`, {
+    method: 'POST',
+    headers: authHeaders(),
+  });
+  if (res.status === 401) {
+    logout();
+    throw new Error('Unauthorized');
+  }
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || 'Failed to restart session');
+  }
+  return res.json();
+}
+
 export function getWsUrl(sessionId: string): string {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const host = window.location.host;

@@ -233,6 +233,34 @@ body {
   margin-top: 2px;
 }
 
+.session-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.session-item .restart-btn-small {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  font-size: 16px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  opacity: 0;
+  transition: opacity 0.15s;
+  line-height: 1;
+}
+
+.session-item:hover .restart-btn-small {
+  opacity: 1;
+}
+
+.session-item .restart-btn-small:hover {
+  background: rgba(122, 162, 247, 0.15);
+}
+
 .session-item .close-btn {
   background: none;
   border: none;
@@ -361,6 +389,8 @@ body {
 
 .terminal-container {
   flex: 1;
+  display: flex;
+  flex-direction: column;
   position: relative;
 }
 
@@ -375,6 +405,38 @@ body {
 
 .terminal-wrapper .xterm {
   height: 100%;
+}
+
+.terminal-restart-overlay {
+  position: absolute;
+  bottom: 20px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 10;
+}
+
+.restart-btn {
+  padding: 12px 24px;
+  background: var(--accent);
+  color: #1a1b26;
+  border: none;
+  border-radius: 8px;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  box-shadow: 0 4px 12px rgba(122, 162, 247, 0.3);
+}
+
+.restart-btn:hover:not(:disabled) {
+  background: var(--accent-hover);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(122, 162, 247, 0.4);
+}
+
+.restart-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 .terminal-placeholder {
