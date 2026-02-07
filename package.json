@@ -4,11 +4,13 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "concurrently -k \"tsx watch server/index.ts\" \"vite\"",
+    "dev": "concurrently -k -n web,vite,tg -c blue,green,magenta \"tsx watch server/index.ts\" \"vite\" \"tsx watch telegram/index.ts\"",
     "dev:server": "tsx watch server/index.ts",
     "dev:client": "vite",
+    "dev:telegram": "tsx watch telegram/index.ts",
     "build": "vite build",
-    "start": "NODE_ENV=production tsx server/index.ts",
+    "start": "NODE_ENV=production concurrently -k -n web,tg -c blue,magenta \"tsx server/index.ts\" \"tsx telegram/index.ts\"",
+    "start:web": "NODE_ENV=production tsx server/index.ts",
     "preview": "npm run build && npm start"
   },
   "dependencies": {
@@ -17,14 +19,19 @@
     "@xterm/addon-web-links": "^0.12.0",
     "@xterm/xterm": "^6.0.0",
     "bcryptjs": "^3.0.3",
+    "chokidar": "^5.0.0",
     "cors": "^2.8.6",
     "dotenv": "^17.2.4",
     "express": "^5.2.1",
     "express-rate-limit": "^8.2.1",
     "helmet": "^8.1.0",
+    "https-proxy-agent": "^7.0.6",
     "jsonwebtoken": "^9.0.3",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
+    "socks-proxy-agent": "^8.0.5",
+    "telegraf": "^4.16.3",
+    "undici": "^7.21.0",
     "ws": "^8.19.0"
   },
   "devDependencies": {
@@ -32,6 +39,7 @@
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
     "@types/jsonwebtoken": "^9.0.10",
+    "@types/node": "^20.11.5",
     "@types/react": "^19.2.13",
     "@types/react-dom": "^19.2.3",
     "@types/ws": "^8.18.1",
