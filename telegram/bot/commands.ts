@@ -3,57 +3,38 @@
  */
 
 import { Context } from 'telegraf';
-import { writeFileSync, unlinkSync } from 'fs';
-import { tmpdir } from 'os';
-import { join } from 'path';
 import { StateManager } from './state.js';
 import { MessageHandler } from './handlers.js';
 import { ClaudeClient } from '../claude/client.js';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
+import { SessionPanel } from './session-panel.js';
+import { sendLongMessage, escapeHtml } from './message-utils.js';
+import { StreamEvent } from '../types/index.js';
 import { stat } from 'fs/promises';
 import { resolve } from 'path';
 import { timingSafeEqual } from 'crypto';
 import { updateAuthorizedChatId, getAuthorizedChatId } from '../utils/env.js';
+import { checkAuth } from './auth.js';
 import { logger } from '../utils/logger.js';
-
-const execFileAsync = promisify(execFile);
 
 export class CommandHandler {
   private stateManager: StateManager;
   private claudeClient: ClaudeClient;
   private messageHandler: MessageHandler;
+  private sessionPanel: SessionPanel;
 
-  constructor(stateManager: StateManager, claudeClient: ClaudeClient, messageHandler: MessageHandler) {
+  constructor(stateManager: StateManager, claudeClient: ClaudeClient, messageHandler: MessageHandler, sessionPanel: SessionPanel) {
     this.stateManager = stateManager;
     this.claudeClient = claudeClient;
     this.messageHandler = messageHandler;
+    this.sessionPanel = sessionPanel;
   }
 
   private getAccessToken(): string {
     return process.env.BOT_ACCESS_TOKEN || '';
   }
 
-  private checkAuth(ctx: Context): boolean {
-    if (!ctx.from || !ctx.chat) return false;
-    const userId = ctx.from.id;
-    const chatId = ctx.chat.id;
-
-    const authorizedChatId = getAuthorizedChatId();
-
-    if (authorizedChatId) {
-      if (chatId === authorizedChatId) {
-        this.stateManager.setAuthorized(userId, true);
-        return true;
-      }
-      return false;
-    }
-
-    return this.stateManager.isAuthorized(userId);
-  }
-
   private async requireAuth(ctx: Context, handler: () => Promise<void>): Promise<void> {
-    if (!ctx.from || !ctx.chat || !this.checkAuth(ctx)) {
+    if (!ctx.from || !ctx.chat || !checkAuth(ctx, this.stateManager)) {
       const authorizedChatId = getAuthorizedChatId();
       await ctx.reply(
         '❌ 未授权访问\n\n' +
@@ -119,9 +100,7 @@ export class CommandHandler {
     } else {
       await ctx.reply(
         '❌ 此 Bot 已绑定到其他用户。\n\n' +
-        `当前绑定的 Chat ID: ${currentChatId}\n` +
-        `您的 Chat ID: ${chatId}\n\n` +
-        `如需解绑，请手动编辑 .env 文件清除 AUTHORIZED_CHAT_ID。`
+        '如需更改绑定，请联系管理员编辑 .env 文件。'
       );
     }
   }
@@ -138,6 +117,10 @@ export class CommandHandler {
         `可用命令:\n` +
         `/cd <path> - 切换工作目录\n` +
         `/clear - 清空对话历史\n` +
+        `/compact - 压缩上下文\n` +
+        `/rewind - 撤销最后一轮对话\n` +
+        `/plan <msg> - Plan 模式\n` +
+        `/stop - 停止当前任务\n` +
         `/status - 查看当前状态\n` +
         `/sessions - 管理多会话\n` +
         `/help - 显示帮助信息\n\n` +
@@ -150,31 +133,36 @@ export class CommandHandler {
     await this.requireAuth(ctx, async () => {
       await ctx.reply(
         `🤖 Claude Code Telegram Bot 帮助\n\n` +
-        `**基本命令**\n` +
+        `<b>基本命令</b>\n` +
         `/start - 显示欢迎信息\n` +
-        `/cd <path> - 切换工作目录\n` +
+        `/cd &lt;path&gt; - 切换工作目录\n` +
         `/clear - 清空对话历史，开始新会话\n` +
+        `/compact - 压缩当前会话上下文\n` +
+        `/rewind - 撤销最后一轮对话\n` +
+        `/plan &lt;msg&gt; - Plan 模式（只规划不执行）\n` +
+        `/stop - 停止当前正在执行的任务\n` +
         `/status - 查看当前状态\n` +
         `/help - 显示此帮助信息\n\n` +
-        `**会话管理**\n` +
+        `<b>会话管理</b>\n` +
         `/sessions - 列出所有会话\n` +
-        `/sessions new <name> - 创建新会话\n` +
-        `/sessions switch <name> - 切换会话\n` +
-        `/sessions rename <old> <new> - 重命名\n` +
-        `/sessions delete <name> - 删除会话\n` +
+        `/sessions new &lt;name&gt; - 创建新会话\n` +
+        `/sessions switch &lt;name&gt; - 切换会话\n` +
+        `/sessions rename &lt;old&gt; &lt;new&gt; - 重命名\n` +
+        `/sessions delete &lt;name&gt; - 删除会话\n` +
         `/sessions info [name] - 查看会话详情\n` +
         `/sessions history [name] [count] - 查看消息记录\n` +
-        `/sessions send <name> <message> - 向后台会话发消息\n\n` +
-        `**使用方法**\n` +
+        `/sessions send &lt;name&gt; &lt;message&gt; - 向后台会话发消息\n\n` +
+        `<b>使用方法</b>\n` +
         `• 直接发送消息与 Claude Code 对话\n` +
         `• Claude 会自动执行需要的工具（读取文件、运行命令等）\n` +
         `• 对话会保持上下文，可以连续提问\n` +
         `• 使用 /clear 开始新话题\n` +
         `• 使用 /sessions 管理多个独立会话\n\n` +
-        `**示例**\n` +
+        `<b>示例</b>\n` +
         `"列出当前目录的所有文件"\n` +
         `"读取 README.md 文件"\n` +
-        `"这个项目是做什么的？"`
+        `"这个项目是做什么的？"`,
+        { parse_mode: 'HTML' }
       );
     });
   }
@@ -187,13 +175,13 @@ export class CommandHandler {
 
       await ctx.reply(
         `📊 当前状态\n\n` +
-        `当前会话: \`${session.name}\`\n` +
-        `工作目录: \`${session.cwd}\`\n` +
-        `Claude 会话: ${session.claudeSessionId ? `\`${session.claudeSessionId.slice(0, 8)}...\`` : '(新会话)'}\n` +
+        `当前会话: <code>${escapeHtml(session.name)}</code>\n` +
+        `工作目录: <code>${escapeHtml(session.cwd)}</code>\n` +
+        `Claude 会话: ${session.claudeSessionId ? `<code>${escapeHtml(session.claudeSessionId.slice(0, 8))}...</code>` : '(新会话)'}\n` +
         `消息记录: ${session.messageHistory.length} 条\n` +
         `会话总数: ${sessions.length}\n` +
         `活跃用户数: ${this.stateManager.getActiveCount()}`,
-        { parse_mode: 'Markdown' }
+        { parse_mode: 'HTML' }
       );
     });
   }
@@ -208,6 +196,99 @@ export class CommandHandler {
     });
   }
 
+  async handleCompact(ctx: Context): Promise<void> {
+    await this.requireAuth(ctx, async () => {
+      const userId = ctx.from!.id;
+      const chatId = ctx.chat!.id;
+      const session = this.stateManager.getActiveSession(userId);
+
+      if (!session.claudeSessionId) {
+        await ctx.reply('❌ 当前会话没有活跃的 Claude 上下文，无需压缩。');
+        return;
+      }
+
+      const progressMsg = await ctx.reply(`🗜️ [${session.name}] 正在压缩上下文...`);
+
+      let preTokens: number | null = null;
+      let postTokens: number | null = null;
+
+      const onProgress = (event: StreamEvent) => {
+        if (event.compact_metadata) {
+          preTokens = event.compact_metadata.pre_tokens;
+        }
+        if (event.usage) {
+          postTokens = event.usage.input_tokens;
+        }
+      };
+
+      try {
+        const lockKey = session.claudeSessionId || session.id;
+        await this.claudeClient.compact(session.claudeSessionId, session.cwd, lockKey, onProgress);
+
+        let info = `✅ [${session.name}] 上下文已压缩`;
+        if (preTokens) {
+          info += `\n压缩前: ${Math.round(preTokens / 1000)}K tokens`;
+          if (postTokens) {
+            info += ` → 压缩后: ${Math.round(postTokens / 1000)}K tokens`;
+          }
+        }
+
+        await ctx.telegram.editMessageText(chatId, progressMsg.message_id, undefined, info);
+      } catch (error: any) {
+        await ctx.telegram.editMessageText(
+          chatId, progressMsg.message_id, undefined,
+          `❌ 压缩失败: ${error.message}`
+        ).catch(() => {});
+      }
+    });
+  }
+
+  async handleRewind(ctx: Context): Promise<void> {
+    await this.requireAuth(ctx, async () => {
+      const userId = ctx.from!.id;
+      const session = this.stateManager.getActiveSession(userId);
+
+      const result = this.stateManager.rewindSession(userId, session.id);
+      if (!result.success) {
+        await ctx.reply(`❌ ${result.reason}`);
+        return;
+      }
+
+      await ctx.reply(
+        `✅ [${session.name}] 已撤销最后一轮对话\n` +
+        `本地记录已回退，Claude 上下文将从上一轮继续。`
+      );
+    });
+  }
+
+  async handlePlan(ctx: Context): Promise<void> {
+    await this.requireAuth(ctx, async () => {
+      const userId = ctx.from!.id;
+      const session = this.stateManager.getActiveSession(userId);
+
+      const text = (ctx.message as any)?.text || '';
+      const message = text.replace(/^\/plan\s*/, '').trim();
+
+      if (!message) {
+        await ctx.reply(
+          '用法: /plan <message>\n\n' +
+          '以 Plan 模式发送消息，Claude 只会输出方案而不执行。\n' +
+          '方案输出后，回复 "ok" 或 "确认" 将自动压缩上下文并执行实现。'
+        );
+        return;
+      }
+
+      // 设置 plan mode 标记
+      this.stateManager.setSessionPlanMode(userId, session.id, true);
+
+      // 使用 messageHandler 发送，但传入 plan permissionMode
+      // 委托给 handleText 处理，但需要注入 permissionMode
+      // 通过在 session 上标记 planMode，让 handleText 检测到并使用 plan 模式
+      // 模拟一个文本消息处理
+      await this.messageHandler.handleTextWithMode(ctx, 'plan');
+    });
+  }
+
   async handleCd(ctx: Context): Promise<void> {
     await this.requireAuth(ctx, async () => {
       const userId = ctx.from!.id;
@@ -217,7 +298,7 @@ export class CommandHandler {
       const args = text.split(/\s+/).slice(1);
 
       if (args.length === 0) {
-        await ctx.reply(`当前工作目录: \`${session.cwd}\``, { parse_mode: 'Markdown' });
+        await ctx.reply(`当前工作目录: <code>${escapeHtml(session.cwd)}</code>`, { parse_mode: 'HTML' });
         return;
       }
 
@@ -231,10 +312,22 @@ export class CommandHandler {
           return;
         }
         this.stateManager.setSessionCwd(userId, session.id, resolvedPath);
-        await ctx.reply(`✅ 工作目录已切换到: \`${resolvedPath}\``, { parse_mode: 'Markdown' });
+        await ctx.reply(`✅ 工作目录已切换到: <code>${escapeHtml(resolvedPath)}</code>`, { parse_mode: 'HTML' });
       } catch {
         await ctx.reply(`❌ 目录不存在: ${resolvedPath}`);
       }
+    });
+  }
+
+  async handleStop(ctx: Context): Promise<void> {
+    await this.requireAuth(ctx, async () => {
+      const userId = ctx.from!.id;
+      const session = this.stateManager.getActiveSession(userId);
+      const lockKey = session.claudeSessionId || session.id;
+      const wasRunning = this.claudeClient.abort(lockKey);
+      await ctx.reply(wasRunning
+        ? `⏹ [${session.name}] 正在停止任务...`
+        : `ℹ️ [${session.name}] 当前没有正在执行的任务`);
     });
   }
 
@@ -246,7 +339,13 @@ export class CommandHandler {
       const text = (ctx.message as any)?.text || '';
       // 解析: /sessions [subcommand] [args...]
       const parts = text.split(/\s+/).slice(1);
-      const subcommand = parts[0]?.toLowerCase() || 'list';
+
+      // 无参数时显示按钮面板
+      if (parts.length === 0) {
+        return this.sessionPanel.showMainPanel(ctx, userId);
+      }
+
+      const subcommand = parts[0].toLowerCase();
 
       switch (subcommand) {
         case 'list':
@@ -292,12 +391,12 @@ export class CommandHandler {
       const lastMsg = s.lastMessage
         ? `\n    最近: ${s.lastMessage.slice(0, 60)}${s.lastMessage.length > 60 ? '...' : ''}`
         : '';
-      return `${marker}${claude} **${s.name}** (${s.messageHistory.length} 条消息)${lastMsg}`;
+      return `${marker}${claude} <b>${escapeHtml(s.name)}</b> (${s.messageHistory.length} 条消息)${lastMsg}`;
     });
 
     await ctx.reply(
       `📋 会话列表 (${sessions.length})\n\n${lines.join('\n\n')}`,
-      { parse_mode: 'Markdown' }
+      { parse_mode: 'HTML' }
     );
   }
 
@@ -316,10 +415,10 @@ export class CommandHandler {
 
     const session = this.stateManager.createSession(userId, name);
     await ctx.reply(
-      `✅ 已创建会话 "${name}"\n` +
-      `工作目录: \`${session.cwd}\`\n\n` +
-      `使用 /sessions switch ${name} 切换到该会话`,
-      { parse_mode: 'Markdown' }
+      `✅ 已创建会话 "${escapeHtml(name)}"\n` +
+      `工作目录: <code>${escapeHtml(session.cwd)}</code>\n\n` +
+      `使用 /sessions switch ${escapeHtml(name)} 切换到该会话`,
+      { parse_mode: 'HTML' }
     );
   }
 
@@ -338,11 +437,11 @@ export class CommandHandler {
 
     this.stateManager.switchSession(userId, session.id);
 
-    let info = `✅ 已切换到会话 "${name}"\n工作目录: \`${session.cwd}\``;
+    let info = `✅ 已切换到会话 "${escapeHtml(name)}"\n工作目录: <code>${escapeHtml(session.cwd)}</code>`;
     if (session.lastMessage) {
-      info += `\n\n最近消息:\n${session.lastMessage.slice(0, 200)}`;
+      info += `\n\n最近消息:\n${escapeHtml(session.lastMessage.slice(0, 200))}`;
     }
-    await ctx.reply(info, { parse_mode: 'Markdown' });
+    await ctx.reply(info, { parse_mode: 'HTML' });
   }
 
   private async sessionsRenameCmd(ctx: Context, userId: number, args: string[]): Promise<void> {
@@ -410,14 +509,14 @@ export class CommandHandler {
       : '无';
 
     await ctx.reply(
-      `📄 会话详情: ${session.name} ${isActive ? '(当前)' : ''}\n\n` +
-      `ID: \`${session.id.slice(0, 8)}...\`\n` +
-      `工作目录: \`${session.cwd}\`\n` +
-      `Claude 会话: ${session.claudeSessionId ? `\`${session.claudeSessionId.slice(0, 8)}...\`` : '(新会话)'}\n` +
+      `📄 会话详情: ${escapeHtml(session.name)} ${isActive ? '(当前)' : ''}\n\n` +
+      `ID: <code>${escapeHtml(session.id.slice(0, 8))}...</code>\n` +
+      `工作目录: <code>${escapeHtml(session.cwd)}</code>\n` +
+      `Claude 会话: ${session.claudeSessionId ? `<code>${escapeHtml(session.claudeSessionId.slice(0, 8))}...</code>` : '(新会话)'}\n` +
       `创建时间: ${created}\n` +
       `最近活动: ${lastMsgTime}\n` +
       `消息记录: ${session.messageHistory.length} 条`,
-      { parse_mode: 'Markdown' }
+      { parse_mode: 'HTML' }
     );
   }
 
@@ -489,26 +588,10 @@ export class CommandHandler {
 
     try {
       const response = await this.messageHandler.handleBackgroundChat(userId, session.id, message);
-      await this.sendResult(ctx, `✅ [${name}] 执行完成:\n\n${response.result}`);
+      await sendLongMessage(ctx, `✅ [${name}] 执行完成:\n\n${response.result}`);
     } catch (error: any) {
       await ctx.reply(`❌ [${name}] 执行失败: ${error.message}`);
     }
   }
 
-  private async sendResult(ctx: Context, text: string): Promise<void> {
-    if (text.length > 4000) {
-      const tmpFile = join(tmpdir(), `claude-${Date.now()}.md`);
-      try {
-        writeFileSync(tmpFile, text, 'utf-8');
-        await ctx.replyWithDocument(
-          { source: tmpFile, filename: 'response.md' },
-          { caption: text.slice(0, 1000) + (text.length > 1000 ? '...' : '') }
-        );
-      } finally {
-        try { unlinkSync(tmpFile); } catch {}
-      }
-      return;
-    }
-    await ctx.reply(text);
-  }
 }

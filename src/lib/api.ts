@@ -90,7 +90,10 @@ export async function deleteSession(id: string): Promise<void> {
     logout();
     throw new Error('Unauthorized');
   }
-  if (!res.ok) throw new Error('Failed to delete session');
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || 'Failed to delete session');
+  }
 }
 
 export async function restartSession(id: string): Promise<SessionInfo> {

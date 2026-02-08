@@ -34,6 +34,12 @@ export function App() {
       const list = await getSessions();
       setSessions(list);
       const existingIds = new Set(list.map((s) => s.id));
+      setActiveSessionId((current) => {
+        if (current && !existingIds.has(current)) {
+          return list.length > 0 ? list[0].id : null;
+        }
+        return current;
+      });
       setMountedSessions((prev) => {
         const next = new Set<string>();
         prev.forEach((id) => {

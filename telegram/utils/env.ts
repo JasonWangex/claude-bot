@@ -55,5 +55,7 @@ export function updateAuthorizedChatId(chatId: number): boolean {
  */
 export function getAuthorizedChatId(): number | undefined {
   const chatId = process.env.AUTHORIZED_CHAT_ID;
-  return chatId ? parseInt(chatId, 10) : undefined;
+  if (!chatId) return undefined;
+  const parsed = parseInt(chatId, 10);
+  return isNaN(parsed) ? undefined : parsed;
 }

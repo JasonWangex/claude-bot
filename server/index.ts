@@ -54,8 +54,12 @@ app.get('/api/sessions', requireAuth, (_req, res) => {
 
 app.post('/api/sessions', requireAuth, (req, res) => {
   const { name } = req.body as CreateSessionRequest;
-  if (!name) {
+  if (!name || typeof name !== 'string') {
     res.status(400).json({ error: 'name is required' });
+    return;
+  }
+  if (name.length > 50) {
+    res.status(400).json({ error: 'name must be 50 characters or less' });
     return;
   }
   try {
@@ -216,7 +220,7 @@ wss.on('connection', (ws: WebSocketClient, req) => {
             });
 
             attachPty.onExit(() => {
-              if (ws.readyState === ws.OPEN) {
+              if (!closed && ws.readyState === ws.OPEN) {
                 const stillAlive = sessionManager.checkAlive(sessionId);
                 if (!stillAlive) {
                   ws.send(`\r\n\x1b[31m[Session ended]\x1b[0m\r\n`);
@@ -304,3 +308,20 @@ main().catch((err) => {
   console.error('Fatal error:', err);
   process.exit(1);
 });
+
+// Graceful shutdown
+function shutdown(signal: string) {
+  console.log(`Received ${signal}, shutting down...`);
+  wss.clients.forEach((ws) => {
+    ws.close(1001, 'Server shutting down');
+  });
+  clearInterval(heartbeat);
+  server.close(() => {
+    console.log('Server closed');
+    process.exit(0);
+  });
+  // Force exit after 5s
+  setTimeout(() => process.exit(0), 5000);
+}
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));

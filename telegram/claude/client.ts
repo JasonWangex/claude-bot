@@ -1,10 +1,18 @@
 /**
- * Claude Code 客户端 - 高级接口
+ * Claude Code 客户端 - 高级接口（含重试逻辑）
  */
 
 import { ClaudeExecutor } from './executor.js';
-import { ClaudeOptions, ProgressCallback } from '../types/index.js';
+import { ClaudeOptions, ProgressCallback, ClaudeErrorType, ClaudeExecutionError } from '../types/index.js';
 import { logger } from '../utils/logger.js';
+
+interface ChatResult {
+  result: string;
+  sessionId: string;
+  usage?: { input_tokens: number; output_tokens: number };
+  duration_ms?: number;
+  total_cost_usd?: number;
+}
 
 export class ClaudeClient {
   private executor: ClaudeExecutor;
@@ -38,15 +46,68 @@ export class ClaudeClient {
       cwd?: string;
       allowedTools?: string[];
       lockKey?: string;
+      permissionMode?: string;
     } = {},
     onProgress?: ProgressCallback
-  ): Promise<{ result: string; sessionId: string }> {
+  ): Promise<ChatResult> {
+    try {
+      return await this.executeChat(message, options, onProgress);
+    } catch (error: any) {
+      if (!(error instanceof ClaudeExecutionError)) throw error;
+
+      if (error.errorType === ClaudeErrorType.FATAL || error.errorType === ClaudeErrorType.ABORTED) {
+        throw error;
+      }
+
+      if (error.errorType === ClaudeErrorType.SESSION_RECOVERABLE) {
+        logger.warn('Session recoverable error, resetting session:', error.message);
+        // 通知 UI 层
+        if (onProgress) {
+          try { onProgress({ type: 'system', subtype: 'session_reset' } as any); } catch {}
+          try { onProgress({ type: 'system', subtype: 'reset_state' } as any); } catch {}
+        }
+        // 清除 session，新建会话重试
+        try {
+          return await this.executeChat(message, { ...options, sessionId: undefined }, onProgress);
+        } catch (retryError: any) {
+          logger.error('Retry after session reset also failed:', retryError.message);
+          throw error; // 抛出原始错误
+        }
+      }
+
+      // RECOVERABLE: 重试一次（同参数）
+      logger.warn('Recoverable error, retrying once:', error.message);
+      if (onProgress) {
+        try { onProgress({ type: 'system', subtype: 'retrying' } as any); } catch {}
+        try { onProgress({ type: 'system', subtype: 'reset_state' } as any); } catch {}
+      }
+      try {
+        return await this.executeChat(message, options, onProgress);
+      } catch (retryError: any) {
+        logger.error('Retry also failed:', retryError.message);
+        throw error; // 抛出原始错误
+      }
+    }
+  }
+
+  private async executeChat(
+    message: string,
+    options: {
+      sessionId?: string;
+      cwd?: string;
+      allowedTools?: string[];
+      lockKey?: string;
+      permissionMode?: string;
+    },
+    onProgress?: ProgressCallback
+  ): Promise<ChatResult> {
     const claudeOptions: ClaudeOptions = {
       cwd: options.cwd,
       resume: options.sessionId,
       allowedTools: options.allowedTools || this.defaultAllowedTools,
       maxTurns: this.maxTurns,
       lockKey: options.lockKey,
+      permissionMode: options.permissionMode,
     };
 
     logger.debug('Calling Claude with options:', claudeOptions);
@@ -56,7 +117,34 @@ export class ClaudeClient {
     return {
       result: response.result,
       sessionId: response.session_id,
+      usage: response.usage,
+      duration_ms: response.duration_ms,
+      total_cost_usd: response.total_cost_usd,
     };
+  }
+
+  async compact(
+    sessionId: string,
+    cwd?: string,
+    lockKey?: string,
+    onProgress?: ProgressCallback
+  ): Promise<ChatResult> {
+    const response = await this.executor.compact(sessionId, cwd, lockKey, onProgress);
+    return {
+      result: response.result,
+      sessionId: response.session_id,
+      usage: response.usage,
+      duration_ms: response.duration_ms,
+      total_cost_usd: response.total_cost_usd,
+    };
+  }
+
+  abort(lockKey: string): boolean {
+    return this.executor.abort(lockKey);
+  }
+
+  isRunning(lockKey: string): boolean {
+    return this.executor.isRunning(lockKey);
   }
 
   async verify(): Promise<boolean> {

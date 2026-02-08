@@ -3,7 +3,7 @@
  */
 
 import { randomUUID } from 'crypto';
-import { readFile, writeFile, mkdir } from 'fs/promises';
+import { readFile, writeFile, rename, mkdir } from 'fs/promises';
 import { join, dirname } from 'path';
 import { UserState, Session } from '../types/index.js';
 import { logger } from '../utils/logger.js';
@@ -121,7 +121,9 @@ export class StateManager {
         data[String(userId)] = state;
       }
       await mkdir(dirname(this.filePath), { recursive: true });
-      await writeFile(this.filePath, JSON.stringify(data, null, 2), 'utf-8');
+      const tmpPath = this.filePath + '.tmp';
+      await writeFile(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
+      await rename(tmpPath, this.filePath);
     }).catch((err) => logger.error('saveToDisk error:', err.message));
   }
 
@@ -243,6 +245,10 @@ export class StateManager {
     const state = this.get(userId);
     const session = state.sessions.find(s => s.id === sessionId);
     if (!session) return;
+    // 保存上一轮 session ID 用于 rewind
+    if (session.claudeSessionId && session.claudeSessionId !== claudeSessionId) {
+      session.prevClaudeSessionId = session.claudeSessionId;
+    }
     session.claudeSessionId = claudeSessionId;
     this.scheduleSave();
   }
@@ -260,6 +266,40 @@ export class StateManager {
     const session = state.sessions.find(s => s.id === sessionId);
     if (!session) return;
     session.claudeSessionId = undefined;
+    session.prevClaudeSessionId = undefined;
+    this.scheduleSave();
+  }
+
+  rewindSession(userId: number, sessionId: string): { success: boolean; reason?: string; prevId?: string } {
+    const state = this.get(userId);
+    const session = state.sessions.find(s => s.id === sessionId);
+    if (!session) return { success: false, reason: '会话不存在' };
+    if (!session.prevClaudeSessionId) return { success: false, reason: '没有可撤销的对话轮次' };
+
+    const prevId = session.prevClaudeSessionId;
+    session.claudeSessionId = prevId;
+    session.prevClaudeSessionId = undefined;
+
+    // 移除最后一轮 user+assistant 消息
+    const history = session.messageHistory;
+    // 从后往前找到最后一条 assistant，删除它和它之前连续的 user
+    let i = history.length - 1;
+    while (i >= 0 && history[i].role === 'assistant') i--;
+    // i 现在指向最后一条 user（或 -1）
+    const removeFrom = i >= 0 && history[i].role === 'user' ? i : i + 1;
+    if (removeFrom < history.length) {
+      history.splice(removeFrom);
+    }
+
+    this.scheduleSave();
+    return { success: true, prevId };
+  }
+
+  setSessionPlanMode(userId: number, sessionId: string, planMode: boolean): void {
+    const state = this.get(userId);
+    const session = state.sessions.find(s => s.id === sessionId);
+    if (!session) return;
+    session.planMode = planMode;
     this.scheduleSave();
   }
 
