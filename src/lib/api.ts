@@ -112,7 +112,7 @@ export async function restartSession(id: string): Promise<SessionInfo> {
 export function getWsUrl(sessionId: string): string {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   const host = window.location.host;
-  return `${protocol}//${host}/ws?sessionId=${sessionId}`;
+  return `${protocol}//${host}/ws?sessionId=${encodeURIComponent(sessionId)}`;
 }
 
 export function getAuthToken(): string | null {

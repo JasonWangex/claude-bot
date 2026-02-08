@@ -105,16 +105,23 @@ export function Terminal({ sessionId, visible, onRestarted }: TerminalProps) {
       sendRef.current(data);
     });
 
-    // Handle resize
+    // Handle resize with debounce
+    let resizeTimer: ReturnType<typeof setTimeout>;
     const handleResize = () => {
-      fitAddon.fit();
-      sendResizeRef.current(term.cols, term.rows);
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        try {
+          fitAddon.fit();
+          sendResizeRef.current(term.cols, term.rows);
+        } catch { /* container may be hidden */ }
+      }, 100);
     };
 
     const resizeObserver = new ResizeObserver(handleResize);
     resizeObserver.observe(containerRef.current);
 
     return () => {
+      clearTimeout(resizeTimer);
       resizeObserver.disconnect();
       term.dispose();
       initializedRef.current = false;

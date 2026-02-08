@@ -37,6 +37,7 @@ export class ClaudeClient {
       sessionId?: string;
       cwd?: string;
       allowedTools?: string[];
+      lockKey?: string;
     } = {},
     onProgress?: ProgressCallback
   ): Promise<{ result: string; sessionId: string }> {
@@ -45,6 +46,7 @@ export class ClaudeClient {
       resume: options.sessionId,
       allowedTools: options.allowedTools || this.defaultAllowedTools,
       maxTurns: this.maxTurns,
+      lockKey: options.lockKey,
     };
 
     logger.debug('Calling Claude with options:', claudeOptions);

@@ -30,18 +30,22 @@ if (process.env.NODE_ENV === 'production') {
 // --- REST API ---
 
 app.post('/api/login', async (req, res) => {
-  const { password } = req.body;
-  if (!password || typeof password !== 'string') {
-    res.status(400).json({ error: 'Password is required' });
-    return;
+  try {
+    const { password } = req.body;
+    if (!password || typeof password !== 'string') {
+      res.status(400).json({ error: 'Password is required' });
+      return;
+    }
+    const valid = await verifyPassword(password);
+    if (!valid) {
+      res.status(401).json({ error: 'Invalid password' });
+      return;
+    }
+    const token = signToken();
+    res.json({ token });
+  } catch {
+    res.status(500).json({ error: 'Internal server error' });
   }
-  const valid = await verifyPassword(password);
-  if (!valid) {
-    res.status(401).json({ error: 'Invalid password' });
-    return;
-  }
-  const token = signToken();
-  res.json({ token });
 });
 
 app.get('/api/sessions', requireAuth, (_req, res) => {
@@ -122,7 +126,10 @@ app.post('/api/sessions/:id/restart', requireAuth, (req, res) => {
 
 // SPA fallback in production
 if (process.env.NODE_ENV === 'production') {
-  app.get('*', (_req, res) => {
+  app.use((req, res, next) => {
+    if (req.method !== 'GET' || req.path.startsWith('/api/') || req.path.startsWith('/ws')) {
+      return next();
+    }
     res.sendFile(join(__dirname, '..', 'dist', 'index.html'));
   });
 }
@@ -144,6 +151,8 @@ wss.on('connection', (ws: WebSocketClient, req) => {
   ws.sessionId = sessionId;
 
   let authenticated = false;
+  let authenticating = false;
+  let closed = false;
   let attachPty: pty.IPty | null = null;
 
   // Auth timeout — must authenticate within 5 seconds
@@ -154,27 +163,25 @@ wss.on('connection', (ws: WebSocketClient, req) => {
   }, 5000);
 
   ws.on('message', (data: Buffer | string) => {
-    // Check raw size before toString() to prevent memory exhaustion
-    const rawLen = typeof data === 'string' ? data.length : data.byteLength;
-    if (rawLen > 1024 * 1024) return;
-
     const msg = data.toString();
 
     // First message must be auth
     if (!authenticated) {
+      if (authenticating) return; // prevent re-entry
       try {
         const parsed = JSON.parse(msg);
         if (parsed.type === 'auth' && parsed.token && verifyToken(parsed.token)) {
+          authenticating = true;
           authenticated = true;
           clearTimeout(authTimeout);
 
+          // Validate session AFTER auth to prevent information leak
           const session = sessionManager.get(sessionId);
           if (!session) {
             ws.close(4003, 'Session not found');
             return;
           }
 
-          // Check if tmux session is alive
           if (!sessionManager.checkAlive(sessionId)) {
             ws.close(4005, 'Session is dead');
             return;
@@ -195,14 +202,19 @@ wss.on('connection', (ws: WebSocketClient, req) => {
               } as Record<string, string>,
             });
 
-            // attach PTY → WebSocket
+            // If WS closed while spawning, kill PTY immediately
+            if (closed) {
+              try { attachPty.kill(); } catch {}
+              attachPty = null;
+              return;
+            }
+
             attachPty.onData((ptyData: string) => {
               if (ws.readyState === ws.OPEN) {
                 ws.send(ptyData);
               }
             });
 
-            // attach PTY exit → check if tmux session truly died
             attachPty.onExit(() => {
               if (ws.readyState === ws.OPEN) {
                 const stillAlive = sessionManager.checkAlive(sessionId);
@@ -210,15 +222,16 @@ wss.on('connection', (ws: WebSocketClient, req) => {
                   ws.send(`\r\n\x1b[31m[Session ended]\x1b[0m\r\n`);
                   ws.close(4004, 'Session ended');
                 } else {
-                  // attach detached for some reason but session still alive
                   ws.close(4006, 'Attach detached');
                 }
               }
               attachPty = null;
             });
-          } catch (err: any) {
+          } catch {
             ws.close(4003, 'Failed to attach to session');
             return;
+          } finally {
+            authenticating = false;
           }
         } else {
           ws.close(4001, 'Unauthorized');
@@ -248,15 +261,14 @@ wss.on('connection', (ws: WebSocketClient, req) => {
     attachPty?.write(msg);
   });
 
-  // Heartbeat pong
   ws.on('pong', () => {
     ws.isAlive = true;
   });
 
   ws.on('close', () => {
+    closed = true;
     clearTimeout(authTimeout);
-    // Kill the temporary attach PTY (tmux session is not affected)
-    try { attachPty?.kill(); } catch { /* already dead */ }
+    try { attachPty?.kill(); } catch {}
     attachPty = null;
   });
 });
@@ -288,4 +300,7 @@ async function main() {
   });
 }
 
-main().catch(console.error);
+main().catch((err) => {
+  console.error('Fatal error:', err);
+  process.exit(1);
+});

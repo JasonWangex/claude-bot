@@ -3,11 +3,13 @@
  */
 
 import { Context } from 'telegraf';
+import { writeFileSync, unlinkSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
 import { StateManager } from './state.js';
 import { ClaudeClient } from '../claude/client.js';
 import { StreamEvent } from '../types/index.js';
 import { logger } from '../utils/logger.js';
-import { splitMessage, addChunkMarker } from '../utils/formatter.js';
 import { getAuthorizedChatId } from '../utils/env.js';
 
 // 工具名称映射
@@ -34,8 +36,9 @@ export class MessageHandler {
   }
 
   private checkAuth(ctx: Context): boolean {
-    const userId = ctx.from!.id;
-    const chatId = ctx.chat!.id;
+    if (!ctx.from || !ctx.chat) return false;
+    const userId = ctx.from.id;
+    const chatId = ctx.chat.id;
 
     const authorizedChatId = getAuthorizedChatId();
 
@@ -51,7 +54,8 @@ export class MessageHandler {
   }
 
   async handleText(ctx: Context): Promise<void> {
-    const userId = ctx.from!.id;
+    if (!ctx.from || !ctx.chat) return;
+    const userId = ctx.from.id;
     const text = (ctx.message as any)?.text;
 
     if (!text) return;
@@ -68,16 +72,19 @@ export class MessageHandler {
       return;
     }
 
-    const state = this.stateManager.get(userId);
-    logger.user(userId, 'Message:', text.substring(0, 100));
+    const session = this.stateManager.getActiveSession(userId);
+    logger.user(userId, `[${session.name}] Message:`, text.substring(0, 100));
+
+    // 记录用户消息
+    this.stateManager.updateSessionMessage(userId, session.id, text, 'user');
 
     // 发送初始进度消息
-    const progressMsg = await ctx.reply('⏳ 思考中...');
-    const chatId = ctx.chat!.id;
+    const progressMsg = await ctx.reply(`⏳ [${session.name}] 思考中...`);
+    const chatId = ctx.chat!.id; // guarded at handleText entry
     const progressMsgId = progressMsg.message_id;
 
     // 进度状态
-    let lastProgressText = '⏳ 思考中...';
+    let lastProgressText = `⏳ [${session.name}] 思考中...`;
     let toolUseCount = 0;
     let lastEditTime = Date.now();
 
@@ -120,14 +127,18 @@ export class MessageHandler {
       }
     };
 
+    const lockKey = session.claudeSessionId || session.id;
+
     try {
       const response = await this.claudeClient.chat(text, {
-        sessionId: state.sessionId,
-        cwd: state.cwd,
+        sessionId: session.claudeSessionId,
+        cwd: session.cwd,
+        lockKey,
       }, onProgress);
 
-      this.stateManager.setSessionId(userId, response.sessionId);
-      logger.user(userId, 'Response length:', response.result.length);
+      this.stateManager.setSessionClaudeId(userId, session.id, response.sessionId);
+      this.stateManager.updateSessionMessage(userId, session.id, response.result, 'assistant');
+      logger.user(userId, `[${session.name}] Response length:`, response.result.length);
 
       // 删除进度消息
       await ctx.telegram.deleteMessage(chatId, progressMsgId).catch(() => {});
@@ -136,7 +147,7 @@ export class MessageHandler {
       await this.sendLongMessage(ctx, response.result);
 
     } catch (error: any) {
-      logger.error(`User ${userId} error:`, error.message);
+      logger.error(`User ${userId} [${session.name}] error:`, error.message);
 
       // 编辑进度消息为错误信息
       await ctx.telegram.editMessageText(
@@ -146,27 +157,58 @@ export class MessageHandler {
     }
   }
 
+  /**
+   * 后台发送消息到指定 session，无进度更新，结果静默存储
+   */
+  async handleBackgroundChat(
+    userId: number,
+    sessionId: string,
+    message: string
+  ): Promise<{ result: string; sessionId: string }> {
+    const session = this.stateManager.getSessionById(userId, sessionId);
+    if (!session) throw new Error('会话不存在');
+
+    this.stateManager.updateSessionMessage(userId, sessionId, message, 'user');
+
+    const lockKey = session.claudeSessionId || session.id;
+    const response = await this.claudeClient.chat(message, {
+      sessionId: session.claudeSessionId,
+      cwd: session.cwd,
+      lockKey,
+    });
+
+    this.stateManager.setSessionClaudeId(userId, sessionId, response.sessionId);
+    this.stateManager.updateSessionMessage(userId, sessionId, response.result, 'assistant');
+
+    return response;
+  }
+
   private shortPath(filePath: string): string {
     const parts = filePath.split('/');
     return parts.length > 2 ? '.../' + parts.slice(-2).join('/') : filePath;
   }
 
   private async sendLongMessage(ctx: Context, text: string): Promise<void> {
-    const chunks = splitMessage(text, 4000);
-
-    for (let i = 0; i < chunks.length; i++) {
-      const content = addChunkMarker(chunks[i], i, chunks.length);
-
+    // 超过 Telegram 限制时，以 .md 文件发送
+    if (text.length > 4000) {
+      const tmpFile = join(tmpdir(), `claude-${Date.now()}.md`);
       try {
-        await ctx.reply(content, { parse_mode: 'Markdown' });
-      } catch (error) {
-        logger.debug('Markdown parsing failed, using plain text');
-        await ctx.reply(content, { parse_mode: undefined });
+        writeFileSync(tmpFile, text, 'utf-8');
+        await ctx.replyWithDocument(
+          { source: tmpFile, filename: 'response.md' },
+          { caption: text.slice(0, 1000) + (text.length > 1000 ? '...' : '') }
+        );
+      } finally {
+        try { unlinkSync(tmpFile); } catch {}
       }
+      return;
+    }
 
-      if (i < chunks.length - 1) {
-        await new Promise(resolve => setTimeout(resolve, 100));
-      }
+    try {
+      await ctx.reply(text, { parse_mode: 'Markdown' });
+    } catch {
+      logger.debug('Markdown parsing failed, using plain text');
+      await ctx.reply(text, { parse_mode: undefined });
     }
   }
 }

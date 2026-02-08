@@ -6,8 +6,10 @@ import type { AuthPayload } from './types.js';
 const JWT_EXPIRY = '24h';
 
 let passwordHash: string | null = null;
+let jwtSecret: string = '';
 
-function getJwtSecret(): string {
+export async function initAuth() {
+  // JWT secret
   const secret = process.env.JWT_SECRET;
   if (!secret || secret === 'change-me-to-a-random-secret') {
     if (process.env.NODE_ENV === 'production') {
@@ -15,18 +17,19 @@ function getJwtSecret(): string {
       process.exit(1);
     }
     console.warn('WARNING: Using default JWT secret. Set JWT_SECRET in .env for production.');
-    return 'claude-web-default-secret-change-me';
+    jwtSecret = 'claude-web-default-secret-change-me';
+  } else {
+    jwtSecret = secret;
   }
-  return secret;
-}
 
-export async function initAuth() {
+  // Password hash
   const password = process.env.PASSWORD;
   if (!password) {
     console.error('ERROR: PASSWORD environment variable is required');
     process.exit(1);
   }
   passwordHash = await bcrypt.hash(password, 10);
+  delete process.env.PASSWORD;
   console.log('Auth initialized');
 }
 
@@ -36,12 +39,12 @@ export async function verifyPassword(password: string): Promise<boolean> {
 }
 
 export function signToken(): string {
-  return jwt.sign({}, getJwtSecret(), { expiresIn: JWT_EXPIRY });
+  return jwt.sign({}, jwtSecret, { expiresIn: JWT_EXPIRY });
 }
 
 export function verifyToken(token: string): AuthPayload | null {
   try {
-    return jwt.verify(token, getJwtSecret()) as AuthPayload;
+    return jwt.verify(token, jwtSecret) as AuthPayload;
   } catch {
     return null;
   }

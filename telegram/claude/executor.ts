@@ -2,43 +2,62 @@
  * Claude Code CLI 命令执行器（stream-json 流式输出）
  */
 
-import { spawn, ChildProcess, exec } from 'child_process';
+import { spawn, ChildProcess, execFile } from 'child_process';
 import { promisify } from 'util';
 import { ClaudeResponse, ClaudeOptions, StreamEvent, ProgressCallback } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
+
+interface LockEntry {
+  running: boolean;
+  queue: Array<() => void>;
+}
 
 export class ClaudeExecutor {
   private claudeCliPath: string;
   private commandTimeout: number;
-  private isExecuting: boolean = false;
-  private executionQueue: Array<() => void> = [];
+  private locks: Map<string, LockEntry> = new Map();
 
   constructor(claudeCliPath: string = 'claude', commandTimeout: number = 300000) {
     this.claudeCliPath = claudeCliPath;
     this.commandTimeout = commandTimeout;
   }
 
-  private async acquireLock(): Promise<void> {
-    if (!this.isExecuting) {
-      this.isExecuting = true;
+  private getLock(key: string): LockEntry {
+    let entry = this.locks.get(key);
+    if (!entry) {
+      entry = { running: false, queue: [] };
+      this.locks.set(key, entry);
+    }
+    return entry;
+  }
+
+  private async acquireLock(key: string): Promise<void> {
+    const entry = this.getLock(key);
+    if (!entry.running) {
+      entry.running = true;
       return;
     }
 
-    logger.debug('Waiting for previous execution to complete...');
+    logger.debug(`Waiting for lock [${key}] to release...`);
     return new Promise((resolve) => {
-      this.executionQueue.push(resolve);
+      entry.queue.push(resolve);
     });
   }
 
-  private releaseLock(): void {
-    if (this.executionQueue.length > 0) {
-      const next = this.executionQueue.shift()!;
-      logger.debug(`Releasing lock, ${this.executionQueue.length} requests waiting`);
+  private releaseLock(key: string): void {
+    const entry = this.locks.get(key);
+    if (!entry) return;
+
+    if (entry.queue.length > 0) {
+      const next = entry.queue.shift()!;
+      logger.debug(`Releasing lock [${key}], ${entry.queue.length} requests waiting`);
       next();
     } else {
-      this.isExecuting = false;
+      entry.running = false;
+      // 空闲时清理 lock entry
+      this.locks.delete(key);
     }
   }
 
@@ -50,7 +69,8 @@ export class ClaudeExecutor {
     options: ClaudeOptions = {},
     onProgress?: ProgressCallback
   ): Promise<ClaudeResponse> {
-    await this.acquireLock();
+    const lockKey = options.lockKey || '__global__';
+    await this.acquireLock(lockKey);
 
     try {
       const args = this.buildArgs(prompt, options);
@@ -72,7 +92,7 @@ export class ClaudeExecutor {
       logger.error('Claude CLI execution failed:', error.message);
       throw new Error(`Claude CLI 执行失败: ${error.message}`);
     } finally {
-      this.releaseLock();
+      this.releaseLock(lockKey);
     }
   }
 
@@ -92,12 +112,13 @@ export class ClaudeExecutor {
       const stderrChunks: Buffer[] = [];
 
       // 超时处理
+      let killTimer: NodeJS.Timeout | null = null;
       if (this.commandTimeout > 0) {
         timeoutHandle = setTimeout(() => {
           logger.warn(`Process timeout after ${this.commandTimeout}ms`);
           killed = true;
           child.kill('SIGTERM');
-          setTimeout(() => {
+          killTimer = setTimeout(() => {
             if (child.exitCode === null) child.kill('SIGKILL');
           }, 5000);
         }, this.commandTimeout);
@@ -123,7 +144,9 @@ export class ClaudeExecutor {
 
             // 回调进度
             if (onProgress) {
-              try { onProgress(event); } catch {}
+              try { onProgress(event); } catch (e) {
+                logger.debug('Progress callback error:', e);
+              }
             }
 
             // 记录最终结果
@@ -143,6 +166,7 @@ export class ClaudeExecutor {
 
       child.on('exit', (code, signal) => {
         if (timeoutHandle) clearTimeout(timeoutHandle);
+        if (killTimer) clearTimeout(killTimer);
         const stderr = Buffer.concat(stderrChunks).toString('utf8');
 
         if (killed) {
@@ -175,6 +199,7 @@ export class ClaudeExecutor {
       '-p', prompt,
       '--output-format', 'stream-json',
       '--verbose',
+      '--dangerously-skip-permissions',
     ];
 
     if (options.resume) {
@@ -194,7 +219,7 @@ export class ClaudeExecutor {
 
   async verify(): Promise<boolean> {
     try {
-      const { stdout } = await execAsync(`${this.claudeCliPath} --version`, {
+      const { stdout } = await execFileAsync(this.claudeCliPath, ['--version'], {
         timeout: 5000,
       });
       logger.info('Claude CLI version:', stdout.trim());

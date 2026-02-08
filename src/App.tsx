@@ -20,11 +20,19 @@ export function App() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [mountedSessions, setMountedSessions] = useState<Set<string>>(new Set());
 
+  // Centralized handler: if any API throws 'Unauthorized', trigger logout
+  const handleApiError = useCallback((err: unknown) => {
+    if (err instanceof Error && err.message === 'Unauthorized') {
+      logout();
+      return true;
+    }
+    return false;
+  }, [logout]);
+
   const refreshSessions = useCallback(async () => {
     try {
       const list = await getSessions();
       setSessions(list);
-      // Clean up mounted sessions that no longer exist
       const existingIds = new Set(list.map((s) => s.id));
       setMountedSessions((prev) => {
         const next = new Set<string>();
@@ -33,12 +41,10 @@ export function App() {
         });
         return next;
       });
-    } catch (err: any) {
-      if (err.message === 'Unauthorized') {
-        logout();
-      }
+    } catch (err: unknown) {
+      handleApiError(err);
     }
-  }, [logout]);
+  }, [handleApiError]);
 
   useEffect(() => {
     if (authenticated) {
@@ -54,9 +60,9 @@ export function App() {
       setMountedSessions((prev) => new Set(prev).add(session.id));
       setShowForm(false);
       setSidebarOpen(false);
-    } catch (err: any) {
-      if (err.message === 'Unauthorized') { logout(); return; }
-      alert(err.message || 'Failed to create session');
+    } catch (err: unknown) {
+      if (handleApiError(err)) return;
+      alert(err instanceof Error ? err.message : 'Failed to create session');
     }
   };
 
@@ -80,8 +86,9 @@ export function App() {
         next.delete(id);
         return next;
       });
-    } catch (err: any) {
-      alert(err.message || 'Failed to delete session');
+    } catch (err: unknown) {
+      if (handleApiError(err)) return;
+      alert(err instanceof Error ? err.message : 'Failed to delete session');
     }
   };
 
@@ -95,8 +102,8 @@ export function App() {
     try {
       const updatedSessions = await getSessions();
       setSessions(updatedSessions);
-    } catch (err: any) {
-      if (err.message === 'Unauthorized') logout();
+    } catch (err: unknown) {
+      handleApiError(err);
     }
   };
 
@@ -104,9 +111,9 @@ export function App() {
     try {
       await restartSession(id);
       await handleSessionRestarted();
-    } catch (err: any) {
-      if (err.message === 'Unauthorized') { logout(); return; }
-      alert(err.message || 'Failed to restart session');
+    } catch (err: unknown) {
+      if (handleApiError(err)) return;
+      alert(err instanceof Error ? err.message : 'Failed to restart session');
     }
   };
 

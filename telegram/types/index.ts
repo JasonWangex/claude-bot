@@ -2,12 +2,28 @@
  * Telegram Bot 类型定义
  */
 
+// 会话
+export interface Session {
+  id: string;                // 本地 UUID
+  name: string;              // 用户自定义名称
+  claudeSessionId?: string;  // Claude CLI session_id
+  cwd: string;
+  createdAt: number;
+  lastMessage?: string;      // 最近一条 Claude 回复
+  lastMessageAt?: number;
+  messageHistory: Array<{    // 最近 50 条消息记录
+    role: 'user' | 'assistant';
+    text: string;
+    timestamp: number;
+  }>;
+}
+
 // Telegram 用户状态
 export interface UserState {
-  sessionId?: string;  // Claude Code 会话 ID
-  cwd: string;         // 当前工作目录
-  lastActivity: number; // 最后活动时间
-  authorized: boolean; // 是否已鉴权
+  sessions: Session[];
+  activeSessionId: string;   // 指向 Session.id
+  lastActivity: number;
+  authorized: boolean;
 }
 
 // Claude Code stream-json 事件
@@ -55,6 +71,7 @@ export interface ClaudeOptions {
   allowedTools?: string[];
   maxTurns?: number;
   resume?: string;
+  lockKey?: string;
 }
 
 // Telegram Bot 配置

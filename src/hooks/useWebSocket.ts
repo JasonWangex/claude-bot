@@ -34,17 +34,18 @@ export function useWebSocket({ sessionId, onData, onClose, onOpen, getSize }: Us
 
     ws.onopen = () => {
       reconnectAttempts.current = 0;
-      // Send auth token as first message instead of URL parameter
       const token = getAuthToken();
-      if (token) {
-        const size = getSizeRef.current?.();
-        const authMsg: Record<string, unknown> = { type: 'auth', token };
-        if (size) {
-          authMsg.cols = size.cols;
-          authMsg.rows = size.rows;
-        }
-        ws.send(JSON.stringify(authMsg));
+      if (!token) {
+        ws.close(4001, 'No token');
+        return;
       }
+      const size = getSizeRef.current?.();
+      const authMsg: Record<string, unknown> = { type: 'auth', token };
+      if (size) {
+        authMsg.cols = size.cols;
+        authMsg.rows = size.rows;
+      }
+      ws.send(JSON.stringify(authMsg));
       onOpenRef.current?.();
     };
 

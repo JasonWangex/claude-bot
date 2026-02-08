@@ -48,8 +48,8 @@ export class TelegramBot {
       config.commandTimeout,
       config.maxTurns
     );
-    this.commandHandler = new CommandHandler(this.stateManager);
     this.messageHandler = new MessageHandler(this.stateManager, this.claudeClient);
+    this.commandHandler = new CommandHandler(this.stateManager, this.claudeClient, this.messageHandler);
 
     // 注册处理器
     this.registerHandlers();
@@ -67,12 +67,19 @@ export class TelegramBot {
     this.bot.command('status', (ctx) => this.commandHandler.handleStatus(ctx));
     this.bot.command('clear', (ctx) => this.commandHandler.handleClear(ctx));
     this.bot.command('cd', (ctx) => this.commandHandler.handleCd(ctx));
+    this.bot.command('sessions', (ctx) => this.commandHandler.handleSessions(ctx));
 
-    this.bot.on('text', (ctx) => this.messageHandler.handleText(ctx));
+    this.bot.on('text', async (ctx) => {
+      try {
+        await this.messageHandler.handleText(ctx);
+      } catch (err) {
+        logger.error('Text handler error:', err);
+      }
+    });
 
     this.bot.catch((err, ctx) => {
       logger.error('Bot error:', err);
-      ctx.reply('❌ 内部错误，请稍后重试或使用 /clear 重置会话');
+      ctx.reply('❌ 内部错误，请稍后重试或使用 /clear 重置会话').catch(() => {});
     });
   }
 
@@ -91,6 +98,9 @@ export class TelegramBot {
 
     logger.info('Claude Code CLI verified');
 
+    // 从磁盘恢复用户会话状态
+    await this.stateManager.load();
+
     logger.info('Starting long polling...');
     await this.bot.launch({ dropPendingUpdates: true });
     logger.info('Telegram Bot started');
@@ -99,8 +109,9 @@ export class TelegramBot {
     process.once('SIGTERM', () => this.stop('SIGTERM'));
   }
 
-  private stop(signal: string): void {
+  private async stop(signal: string): Promise<void> {
     logger.info(`Received ${signal}, stopping bot...`);
+    await this.stateManager.flush();
     this.bot.stop(signal);
   }
 }
