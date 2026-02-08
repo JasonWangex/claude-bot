@@ -12,10 +12,8 @@ import { Markup } from 'telegraf';
 import { StateManager } from './state.js';
 import { CallbackRegistry } from './callback-registry.js';
 import { ClaudeClient } from '../claude/client.js';
-import type { SessionPanel } from './session-panel.js';
 import { StreamEvent, FileToolResult, StructuredPatch, AskUserQuestionInput, ExitPlanModeInput, ClaudeExecutionError, ClaudeErrorType, Session } from '../types/index.js';
 import { logger } from '../utils/logger.js';
-import { getAuthorizedChatId } from '../utils/env.js';
 import { checkAuth } from './auth.js';
 import { sendLongMessage, escapeHtml } from './message-utils.js';
 
@@ -45,91 +43,85 @@ export class MessageHandler {
   private stateManager: StateManager;
   private claudeClient: ClaudeClient;
   private callbackRegistry: CallbackRegistry;
-  private sessionPanel: SessionPanel | null;
 
-  constructor(stateManager: StateManager, claudeClient: ClaudeClient, callbackRegistry: CallbackRegistry, sessionPanel?: SessionPanel) {
+  constructor(stateManager: StateManager, claudeClient: ClaudeClient, callbackRegistry: CallbackRegistry) {
     this.stateManager = stateManager;
     this.claudeClient = claudeClient;
     this.callbackRegistry = callbackRegistry;
-    this.sessionPanel = sessionPanel || null;
   }
 
   // Plan mode 确认关键词
   private static PLAN_CONFIRM_WORDS = /^(ok|确认|执行|approve|go|yes|是|开始|实现|implement)$/i;
 
   async handleText(ctx: Context): Promise<void> {
-    if (!ctx.from || !ctx.chat) return;
-    const userId = ctx.from.id;
+    if (!ctx.chat) return;
+    const groupId = ctx.chat.id;
+    const topicId = (ctx.message as any)?.message_thread_id as number | undefined;
     const text = (ctx.message as any)?.text;
 
     if (!text) return;
     if (text.startsWith('/')) return;
 
+    // General topic (无 thread_id) → 不处理普通消息
+    if (!topicId) return;
+
+    // 鉴权
+    if (!checkAuth(ctx)) return;
+
     // 检查是否有等待自定义文本输入的交互
-    const pendingCustom = this.callbackRegistry.getPendingCustomText(ctx.chat.id);
+    const pendingCustom = this.callbackRegistry.getPendingCustomText(groupId, topicId);
     if (pendingCustom) {
       this.callbackRegistry.resolve(pendingCustom.toolUseId, text);
-      await ctx.reply(`✅ 已提交: ${text.slice(0, 100)}${text.length > 100 ? '...' : ''}`);
+      await ctx.reply(`✅ 已提交: ${text.slice(0, 100)}${text.length > 100 ? '...' : ''}`, { message_thread_id: topicId });
       return;
     }
 
-    // 检查会话面板的文本输入等待（新建/重命名会话）
-    if (this.sessionPanel) {
-      const panelInput = this.sessionPanel.getPendingTextInput(ctx.chat.id);
-      if (panelInput) {
-        this.sessionPanel.resolveTextInput(ctx.chat.id, text);
-        return;
-      }
-    }
-
-    if (!checkAuth(ctx, this.stateManager)) {
-      const authorizedChatId = getAuthorizedChatId();
-      await ctx.reply(
-        '❌ 未授权访问\n\n' +
-        (authorizedChatId
-          ? '此 Bot 仅限特定用户使用。'
-          : '请先使用 /login <token> 进行鉴权。')
-      );
-      return;
-    }
-
-    const session = this.stateManager.getActiveSession(userId);
+    // 获取或创建 session
+    const session = this.stateManager.getOrCreateSession(groupId, topicId, {
+      name: `topic-${topicId}`,
+      cwd: this.stateManager.getGroupDefaultCwd(groupId),
+    });
 
     // Plan mode 确认流程
     if (session.planMode) {
       if (MessageHandler.PLAN_CONFIRM_WORDS.test(text.trim())) {
-        await this.executePlanApproval(ctx, userId, session);
+        await this.executePlanApproval(ctx, session);
         return;
       }
-      // 非确认消息，继续以 plan 模式对话
-      return this.sendChat(ctx, userId, session, text, 'plan');
+      return this.sendChat(ctx, session, text, 'plan');
     }
 
-    return this.sendChat(ctx, userId, session, text);
+    return this.sendChat(ctx, session, text);
   }
 
   /**
    * /plan 命令调用：以 plan 模式发送消息
    */
   async handleTextWithMode(ctx: Context, mode: 'plan'): Promise<void> {
-    if (!ctx.from || !ctx.chat) return;
-    const userId = ctx.from.id;
+    if (!ctx.chat) return;
+    const groupId = ctx.chat.id;
+    const topicId = (ctx.message as any)?.message_thread_id as number | undefined;
+    if (!topicId) return;
+
     const text = (ctx.message as any)?.text || '';
     const message = text.replace(/^\/plan\s*/, '').trim();
     if (!message) return;
 
-    const session = this.stateManager.getActiveSession(userId);
-    return this.sendChat(ctx, userId, session, message, mode);
+    const session = this.stateManager.getOrCreateSession(groupId, topicId, {
+      name: `topic-${topicId}`,
+      cwd: this.stateManager.getGroupDefaultCwd(groupId),
+    });
+    return this.sendChat(ctx, session, message, mode);
   }
 
   /**
    * Plan 确认后执行：compact → 发送执行指令
    */
-  private async executePlanApproval(ctx: Context, userId: number, session: Session): Promise<void> {
+  private async executePlanApproval(ctx: Context, session: Session): Promise<void> {
     const chatId = ctx.chat!.id;
 
     // 清除 plan mode
-    this.stateManager.setSessionPlanMode(userId, session.id, false);
+    this.stateManager.setSessionPlanMode(session.groupId, session.topicId, false);
 
     if (!session.claudeSessionId) {
       await ctx.reply('❌ 没有活跃的会话上下文，请重新发送 /plan 指令。');
@@ -137,13 +129,13 @@ export class MessageHandler {
     }
 
     // 1. Compact 上下文
-    const compactMsg = await ctx.reply(`🗜️ [${session.name}] 正在压缩上下文后执行方案...`);
+    const compactMsg = await ctx.reply(`🗜️ 正在压缩上下文后执行方案...`);
     try {
       const lockKey = session.claudeSessionId || session.id;
       await this.claudeClient.compact(session.claudeSessionId, session.cwd, lockKey);
       await ctx.telegram.editMessageText(
         chatId, compactMsg.message_id, undefined,
-        `✅ [${session.name}] 上下文已压缩，开始执行方案...`
+        `✅ 上下文已压缩，开始执行方案...`
       ).catch(() => {});
     } catch (error: any) {
       await ctx.telegram.editMessageText(
@@ -153,7 +145,7 @@ export class MessageHandler {
     }
 
     // 2. 以正常模式发送执行指令
-    return this.sendChat(ctx, userId, session, '请按照上面的方案执行实现');
+    return this.sendChat(ctx, session, '请按照上面的方案执行实现');
   }
 
   /**
@@ -161,7 +153,6 @@ export class MessageHandler {
    */
   private async sendChat(
     ctx: Context,
-    userId: number,
     session: Session,
     text: string,
     mode?: 'plan'
@@ -170,10 +161,10 @@ export class MessageHandler {
     for (let round = 0; round < MAX_INTERACTIVE_ROUNDS; round++) {
     const chatId = ctx.chat!.id;
 
-    logger.user(userId, `[${session.name}] Message:`, text.substring(0, 100));
+    logger.info(`[${session.name}] Message:`, text.substring(0, 100));
 
     // 记录用户消息
-    this.stateManager.updateSessionMessage(userId, session.id, text, 'user');
+    this.stateManager.updateSessionMessage(session.groupId, session.topicId, text, 'user');
 
     const modeLabel = mode === 'plan' ? ' Plan' : '';
     // 停止按钮
@@ -182,11 +173,11 @@ export class MessageHandler {
       Markup.button.callback('⏹ 停止', `stop:${lockKey.slice(0, 20)}`)
     ]]);
     // 发送初始进度消息（附带停止按钮）
-    const progressMsg = await ctx.reply(`⏳ [${session.name}]${modeLabel} 思考中...`, stopKeyboard);
+    const progressMsg = await ctx.reply(`⏳${modeLabel} 思考中...`, stopKeyboard);
     let progressMsgId = progressMsg.message_id;
 
     // 进度状态
-    let lastProgressText = `⏳ [${session.name}] 思考中...`;
+    let lastProgressText = `⏳${modeLabel} 思考中...`;
     let toolUseCount = 0;
     let lastEditTime = Date.now();
     let sentTextCount = 0;
@@ -215,7 +206,7 @@ export class MessageHandler {
     // 重建进度消息到底部，确保进度始终可见
     const recreateProgress = async () => {
       await ctx.telegram.deleteMessage(chatId, progressMsgId).catch(() => {});
-      const newMsg = await ctx.telegram.sendMessage(chatId, lastProgressText, { reply_markup: stopKeyboard.reply_markup });
+      const newMsg = await ctx.telegram.sendMessage(chatId, lastProgressText, { reply_markup: stopKeyboard.reply_markup, message_thread_id: session.topicId });
       progressMsgId = newMsg.message_id;
     };
 
@@ -225,25 +216,25 @@ export class MessageHandler {
       const subtype = (event as any).subtype;
       if (event.type === 'system' && subtype === 'queued') {
         const pos = (event as any).queue_position || '?';
-        const newText = `⏳ [${session.name}] 排队中 (第 ${pos} 位)，前一个任务仍在执行...`;
+        const newText = `⏳ 排队中 (第 ${pos} 位)，前一个任务仍在执行...`;
         ctx.telegram.editMessageText(chatId, progressMsgId, undefined, newText, { reply_markup: stopKeyboard.reply_markup }).catch(() => {});
         return;
       }
       if (event.type === 'system' && subtype === 'lock_acquired') {
-        const newText = `⏳ [${session.name}] 思考中...`;
+        const newText = `⏳ 思考中...`;
         lastProgressText = newText;
         ctx.telegram.editMessageText(chatId, progressMsgId, undefined, newText, { reply_markup: stopKeyboard.reply_markup }).catch(() => {});
         return;
       }
       // 重试/会话重置通知
       if (event.type === 'system' && subtype === 'session_reset') {
-        const newText = `⚠️ [${session.name}] 会话上下文过长，已自动重置...`;
+        const newText = `⚠️ 会话上下文过长，已自动重置...`;
         ctx.telegram.editMessageText(chatId, progressMsgId, undefined, newText, { reply_markup: stopKeyboard.reply_markup }).catch(() => {});
-        this.stateManager.clearSessionClaudeId(userId, session.id);
+        this.stateManager.clearSessionClaudeId(session.groupId, session.topicId);
         return;
       }
       if (event.type === 'system' && subtype === 'retrying') {
-        const newText = `🔄 [${session.name}] 执行出错，正在重试...`;
+        const newText = `🔄 执行出错，正在重试...`;
         ctx.telegram.editMessageText(chatId, progressMsgId, undefined, newText, { reply_markup: stopKeyboard.reply_markup }).catch(() => {});
         return;
       }
@@ -260,7 +251,7 @@ export class MessageHandler {
 
       // compact 进度
       if (event.status === 'compacting') {
-        const newText = `🗜️ [${session.name}] 正在压缩上下文...`;
+        const newText = `🗜️ 正在压缩上下文...`;
         ctx.telegram.editMessageText(chatId, progressMsgId, undefined, newText, { reply_markup: stopKeyboard.reply_markup }).catch(() => {});
         return;
       }
@@ -268,7 +259,7 @@ export class MessageHandler {
         compactPreTokens = event.compact_metadata.pre_tokens;
       }
       if (event.subtype === 'compact_boundary') {
-        const newText = `⏳ [${session.name}] 上下文已压缩，继续思考...`;
+        const newText = `⏳ 上下文已压缩，继续思考...`;
         ctx.telegram.editMessageText(chatId, progressMsgId, undefined, newText, { reply_markup: stopKeyboard.reply_markup }).catch(() => {});
         return;
       }
@@ -359,9 +350,9 @@ export class MessageHandler {
         permissionMode: mode === 'plan' ? 'plan' : undefined,
       }, onProgress);
 
-      this.stateManager.setSessionClaudeId(userId, session.id, response.sessionId);
-      this.stateManager.updateSessionMessage(userId, session.id, response.result, 'assistant');
-      logger.user(userId, `[${session.name}] Response length:`, response.result.length);
+      this.stateManager.setSessionClaudeId(session.groupId, session.topicId, response.sessionId);
+      this.stateManager.updateSessionMessage(session.groupId, session.topicId, response.result, 'assistant');
+      logger.info(`[${session.name}] Response length:`, response.result.length);
 
       // ==========================================
       // 交互式工具拦截：CLI 自动拒绝了 AskUserQuestion/ExitPlanMode，
@@ -383,7 +374,7 @@ export class MessageHandler {
 
         // 显示 Inline Keyboard 等待用户输入
         const answer = await this.showInteractivePrompt(
-          ctx, chatId, pi.toolUseId, pi.toolName, pi.input
+          ctx, chatId, session.topicId, pi.toolUseId, pi.toolName, pi.input
         );
 
         // 构造后续消息，把用户的回答作为新一轮发回 Claude
@@ -394,14 +385,14 @@ export class MessageHandler {
           // ExitPlanMode
           if (answer === 'compact_execute') {
             // 压缩上下文后再执行
-            const updatedSession = this.stateManager.getActiveSession(userId);
-            const compactMsg = await ctx.reply(`🗜️ [${updatedSession.name}] 正在压缩上下文...`);
+            const updatedSession = this.stateManager.getSession(session.groupId, session.topicId)!;
+            const compactMsg = await ctx.reply(`🗜️ 正在压缩上下文...`);
             try {
               const compactLockKey = response.sessionId || updatedSession.id;
               await this.claudeClient.compact(response.sessionId, updatedSession.cwd, compactLockKey);
               await ctx.telegram.editMessageText(
                 chatId, compactMsg.message_id, undefined,
-                `✅ [${updatedSession.name}] 上下文已压缩，开始执行方案...`
+                `✅ 上下文已压缩，开始执行方案...`
               ).catch(() => {});
             } catch (error: any) {
               await ctx.telegram.editMessageText(
@@ -422,9 +413,9 @@ export class MessageHandler {
         logger.debug(`Interactive follow-up: ${followUpText.slice(0, 80)}`);
 
         // 更新 session 引用（可能在 chat 中已更新）
-        const updatedSession = this.stateManager.getActiveSession(userId);
+        const latestSession = this.stateManager.getSession(session.groupId, session.topicId);
         text = followUpText;
-        session = updatedSession;
+        if (latestSession) session = latestSession;
         mode = undefined; // follow-up 不再是 plan mode
         continue;
       }
@@ -466,34 +457,34 @@ export class MessageHandler {
 
       if (mode === 'plan') {
         // Plan mode: 标记等待确认
-        this.stateManager.setSessionPlanMode(userId, session.id, true);
+        this.stateManager.setSessionPlanMode(session.groupId, session.topicId, true);
         await ctx.reply(
-          `📋 [${session.name}] 方案已生成${summary}\n\n` +
+          `📋 方案已生成${summary}\n\n` +
           `回复 "ok" 或 "确认" 将自动压缩上下文并执行实现。\n` +
           `回复其他内容继续讨论方案。`
         );
       } else {
-        await ctx.reply(`✅ [${session.name}] 完成${summary}`);
+        await ctx.reply(`✅ 完成${summary}`);
       }
 
     } catch (error: any) {
       // ABORTED: 用户主动停止，不显示错误
       if (error instanceof ClaudeExecutionError && error.errorType === ClaudeErrorType.ABORTED) {
-        logger.user(userId, `[${session.name}] Task aborted by user`);
+        logger.info(`[${session.name}] Task aborted by user`);
         await ctx.telegram.editMessageText(
           chatId, progressMsgId, undefined,
-          `⏹ [${session.name}] 已停止`
+          `⏹ 已停止`
         ).catch(() => {});
         return;
       }
 
-      logger.error(`User ${userId} [${session.name}] error:`, error.message);
+      logger.error(`[${session.name}] error:`, error.message);
 
       let hint = '提示: 使用 /clear 清空会话';
       if (error instanceof ClaudeExecutionError) {
         if (error.errorType === ClaudeErrorType.SESSION_RECOVERABLE) {
           // 重试也失败了，自动清除坏 session
-          this.stateManager.clearSessionClaudeId(userId, session.id);
+          this.stateManager.clearSessionClaudeId(session.groupId, session.topicId);
           hint = '会话已自动重置，请重新发送消息';
         } else if (error.errorType === ClaudeErrorType.FATAL) {
           hint = '请检查 Bot 配置（Claude CLI 是否可用）';
@@ -514,14 +505,14 @@ export class MessageHandler {
    * 后台发送消息到指定 session，无进度更新，结果静默存储
    */
   async handleBackgroundChat(
-    userId: number,
-    sessionId: string,
+    groupId: number,
+    topicId: number,
     message: string
   ): Promise<{ result: string; sessionId: string }> {
-    const session = this.stateManager.getSessionById(userId, sessionId);
+    const session = this.stateManager.getSession(groupId, topicId);
     if (!session) throw new Error('会话不存在');
 
-    this.stateManager.updateSessionMessage(userId, sessionId, message, 'user');
+    this.stateManager.updateSessionMessage(groupId, topicId, message, 'user');
 
     const lockKey = session.claudeSessionId || session.id;
     try {
@@ -531,13 +522,13 @@ export class MessageHandler {
         lockKey,
       });
 
-      this.stateManager.setSessionClaudeId(userId, sessionId, response.sessionId);
-      this.stateManager.updateSessionMessage(userId, sessionId, response.result, 'assistant');
+      this.stateManager.setSessionClaudeId(groupId, topicId, response.sessionId);
+      this.stateManager.updateSessionMessage(groupId, topicId, response.result, 'assistant');
 
       return response;
     } catch (error: any) {
       if (error instanceof ClaudeExecutionError && error.errorType === ClaudeErrorType.SESSION_RECOVERABLE) {
-        this.stateManager.clearSessionClaudeId(userId, sessionId);
+        this.stateManager.clearSessionClaudeId(groupId, topicId);
       }
       throw error;
     }
@@ -760,14 +751,15 @@ document.querySelectorAll('.line-ctx .code code[class*="language-"]').forEach(el
   private async showInteractivePrompt(
     ctx: Context,
     chatId: number,
+    topicId: number,
     toolUseId: string,
     toolName: string,
     input: any
   ): Promise<string> {
     if (toolName === 'AskUserQuestion') {
-      return this.showAskUserQuestion(ctx, chatId, toolUseId, input as AskUserQuestionInput);
+      return this.showAskUserQuestion(ctx, chatId, topicId, toolUseId, input as AskUserQuestionInput);
     } else if (toolName === 'ExitPlanMode') {
-      return this.showExitPlanMode(ctx, chatId, toolUseId, input as ExitPlanModeInput);
+      return this.showExitPlanMode(ctx, chatId, topicId, toolUseId, input as ExitPlanModeInput);
     }
     throw new Error(`未知的交互式工具: ${toolName}`);
   }
@@ -778,6 +770,7 @@ document.querySelectorAll('.line-ctx .code code[class*="language-"]').forEach(el
   private async showAskUserQuestion(
     ctx: Context,
     chatId: number,
+    topicId: number,
     toolUseId: string,
     input: AskUserQuestionInput
   ): Promise<string> {
@@ -815,7 +808,7 @@ document.querySelectorAll('.line-ctx .code code[class*="language-"]').forEach(el
 
     // 注册到 CallbackRegistry 并等待用户响应
     const labels = q.options.map(o => o.label);
-    const promise = this.callbackRegistry.register(toolUseId, chatId, msg.message_id, 'AskUserQuestion');
+    const promise = this.callbackRegistry.register(toolUseId, chatId, topicId, msg.message_id, 'AskUserQuestion');
     this.callbackRegistry.setOptionMapping(toolUseId, labels);
 
     return promise;
@@ -827,6 +820,7 @@ document.querySelectorAll('.line-ctx .code code[class*="language-"]').forEach(el
   private async showExitPlanMode(
     ctx: Context,
     chatId: number,
+    topicId: number,
     toolUseId: string,
     input: ExitPlanModeInput
   ): Promise<string> {
@@ -855,7 +849,7 @@ document.querySelectorAll('.line-ctx .code code[class*="language-"]').forEach(el
       msg = await ctx.reply(text, keyboard);
     }
 
-    const promise = this.callbackRegistry.register(toolUseId, chatId, msg.message_id, 'ExitPlanMode');
+    const promise = this.callbackRegistry.register(toolUseId, chatId, topicId, msg.message_id, 'ExitPlanMode');
 
     return promise;
   }

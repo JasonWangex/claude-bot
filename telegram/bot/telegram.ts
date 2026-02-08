@@ -1,5 +1,5 @@
 /**
- * Telegram Bot 初始化
+ * Telegram Bot 初始化（Group + Forum Topics 模式）
  */
 
 import { Telegraf } from 'telegraf';
@@ -9,9 +9,9 @@ import { StateManager } from './state.js';
 import { CallbackRegistry } from './callback-registry.js';
 import { CommandHandler } from './commands.js';
 import { MessageHandler } from './handlers.js';
-import { SessionPanel } from './session-panel.js';
 import { ClaudeClient } from '../claude/client.js';
 import { TelegramBotConfig } from '../types/index.js';
+import { checkAuth } from './auth.js';
 import { logger } from '../utils/logger.js';
 
 export class TelegramBot {
@@ -20,7 +20,6 @@ export class TelegramBot {
   private callbackRegistry: CallbackRegistry;
   private commandHandler: CommandHandler;
   private messageHandler: MessageHandler;
-  private sessionPanel: SessionPanel;
   private claudeClient: ClaudeClient;
 
   constructor(config: TelegramBotConfig) {
@@ -53,9 +52,8 @@ export class TelegramBot {
       config.commandTimeout,
       config.maxTurns
     );
-    this.sessionPanel = new SessionPanel(this.stateManager, this.claudeClient);
-    this.messageHandler = new MessageHandler(this.stateManager, this.claudeClient, this.callbackRegistry, this.sessionPanel);
-    this.commandHandler = new CommandHandler(this.stateManager, this.claudeClient, this.messageHandler, this.sessionPanel);
+    this.messageHandler = new MessageHandler(this.stateManager, this.claudeClient, this.callbackRegistry);
+    this.commandHandler = new CommandHandler(this.stateManager, this.claudeClient, this.messageHandler);
 
     // 注册处理器
     this.registerHandlers();
@@ -68,17 +66,21 @@ export class TelegramBot {
   }
 
   private registerHandlers(): void {
+    // General 话题命令
     this.bot.command('login', (ctx) => this.commandHandler.handleLogin(ctx));
     this.bot.command('start', (ctx) => this.commandHandler.handleStart(ctx));
     this.bot.command('help', (ctx) => this.commandHandler.handleHelp(ctx));
     this.bot.command('status', (ctx) => this.commandHandler.handleStatus(ctx));
+    this.bot.command('setcwd', (ctx) => this.commandHandler.handleSetCwd(ctx));
+
+    // Topic 内命令
+    this.bot.command('cd', (ctx) => this.commandHandler.handleCd(ctx));
     this.bot.command('clear', (ctx) => this.commandHandler.handleClear(ctx));
     this.bot.command('compact', (ctx) => this.commandHandler.handleCompact(ctx));
     this.bot.command('rewind', (ctx) => this.commandHandler.handleRewind(ctx));
     this.bot.command('plan', (ctx) => this.commandHandler.handlePlan(ctx));
-    this.bot.command('cd', (ctx) => this.commandHandler.handleCd(ctx));
-    this.bot.command('sessions', (ctx) => this.commandHandler.handleSessions(ctx));
     this.bot.command('stop', (ctx) => this.commandHandler.handleStop(ctx));
+    this.bot.command('info', (ctx) => this.commandHandler.handleInfo(ctx));
 
     // 交互式输入回调: 处理 Inline Keyboard 点击
     this.bot.action(/^input:(.+):(.+)$/, (ctx) => {
@@ -139,28 +141,16 @@ export class TelegramBot {
       ctx.answerCbQuery('❌ 无效选择').catch(() => {});
     });
 
-    // 会话管理面板回调: 处理 sess:* 按钮点击
-    this.bot.action(/^sess:([a-z]+)(?::(.*))?$/, (ctx) => {
-      const action = ctx.match[1];
-      const param = ctx.match[2] || '';
-      this.sessionPanel.handleCallback(ctx, action, param).catch(err => {
-        logger.error('Session panel callback error:', err);
-        ctx.answerCbQuery('❌ 操作失败').catch(() => {});
-      });
-    });
-
     // 停止按钮回调: stop:<lockKey-prefix>
     this.bot.action(/^stop:(.+)$/, (ctx) => {
-      if (!ctx.from) return;
-      const userId = ctx.from.id;
-      const state = this.stateManager.get(userId);
-      if (!state.authorized) {
+      if (!ctx.chat) return;
+      if (!checkAuth(ctx)) {
         ctx.answerCbQuery('❌ 未授权').catch(() => {});
         return;
       }
-      const session = this.stateManager.getActiveSession(userId);
-      const lockKey = session.claudeSessionId || session.id;
-      const wasRunning = this.claudeClient.abort(lockKey);
+      // 从 callback data 中取 lockKey 前缀，尝试 abort
+      const lockKeyPrefix = ctx.match[1];
+      const wasRunning = this.claudeClient.abort(lockKeyPrefix);
       ctx.answerCbQuery(wasRunning ? '⏹ 正在停止...' : 'ℹ️ 没有运行中的任务').catch(() => {});
     });
 
@@ -192,7 +182,7 @@ export class TelegramBot {
 
     logger.info('Claude Code CLI verified');
 
-    // 从磁盘恢复用户会话状态
+    // 从磁盘恢复会话状态
     await this.stateManager.load();
 
     logger.info('Starting long polling...');

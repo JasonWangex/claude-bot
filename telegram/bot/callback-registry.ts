@@ -8,6 +8,7 @@ import { logger } from '../utils/logger.js';
 interface PendingEntry {
   toolUseId: string;
   chatId: number;
+  topicId: number;
   messageId: number;
   toolName: string;
   optionLabels?: string[];           // AskUserQuestion 选项标签
@@ -27,6 +28,7 @@ export class CallbackRegistry {
   register(
     toolUseId: string,
     chatId: number,
+    topicId: number,
     messageId: number,
     toolName: string
   ): Promise<string> {
@@ -34,6 +36,7 @@ export class CallbackRegistry {
       this.pending.set(toolUseId, {
         toolUseId,
         chatId,
+        topicId,
         messageId,
         toolName,
         resolve,
@@ -82,9 +85,9 @@ export class CallbackRegistry {
   /**
    * 查找某个 chat 中等待自定义文本输入的条目
    */
-  getPendingCustomText(chatId: number): PendingEntry | null {
+  getPendingCustomText(chatId: number, topicId: number): PendingEntry | null {
     for (const entry of this.pending.values()) {
-      if (entry.chatId === chatId && entry.waitingCustomText) {
+      if (entry.chatId === chatId && entry.topicId === topicId && entry.waitingCustomText) {
         return entry;
       }
     }

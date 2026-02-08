@@ -6,6 +6,8 @@
 export interface Session {
   id: string;                // 本地 UUID
   name: string;              // 用户自定义名称
+  topicId: number;            // Telegram message_thread_id
+  groupId: number;            // Telegram Group chat ID
   claudeSessionId?: string;  // Claude CLI session_id
   prevClaudeSessionId?: string; // 上一轮 session_id（用于 rewind）
   cwd: string;
@@ -20,12 +22,11 @@ export interface Session {
   }>;
 }
 
-// Telegram 用户状态
-export interface UserState {
-  sessions: Session[];
-  activeSessionId: string;   // 指向 Session.id
+// Group 状态
+export interface GroupState {
+  groupId: number;
+  defaultCwd: string;
   lastActivity: number;
-  authorized: boolean;
 }
 
 // structured patch from Write/Edit tool results
