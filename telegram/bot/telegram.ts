@@ -13,6 +13,8 @@ import { ClaudeClient } from '../claude/client.js';
 import { TelegramBotConfig } from '../types/index.js';
 import { checkAuth } from './auth.js';
 import { logger } from '../utils/logger.js';
+import { CLIStatsReader } from './cli-stats-reader.js';
+import { getAuthorizedChatId } from '../utils/env.js';
 
 export class TelegramBot {
   private bot: Telegraf;
@@ -21,6 +23,8 @@ export class TelegramBot {
   private commandHandler: CommandHandler;
   private messageHandler: MessageHandler;
   private claudeClient: ClaudeClient;
+  private cliStatsReader: CLIStatsReader;
+  private dailyReportTimer: NodeJS.Timeout | null = null;
 
   constructor(config: TelegramBotConfig) {
     // 尝试多种代理配置
@@ -47,13 +51,14 @@ export class TelegramBot {
     // 初始化组件
     this.stateManager = new StateManager(config.defaultWorkDir);
     this.callbackRegistry = new CallbackRegistry();
+    this.cliStatsReader = new CLIStatsReader();
     this.claudeClient = new ClaudeClient(
       config.claudeCliPath,
       config.commandTimeout,
       config.maxTurns
     );
     this.messageHandler = new MessageHandler(this.stateManager, this.claudeClient, this.callbackRegistry);
-    this.commandHandler = new CommandHandler(this.stateManager, this.claudeClient, this.messageHandler);
+    this.commandHandler = new CommandHandler(this.stateManager, this.claudeClient, this.messageHandler, this.cliStatsReader);
 
     // 注册处理器
     this.registerHandlers();
@@ -72,6 +77,7 @@ export class TelegramBot {
     this.bot.command('help', (ctx) => this.commandHandler.handleHelp(ctx));
     this.bot.command('status', (ctx) => this.commandHandler.handleStatus(ctx));
     this.bot.command('setcwd', (ctx) => this.commandHandler.handleSetCwd(ctx));
+    this.bot.command('usage', (ctx) => this.commandHandler.handleUsage(ctx));
 
     // Topic 内命令
     this.bot.command('cd', (ctx) => this.commandHandler.handleCd(ctx));
@@ -223,6 +229,9 @@ export class TelegramBot {
     // 从磁盘恢复会话状态
     await this.stateManager.load();
 
+    // 启动每日报告定时任务
+    this.scheduleDailyReport();
+
     logger.info('Starting long polling...');
     await this.bot.launch({ dropPendingUpdates: true });
     logger.info('Telegram Bot started');
@@ -231,8 +240,64 @@ export class TelegramBot {
     process.once('SIGTERM', () => this.stop('SIGTERM'));
   }
 
+  /**
+   * 安排每日使用报告（每天 9:00 发送昨天的统计）
+   */
+  private scheduleDailyReport(): void {
+    const scheduleNext = () => {
+      const now = new Date();
+      const next = new Date(now);
+      next.setHours(9, 0, 0, 0);
+
+      // 如果已经过了今天 9 点，安排到明天 9 点
+      if (next <= now) {
+        next.setDate(next.getDate() + 1);
+      }
+
+      const delay = next.getTime() - now.getTime();
+      logger.info(`Next daily report scheduled at: ${next.toISOString()} (in ${Math.round(delay / 60000)} minutes)`);
+
+      this.dailyReportTimer = setTimeout(async () => {
+        await this.sendDailyReport();
+        scheduleNext(); // 安排下一次
+      }, delay);
+    };
+
+    scheduleNext();
+  }
+
+  /**
+   * 发送每日使用报告
+   */
+  private async sendDailyReport(): Promise<void> {
+    const authorizedChatId = getAuthorizedChatId();
+    if (!authorizedChatId) {
+      logger.info('Skip daily report: no authorized chat');
+      return;
+    }
+
+    try {
+      const yesterday = await this.cliStatsReader.getYesterdayStats();
+      if (!yesterday) {
+        logger.info('No stats available for yesterday');
+        return;
+      }
+
+      const report = this.cliStatsReader.formatDailyReport(yesterday, '📊 昨日使用报告');
+
+      await this.bot.telegram.sendMessage(authorizedChatId, report, { parse_mode: 'HTML' });
+      logger.info('Daily report sent successfully');
+    } catch (error: any) {
+      logger.error('Failed to send daily report:', error.message);
+    }
+  }
+
   private async stop(signal: string): Promise<void> {
     logger.info(`Received ${signal}, stopping bot...`);
+    if (this.dailyReportTimer) {
+      clearTimeout(this.dailyReportTimer);
+      this.dailyReportTimer = null;
+    }
     await this.stateManager.flush();
     this.bot.stop(signal);
   }

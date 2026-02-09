@@ -15,6 +15,7 @@ import { timingSafeEqual } from 'crypto';
 import { updateAuthorizedChatId, getAuthorizedChatId } from '../utils/env.js';
 import { checkAuth } from './auth.js';
 import { logger } from '../utils/logger.js';
+import { CLIStatsReader } from './cli-stats-reader.js';
 
 export const MODEL_OPTIONS = [
   { id: 'claude-sonnet-4-5-20250929', label: 'Sonnet 4.5' },
@@ -26,11 +27,13 @@ export class CommandHandler {
   private stateManager: StateManager;
   private claudeClient: ClaudeClient;
   private messageHandler: MessageHandler;
+  private cliStatsReader: CLIStatsReader;
 
-  constructor(stateManager: StateManager, claudeClient: ClaudeClient, messageHandler: MessageHandler) {
+  constructor(stateManager: StateManager, claudeClient: ClaudeClient, messageHandler: MessageHandler, cliStatsReader: CLIStatsReader) {
     this.stateManager = stateManager;
     this.claudeClient = claudeClient;
     this.messageHandler = messageHandler;
+    this.cliStatsReader = cliStatsReader;
   }
 
   private getAccessToken(): string {
@@ -179,7 +182,8 @@ export class CommandHandler {
         `/start - 显示欢迎信息\n` +
         `/help - 显示此帮助\n` +
         `/status - 全局状态概览\n` +
-        `/setcwd &lt;path&gt; - 设置新 Topic 默认工作目录\n\n` +
+        `/setcwd &lt;path&gt; - 设置新 Topic 默认工作目录\n` +
+        `/usage - 查看 Token 使用统计\n\n` +
         `<b>Topic 内命令</b>\n` +
         `/cd &lt;path&gt; - 切换工作目录\n` +
         `/clear - 清空 Claude 上下文\n` +
@@ -261,6 +265,47 @@ export class CommandHandler {
       } catch {
         await ctx.reply(`❌ 目录不存在: ${resolvedPath}`);
       }
+    });
+  }
+
+  async handleUsage(ctx: Context): Promise<void> {
+    await this.requireAuth(ctx, async () => {
+      const text = (ctx.message as any)?.text || '';
+      const args = text.split(/\s+/).slice(1);
+
+      // 默认显示今天的统计
+      let stats;
+      let title = '今日使用统计';
+
+      if (args.length > 0) {
+        const arg = args[0].toLowerCase();
+        if (arg === 'yesterday' || arg === '昨天') {
+          stats = await this.cliStatsReader.getYesterdayStats();
+          title = '昨日使用统计';
+        } else if (/^\d{4}-\d{2}-\d{2}$/.test(arg)) {
+          // 指定日期 YYYY-MM-DD
+          stats = await this.cliStatsReader.getDailyStats(arg);
+          title = `${arg} 使用统计`;
+        } else {
+          await ctx.reply(
+            '用法: /usage [yesterday|YYYY-MM-DD]\n\n' +
+            '不带参数 - 显示今天的统计\n' +
+            'yesterday - 显示昨天的统计\n' +
+            'YYYY-MM-DD - 显示指定日期的统计'
+          );
+          return;
+        }
+      } else {
+        stats = await this.cliStatsReader.getTodayStats();
+      }
+
+      if (!stats) {
+        await ctx.reply('❌ 无法读取统计数据，请确保 Claude CLI 已初始化并产生使用记录。');
+        return;
+      }
+
+      const report = this.cliStatsReader.formatDailyReport(stats, title);
+      await ctx.reply(report, { parse_mode: 'HTML' });
     });
   }
 

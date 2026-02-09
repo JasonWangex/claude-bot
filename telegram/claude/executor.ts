@@ -228,9 +228,15 @@ export class ClaudeExecutor {
 
           if (!line) continue;
 
+          let event: StreamEvent;
           try {
-            const event = JSON.parse(line) as StreamEvent;
+            event = JSON.parse(line) as StreamEvent;
+          } catch (parseError: any) {
+            logger.warn('Failed to parse stream event JSON:', parseError.message, 'Line:', line.slice(0, 100));
+            continue;
+          }
 
+          try {
             if (event.session_id) {
               lastSessionId = event.session_id;
             }
@@ -275,7 +281,9 @@ export class ClaudeExecutor {
             if (event.session_id) lastSessionId = event.session_id;
             if (onProgress) try { onProgress(event); } catch {}
             if (event.type === 'result') resultEvent = event;
-          } catch {}
+          } catch (parseError: any) {
+            logger.warn('Failed to parse trailing stream data:', parseError.message);
+          }
           lineBuf = '';
         }
 

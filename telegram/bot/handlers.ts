@@ -469,7 +469,10 @@ export class MessageHandler {
       if (response.duration_ms) parts.push(`${(response.duration_ms / 1000).toFixed(1)}s`);
       if (response.usage) {
         const { input_tokens, output_tokens } = response.usage;
-        parts.push(`${Math.round(input_tokens / 1000)}K+${Math.round(output_tokens / 1000)}K tokens`);
+        const total = input_tokens + output_tokens;
+        const CONTEXT_WINDOW = 200000;
+        const usedPct = Math.round((input_tokens / CONTEXT_WINDOW) * 100);
+        parts.push(`${Math.round(total / 1000)}K tokens (${usedPct}%)`);
       }
       const summary = parts.length > 0 ? ` (${parts.join(', ')})` : '';
 

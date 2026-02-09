@@ -172,8 +172,14 @@ wss.on('connection', (ws: WebSocketClient, req) => {
     // First message must be auth
     if (!authenticated) {
       if (authenticating) return; // prevent re-entry
+      let parsed;
       try {
-        const parsed = JSON.parse(msg);
+        parsed = JSON.parse(msg);
+      } catch (parseError) {
+        ws.close(4001, 'Invalid JSON in auth message');
+        return;
+      }
+      try {
         if (parsed.type === 'auth' && parsed.token && verifyToken(parsed.token)) {
           authenticating = true;
           authenticated = true;
@@ -248,15 +254,21 @@ wss.on('connection', (ws: WebSocketClient, req) => {
 
     // Handle resize messages
     if (msg.startsWith('\x01resize:')) {
+      let resizeData;
       try {
-        const resizeData = JSON.parse(msg.slice(8));
+        resizeData = JSON.parse(msg.slice(8));
+      } catch (parseError) {
+        // Ignore malformed JSON in resize message
+        return;
+      }
+      try {
         const { cols, rows } = resizeData;
         if (typeof cols === 'number' && typeof rows === 'number'
           && cols > 0 && cols < 500 && rows > 0 && rows < 300) {
           attachPty?.resize(cols, rows);
         }
       } catch {
-        // ignore invalid resize
+        // Ignore invalid resize data structure
       }
       return;
     }
@@ -310,18 +322,37 @@ main().catch((err) => {
 });
 
 // Graceful shutdown
-function shutdown(signal: string) {
+async function shutdown(signal: string) {
   console.log(`Received ${signal}, shutting down...`);
+
+  // 1. 关闭所有 WebSocket 连接
   wss.clients.forEach((ws) => {
     ws.close(1001, 'Server shutting down');
   });
+
+  // 2. 停止心跳检测
   clearInterval(heartbeat);
+
+  // 3. 保存会话元数据
+  try {
+    await sessionManager.flush();
+    console.log('Session data saved');
+  } catch (error: any) {
+    console.error('Failed to save session data:', error.message);
+  }
+
+  // 4. 关闭 HTTP 服务器
   server.close(() => {
     console.log('Server closed');
     process.exit(0);
   });
-  // Force exit after 5s
-  setTimeout(() => process.exit(0), 5000);
+
+  // 5. 强制退出保护（10秒超时，给足时间保存数据）
+  setTimeout(() => {
+    console.log('Forced shutdown after timeout');
+    process.exit(0);
+  }, 10000);
 }
+
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));

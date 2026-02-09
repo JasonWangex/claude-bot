@@ -38,7 +38,13 @@ export class StateManager {
   async load(): Promise<void> {
     try {
       const raw = await readFile(this.filePath, 'utf-8');
-      const data = JSON.parse(raw);
+      let data;
+      try {
+        data = JSON.parse(raw);
+      } catch (parseError: any) {
+        logger.error('Failed to parse state JSON, starting fresh:', parseError.message);
+        return;
+      }
 
       // 新格式: { sessions: {...}, groups: {...} }
       if (data.sessions && typeof data.sessions === 'object' && !Array.isArray(data.sessions)) {

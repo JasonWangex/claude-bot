@@ -5,6 +5,11 @@ import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import type { Session, SessionMeta, SessionInfo, CreateSessionRequest } from './types.js';
 
+const logger = {
+  info: (...args: any[]) => console.log('[SessionManager]', ...args),
+  error: (...args: any[]) => console.error('[SessionManager]', ...args),
+};
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 const DATA_DIR = join(__dirname, '..', 'data');
@@ -203,8 +208,19 @@ class SessionManager {
     if (!existsSync(SESSIONS_FILE)) return [];
     try {
       const raw = readFileSync(SESSIONS_FILE, 'utf-8');
-      return JSON.parse(raw);
-    } catch {
+      try {
+        const data = JSON.parse(raw);
+        if (!Array.isArray(data)) {
+          logger.error('Session metas file is not an array');
+          return [];
+        }
+        return data;
+      } catch (parseError: any) {
+        logger.error('Failed to parse session metas JSON:', parseError.message);
+        return [];
+      }
+    } catch (readError: any) {
+      logger.error('Failed to read session metas file:', readError.message);
       return [];
     }
   }
@@ -223,6 +239,18 @@ class SessionManager {
     const tmpFile = SESSIONS_FILE + '.tmp';
     writeFileSync(tmpFile, JSON.stringify(metas, null, 2));
     renameSync(tmpFile, SESSIONS_FILE);
+  }
+
+  /**
+   * 优雅关闭：保存所有会话元数据
+   */
+  async flush(): Promise<void> {
+    try {
+      this.saveMetas();
+      logger.info('Session metas saved on shutdown');
+    } catch (error: any) {
+      logger.error('Failed to save session metas on shutdown:', error.message);
+    }
   }
 
   private toInfo(session: Session): SessionInfo {
