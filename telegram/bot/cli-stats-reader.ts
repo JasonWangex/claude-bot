@@ -197,20 +197,25 @@ export class CLIStatsReader {
       const globalUsage = stats.modelUsage[model];
       if (!globalUsage) continue;
 
-      // 计算该模型在全局中的 cache 比例
-      const globalTotal = globalUsage.inputTokens + globalUsage.outputTokens;
+      // 计算该模型在全局中的各类 token 比例
+      // 总输入 = 普通输入 + cache读取 + cache创建
+      const modelTotalInput = globalUsage.inputTokens + globalUsage.cacheReadInputTokens + globalUsage.cacheCreationInputTokens;
+      const modelTotalOutput = globalUsage.outputTokens;
+      const globalTotal = modelTotalInput + modelTotalOutput;
       if (globalTotal === 0) continue;
 
-      // 假设当天的 cache 比例与全局相同（这是一个近似，因为 CLI 没有按天的 cache 数据）
-      const cacheReadRatio = globalUsage.cacheReadInputTokens / (globalUsage.inputTokens + globalUsage.cacheReadInputTokens || 1);
-      const cacheWriteRatio = globalUsage.cacheCreationInputTokens / (globalUsage.inputTokens + globalUsage.cacheCreationInputTokens || 1);
-      const outputRatio = globalUsage.outputTokens / globalTotal;
+      // 假设当天的各类 token 比例与全局相同（这是一个近似，因为 CLI 没有按天的 cache 数据）
+      const inputRatio = globalUsage.inputTokens / modelTotalInput;
+      const cacheReadRatio = globalUsage.cacheReadInputTokens / modelTotalInput;
+      const cacheWriteRatio = globalUsage.cacheCreationInputTokens / modelTotalInput;
+      const outputRatio = modelTotalOutput / globalTotal;
 
       // 估算当天的 tokens 分配
-      const dayInput = Math.round(tokens * (1 - outputRatio) * (1 - cacheReadRatio - cacheWriteRatio));
+      const dayInputBase = tokens * (1 - outputRatio); // 当天输入 tokens 总数
+      const dayInput = Math.round(dayInputBase * inputRatio);
+      const dayCacheRead = Math.round(dayInputBase * cacheReadRatio);
+      const dayCacheWrite = Math.round(dayInputBase * cacheWriteRatio);
       const dayOutput = Math.round(tokens * outputRatio);
-      const dayCacheRead = Math.round(tokens * (1 - outputRatio) * cacheReadRatio);
-      const dayCacheWrite = Math.round(tokens * (1 - outputRatio) * cacheWriteRatio);
 
       const cost = this.calculateModelCost(model, dayInput, dayOutput, dayCacheRead, dayCacheWrite);
 
