@@ -467,7 +467,10 @@ export class MessageHandler {
       if (fileChanges.length > 0) parts.push(`${fileChanges.length} 个文件变更`);
       if (compactPreTokens) parts.push(`压缩: ${Math.round(compactPreTokens / 1000)}K tokens`);
       if (response.duration_ms) parts.push(`${(response.duration_ms / 1000).toFixed(1)}s`);
-      if (response.total_cost_usd) parts.push(`$${response.total_cost_usd.toFixed(4)}`);
+      if (response.usage) {
+        const { input_tokens, output_tokens } = response.usage;
+        parts.push(`${Math.round(input_tokens / 1000)}K+${Math.round(output_tokens / 1000)}K tokens`);
+      }
       const summary = parts.length > 0 ? ` (${parts.join(', ')})` : '';
 
       if (mode === 'plan') {
@@ -714,34 +717,46 @@ body { background: var(--bg); color: var(--fg); font-family: -apple-system, Blin
 .hunk-header { background: var(--hunk-bg); }
 .hunk-header .code code { color: var(--fg-muted); font-style: italic; }
 
-/* highlighted tokens: let hljs color context lines, override for add/del */
-.line-ctx .code code .hljs-keyword,
-.line-ctx .code code .hljs-built_in,
-.line-ctx .code code .hljs-type,
-.line-ctx .code code .hljs-literal { color: #ff7b72; }
-.line-ctx .code code .hljs-string,
-.line-ctx .code code .hljs-regexp { color: #a5d6ff; }
-.line-ctx .code code .hljs-number { color: #79c0ff; }
-.line-ctx .code code .hljs-comment { color: #8b949e; font-style: italic; }
-.line-ctx .code code .hljs-function .hljs-title,
-.line-ctx .code code .hljs-title.function_ { color: #d2a8ff; }
-.line-ctx .code code .hljs-attr,
-.line-ctx .code code .hljs-attribute { color: #79c0ff; }
-.line-ctx .code code .hljs-variable,
-.line-ctx .code code .hljs-template-variable { color: #ffa657; }
-.line-ctx .code code .hljs-meta { color: #79c0ff; }
-.line-ctx .code code .hljs-tag { color: #7ee787; }
-.line-ctx .code code .hljs-name { color: #7ee787; }
-.line-ctx .code code .hljs-selector-class,
-.line-ctx .code code .hljs-selector-id { color: #d2a8ff; }
-.line-ctx .code code .hljs-params { color: var(--fg); }
-
-/* override for diff lines: only colorize a few token types subtly */
-.line-add .code code .hljs-comment { opacity: 0.7; }
+/* hljs syntax tokens — apply to all line types (ctx/add/del) */
+.code code .hljs-keyword,
+.code code .hljs-built_in,
+.code code .hljs-type,
+.code code .hljs-literal { color: #ff7b72; }
+.code code .hljs-string,
+.code code .hljs-regexp { color: #a5d6ff; }
+.code code .hljs-number { color: #79c0ff; }
+.code code .hljs-comment { color: #8b949e; font-style: italic; }
+.code code .hljs-function .hljs-title,
+.code code .hljs-title.function_ { color: #d2a8ff; }
+.code code .hljs-attr,
+.code code .hljs-attribute { color: #79c0ff; }
+.code code .hljs-variable,
+.code code .hljs-template-variable { color: #ffa657; }
+.code code .hljs-meta { color: #79c0ff; }
+.code code .hljs-tag { color: #7ee787; }
+.code code .hljs-name { color: #7ee787; }
+.code code .hljs-selector-class,
+.code code .hljs-selector-id { color: #d2a8ff; }
+.code code .hljs-params { color: var(--fg); }
+.line-add .code code .hljs-comment,
 .line-del .code code .hljs-comment { opacity: 0.7; }
 
 /* expandable marker */
 .expand-marker { text-align: center; padding: 4px; background: var(--bg-subtle); cursor: pointer; color: var(--fg-muted); font-size: 12px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
+
+/* mobile responsive */
+@media (max-width: 768px) {
+  body { padding: 8px; font-size: 13px; }
+  .summary { padding: 12px; }
+  .summary h1 { font-size: 14px; }
+  .file-link { font-size: 12px; }
+  .file-header { padding: 6px 8px; font-size: 12px; }
+  .file-block { overflow-x: auto; }
+  .diff-table { font-size: 11px; line-height: 18px; }
+  .ln { width: 28px; min-width: 28px; padding: 0 4px; font-size: 11px; }
+  .sign { width: 12px; min-width: 12px; }
+  .code code { padding: 0 6px; font-size: 11px; line-height: 18px; }
+}
 </style>
 </head>
 <body>
@@ -753,8 +768,7 @@ ${fileIndex}
 ${fileSections}
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
 <script>
-// only highlight context lines to preserve diff coloring on add/del
-document.querySelectorAll('.line-ctx .code code[class*="language-"]').forEach(el => {
+document.querySelectorAll('.code code[class*="language-"]').forEach(el => {
   hljs.highlightElement(el);
 });
 </script>
