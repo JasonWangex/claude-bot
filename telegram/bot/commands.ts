@@ -337,7 +337,9 @@ export class CommandHandler {
           preTokens = event.compact_metadata.pre_tokens;
         }
         if (event.usage) {
-          postTokens = event.usage.input_tokens;
+          postTokens = event.usage.input_tokens
+            + (event.usage.cache_read_input_tokens || 0)
+            + (event.usage.cache_creation_input_tokens || 0);
         }
       };
 

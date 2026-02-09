@@ -468,10 +468,11 @@ export class MessageHandler {
       if (compactPreTokens) parts.push(`压缩: ${Math.round(compactPreTokens / 1000)}K tokens`);
       if (response.duration_ms) parts.push(`${(response.duration_ms / 1000).toFixed(1)}s`);
       if (response.usage) {
-        const { input_tokens, output_tokens } = response.usage;
-        const total = input_tokens + output_tokens;
+        const { input_tokens, output_tokens, cache_read_input_tokens = 0, cache_creation_input_tokens = 0 } = response.usage;
+        const totalInput = input_tokens + cache_read_input_tokens + cache_creation_input_tokens;
+        const total = totalInput + output_tokens;
         const CONTEXT_WINDOW = 200000;
-        const usedPct = Math.round((input_tokens / CONTEXT_WINDOW) * 100);
+        const usedPct = Math.round((totalInput / CONTEXT_WINDOW) * 100);
         parts.push(`${Math.round(total / 1000)}K tokens (${usedPct}%)`);
       }
       const summary = parts.length > 0 ? ` (${parts.join(', ')})` : '';

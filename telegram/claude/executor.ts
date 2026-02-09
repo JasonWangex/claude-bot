@@ -257,7 +257,8 @@ export class ClaudeExecutor {
             // 记录最终结果
             if (event.type === 'result') {
               resultEvent = event;
-              const compactInfo = compactPreTokens ? `, compact: ${compactPreTokens} → ${event.usage?.input_tokens}` : '';
+              const postTokens = event.usage ? event.usage.input_tokens + (event.usage.cache_read_input_tokens || 0) + (event.usage.cache_creation_input_tokens || 0) : '?';
+              const compactInfo = compactPreTokens ? `, compact: ${compactPreTokens} → ${postTokens}` : '';
               logger.debug(`Result: ${event.num_turns} turns, ${event.duration_ms}ms${compactInfo}`);
             }
           } catch {

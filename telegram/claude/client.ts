@@ -9,7 +9,7 @@ import { logger } from '../utils/logger.js';
 interface ChatResult {
   result: string;
   sessionId: string;
-  usage?: { input_tokens: number; output_tokens: number };
+  usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
   duration_ms?: number;
   total_cost_usd?: number;
 }
