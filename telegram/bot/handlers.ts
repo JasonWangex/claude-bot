@@ -5,7 +5,7 @@
  */
 
 import { Context } from 'telegraf';
-import { writeFileSync, unlinkSync } from 'fs';
+import { writeFileSync, unlinkSync, readFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { Markup } from 'telegraf';
@@ -367,8 +367,21 @@ export class MessageHandler {
         // 删除进度消息
         await ctx.telegram.deleteMessage(chatId, progressMsgId).catch(() => {});
 
-        // 补发 result（plan 文本可能未在流式中发送）
-        if (sentTextCount === 0 || (response.result.trim() && response.result.trim() !== lastSentText)) {
+        // 补发内容：ExitPlanMode 时优先发送 plan 文件完整内容
+        let planSent = false;
+        if (pi.toolName === 'ExitPlanMode') {
+          const planFile = fileChanges.find(fc => fc.filePath.includes('.claude/plans/') && fc.filePath.endsWith('.md'));
+          if (planFile) {
+            try {
+              const planContent = readFileSync(planFile.filePath, 'utf-8').trim();
+              if (planContent) {
+                await sendLongMessage(ctx, planContent);
+                planSent = true;
+              }
+            } catch {}
+          }
+        }
+        if (!planSent && (sentTextCount === 0 || (response.result.trim() && response.result.trim() !== lastSentText))) {
           await sendLongMessage(ctx, response.result);
         }
 
