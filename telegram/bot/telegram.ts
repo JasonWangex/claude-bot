@@ -7,7 +7,7 @@ import { HttpsProxyAgent } from 'https-proxy-agent';
 import { SocksProxyAgent } from 'socks-proxy-agent';
 import { StateManager } from './state.js';
 import { CallbackRegistry } from './callback-registry.js';
-import { CommandHandler } from './commands.js';
+import { CommandHandler, MODEL_OPTIONS } from './commands.js';
 import { MessageHandler } from './handlers.js';
 import { ClaudeClient } from '../claude/client.js';
 import { TelegramBotConfig } from '../types/index.js';
@@ -82,6 +82,9 @@ export class TelegramBot {
     this.bot.command('stop', (ctx) => this.commandHandler.handleStop(ctx));
     this.bot.command('info', (ctx) => this.commandHandler.handleInfo(ctx));
 
+    // General + Topic 通用命令
+    this.bot.command('model', (ctx) => this.commandHandler.handleModel(ctx));
+
     // 交互式输入回调: 处理 Inline Keyboard 点击
     this.bot.action(/^input:(.+):(.+)$/, (ctx) => {
       const match = ctx.match;
@@ -139,6 +142,41 @@ export class TelegramBot {
       }
 
       ctx.answerCbQuery('❌ 无效选择').catch(() => {});
+    });
+
+    // 模型切换回调: Topic 级别 model:<model_id>
+    this.bot.action(/^model:(.+)$/, (ctx) => {
+      if (!ctx.chat || !checkAuth(ctx)) {
+        ctx.answerCbQuery('❌ 未授权').catch(() => {});
+        return;
+      }
+      const topicId = (ctx.callbackQuery?.message as any)?.message_thread_id as number | undefined;
+      if (!topicId) {
+        ctx.answerCbQuery('❌ 需要在 Topic 中操作').catch(() => {});
+        return;
+      }
+      const groupId = ctx.chat.id;
+      const selection = ctx.match[1];
+      const model = selection === 'follow_default' ? undefined : selection;
+      this.stateManager.setSessionModel(groupId, topicId, model);
+      const label = model ? (MODEL_OPTIONS.find(m => m.id === model)?.label || model) : '跟随默认';
+      ctx.answerCbQuery('✅ 已切换').catch(() => {});
+      ctx.editMessageText(`✅ 模型已切换为: ${label}`).catch(() => {});
+    });
+
+    // 模型切换回调: Group 全局默认 gmodel:<model_id>
+    this.bot.action(/^gmodel:(.+)$/, (ctx) => {
+      if (!ctx.chat || !checkAuth(ctx)) {
+        ctx.answerCbQuery('❌ 未授权').catch(() => {});
+        return;
+      }
+      const groupId = ctx.chat.id;
+      const selection = ctx.match[1];
+      const model = selection === 'default' ? undefined : selection;
+      this.stateManager.setGroupDefaultModel(groupId, model);
+      const label = model ? (MODEL_OPTIONS.find(m => m.id === model)?.label || model) : 'Sonnet 4.5 (默认)';
+      ctx.answerCbQuery('✅ 已切换').catch(() => {});
+      ctx.editMessageText(`✅ 全局默认模型已切换为: ${label}`).catch(() => {});
     });
 
     // 停止按钮回调: stop:<lockKey-prefix>

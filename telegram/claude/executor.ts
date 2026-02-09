@@ -359,6 +359,10 @@ export class ClaudeExecutor {
       args.push('--max-turns', String(options.maxTurns));
     }
 
+    if (options.model) {
+      args.push('--model', options.model);
+    }
+
     return args;
   }
 

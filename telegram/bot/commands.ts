@@ -3,6 +3,7 @@
  */
 
 import { Context } from 'telegraf';
+import { Markup } from 'telegraf';
 import { StateManager } from './state.js';
 import { MessageHandler } from './handlers.js';
 import { ClaudeClient } from '../claude/client.js';
@@ -14,6 +15,12 @@ import { timingSafeEqual } from 'crypto';
 import { updateAuthorizedChatId, getAuthorizedChatId } from '../utils/env.js';
 import { checkAuth } from './auth.js';
 import { logger } from '../utils/logger.js';
+
+export const MODEL_OPTIONS = [
+  { id: 'claude-sonnet-4-5-20250929', label: 'Sonnet 4.5' },
+  { id: 'claude-opus-4-6', label: 'Opus 4.6' },
+  { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
+] as const;
 
 export class CommandHandler {
   private stateManager: StateManager;
@@ -143,7 +150,7 @@ export class CommandHandler {
           `👋 Claude Code 已就绪\n\n` +
           `工作目录: ${session.cwd}\n\n` +
           `直接发送消息即可开始对话。\n` +
-          `可用命令: /cd /clear /compact /rewind /plan /stop /info`
+          `可用命令: /cd /clear /compact /rewind /plan /stop /model /info`
         );
       } else {
         // General topic
@@ -180,6 +187,7 @@ export class CommandHandler {
         `/rewind - 撤销最后一轮对话\n` +
         `/plan &lt;msg&gt; - Plan 模式（只规划不执行）\n` +
         `/stop - 停止当前任务\n` +
+        `/model - 切换 Claude 模型\n` +
         `/info - 查看会话详情\n\n` +
         `<b>使用方法</b>\n` +
         `• 每个 Topic = 一个独立的 Claude 会话\n` +
@@ -387,11 +395,13 @@ export class CommandHandler {
       const lastMsgTime = session.lastMessageAt
         ? new Date(session.lastMessageAt).toLocaleString('zh-CN')
         : '无';
+      const modelLabel = this.getModelLabel(session.model);
 
       await ctx.reply(
         `📄 会话详情\n\n` +
         `Topic: <code>${escapeHtml(session.name)}</code>\n` +
         `工作目录: <code>${escapeHtml(session.cwd)}</code>\n` +
+        `模型: ${escapeHtml(modelLabel)}\n` +
         `Claude 上下文: ${session.claudeSessionId ? `<code>${escapeHtml(session.claudeSessionId.slice(0, 8))}...</code>` : '(新会话)'}\n` +
         `创建时间: ${created}\n` +
         `最近活动: ${lastMsgTime}\n` +
@@ -399,5 +409,64 @@ export class CommandHandler {
         { parse_mode: 'HTML' }
       );
     });
+  }
+
+  async handleModel(ctx: Context): Promise<void> {
+    await this.requireAuth(ctx, async () => {
+      const groupId = ctx.chat!.id;
+      const topicId = this.getTopicId(ctx);
+
+      if (!topicId) {
+        // General: 设置全局默认模型
+        const currentModel = this.stateManager.getGroupDefaultModel(groupId);
+        const currentLabel = this.getModelLabel(currentModel);
+
+        const buttons = MODEL_OPTIONS.map(opt => {
+          const marker = currentModel === opt.id ? ' ✓' : '';
+          return Markup.button.callback(`${opt.label}${marker}`, `gmodel:${opt.id}`);
+        });
+        buttons.push(
+          Markup.button.callback(`默认${!currentModel ? ' ✓' : ''}`, 'gmodel:default')
+        );
+
+        await ctx.reply(
+          `🤖 全局默认模型: ${currentLabel}\n\n` +
+          `新创建的 Topic 将使用此模型。\n选择要切换的模型:`,
+          Markup.inlineKeyboard([buttons])
+        );
+      } else {
+        // Topic: 设置当前 Topic 模型
+        const session = this.stateManager.getOrCreateSession(groupId, topicId, {
+          name: `topic-${topicId}`,
+          cwd: this.stateManager.getGroupDefaultCwd(groupId),
+        });
+        const groupModel = this.stateManager.getGroupDefaultModel(groupId);
+        const currentLabel = session.model !== undefined
+          ? this.getModelLabel(session.model)
+          : `${this.getModelLabel(groupModel)} (跟随默认)`;
+
+        const buttons = MODEL_OPTIONS.map(opt => {
+          const marker = session.model === opt.id ? ' ✓' : '';
+          return Markup.button.callback(`${opt.label}${marker}`, `model:${opt.id}`);
+        });
+        buttons.push(
+          Markup.button.callback(
+            `跟随默认${session.model === undefined ? ' ✓' : ''}`,
+            'model:follow_default'
+          )
+        );
+
+        await ctx.reply(
+          `🤖 当前模型: ${currentLabel}\n\n选择要切换的模型:`,
+          Markup.inlineKeyboard([buttons])
+        );
+      }
+    });
+  }
+
+  private getModelLabel(model: string | undefined): string {
+    if (!model) return 'Sonnet 4.5 (默认)';
+    const found = MODEL_OPTIONS.find(m => m.id === model);
+    return found ? found.label : model;
   }
 }

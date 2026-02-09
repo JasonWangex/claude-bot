@@ -47,6 +47,7 @@ export class ClaudeClient {
       allowedTools?: string[];
       lockKey?: string;
       permissionMode?: string;
+      model?: string;
     } = {},
     onProgress?: ProgressCallback
   ): Promise<ChatResult> {
@@ -98,6 +99,7 @@ export class ClaudeClient {
       allowedTools?: string[];
       lockKey?: string;
       permissionMode?: string;
+      model?: string;
     },
     onProgress?: ProgressCallback
   ): Promise<ChatResult> {
@@ -108,6 +110,7 @@ export class ClaudeClient {
       maxTurns: this.maxTurns,
       lockKey: options.lockKey,
       permissionMode: options.permissionMode,
+      model: options.model,
     };
 
     logger.debug('Calling Claude with options:', claudeOptions);

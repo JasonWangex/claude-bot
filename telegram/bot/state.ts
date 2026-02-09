@@ -101,6 +101,7 @@ export class StateManager {
   getOrCreateSession(groupId: number, topicId: number, defaults: { name: string; cwd: string }): Session {
     const key = this.topicKey(groupId, topicId);
     if (!this.sessions.has(key)) {
+      const groupModel = this.getGroupDefaultModel(groupId);
       const session: Session = {
         id: randomUUID(),
         name: defaults.name,
@@ -108,6 +109,7 @@ export class StateManager {
         groupId,
         cwd: defaults.cwd,
         createdAt: Date.now(),
+        model: groupModel,
         messageHistory: [],
       };
       this.sessions.set(key, session);
@@ -194,6 +196,13 @@ export class StateManager {
     return { success: true, prevId };
   }
 
+  setSessionModel(groupId: number, topicId: number, model: string | undefined): void {
+    const session = this.getSession(groupId, topicId);
+    if (!session) return;
+    session.model = model;
+    this.scheduleSave();
+  }
+
   setSessionPlanMode(groupId: number, topicId: number, planMode: boolean): void {
     const session = this.getSession(groupId, topicId);
     if (!session) return;
@@ -205,6 +214,21 @@ export class StateManager {
 
   getGroupDefaultCwd(groupId: number): string {
     return this.groups.get(groupId)?.defaultCwd || this.defaultWorkDir;
+  }
+
+  getGroupDefaultModel(groupId: number): string | undefined {
+    return this.groups.get(groupId)?.defaultModel;
+  }
+
+  setGroupDefaultModel(groupId: number, model: string | undefined): void {
+    const group = this.groups.get(groupId);
+    if (group) {
+      group.defaultModel = model;
+      group.lastActivity = Date.now();
+    } else {
+      this.groups.set(groupId, { groupId, defaultCwd: this.defaultWorkDir, defaultModel: model, lastActivity: Date.now() });
+    }
+    this.scheduleSave();
   }
 
   setGroupDefaultCwd(groupId: number, cwd: string): void {

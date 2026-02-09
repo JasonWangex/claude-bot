@@ -15,6 +15,7 @@ export interface Session {
   lastMessage?: string;      // 最近一条 Claude 回复
   lastMessageAt?: number;
   planMode?: boolean;        // 是否处于 plan mode 等待确认
+  model?: string;            // 用户选择的 Claude 模型（如 claude-sonnet-4-5-20250929）
   messageHistory: Array<{    // 最近 50 条消息记录
     role: 'user' | 'assistant';
     text: string;
@@ -26,6 +27,7 @@ export interface Session {
 export interface GroupState {
   groupId: number;
   defaultCwd: string;
+  defaultModel?: string;
   lastActivity: number;
 }
 
@@ -148,6 +150,7 @@ export interface ClaudeOptions {
   lockKey?: string;
   permissionMode?: string;
   forkSession?: boolean;
+  model?: string;
 }
 
 // Telegram Bot 配置

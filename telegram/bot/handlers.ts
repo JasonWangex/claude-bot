@@ -343,11 +343,13 @@ export class MessageHandler {
     };
 
     try {
+      const effectiveModel = session.model ?? this.stateManager.getGroupDefaultModel(session.groupId);
       const response = await this.claudeClient.chat(text, {
         sessionId: session.claudeSessionId,
         cwd: session.cwd,
         lockKey,
         permissionMode: mode === 'plan' ? 'plan' : undefined,
+        model: effectiveModel,
       }, onProgress);
 
       this.stateManager.setSessionClaudeId(session.groupId, session.topicId, response.sessionId);
@@ -529,10 +531,12 @@ export class MessageHandler {
 
     const lockKey = session.claudeSessionId || session.id;
     try {
+      const effectiveModel = session.model ?? this.stateManager.getGroupDefaultModel(groupId);
       const response = await this.claudeClient.chat(message, {
         sessionId: session.claudeSessionId,
         cwd: session.cwd,
         lockKey,
+        model: effectiveModel,
       });
 
       this.stateManager.setSessionClaudeId(groupId, topicId, response.sessionId);
