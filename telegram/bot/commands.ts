@@ -596,6 +596,7 @@ export class CommandHandler {
           name: topicName,
           cwd,
         });
+        this.stateManager.setSessionIcon(groupId, newTopicId, forumTopic.icon_color);
 
         // 发送确认消息到新 Topic
         await ctx.telegram.sendMessage(
@@ -1881,6 +1882,7 @@ export class CommandHandler {
         name: topicName,
         cwd,
       });
+      this.stateManager.setSessionIcon(groupId, newTopicId, forumTopic.icon_color);
 
       // 在新 Topic 中发送欢迎
       await ctx.telegram.sendMessage(
@@ -1982,11 +1984,18 @@ export class CommandHandler {
       // 创建 worktree
       await createWorktree(session.cwd, worktreeDir, branchName);
 
-      // 创建新 Forum Topic
+      // 创建新 Forum Topic（复用 root topic 的图标）
       const newTopicName = `${session.name}/${branchName}`;
-      const forumTopic = await ctx.telegram.createForumTopic(groupId, newTopicName, {
-        icon_color: 0x6FB9F0, // 蓝色
-      });
+      const rootSession = this.stateManager.getRootSession(groupId, topicId);
+      const iconOpts: Record<string, any> = {};
+      if (rootSession?.iconCustomEmojiId) {
+        iconOpts.icon_custom_emoji_id = rootSession.iconCustomEmojiId;
+      } else if (rootSession?.iconColor != null) {
+        iconOpts.icon_color = rootSession.iconColor;
+      } else {
+        iconOpts.icon_color = 0x6FB9F0;
+      }
+      const forumTopic = await ctx.telegram.createForumTopic(groupId, newTopicName, iconOpts);
 
       const newTopicId = forumTopic.message_thread_id;
 
@@ -1995,6 +2004,7 @@ export class CommandHandler {
         name: newTopicName,
         cwd: worktreeDir,
       });
+      this.stateManager.setSessionIcon(groupId, newTopicId, forumTopic.icon_color, forumTopic.icon_custom_emoji_id);
       this.stateManager.setSessionForkInfo(groupId, newTopicId, topicId, branchName);
 
       // 在新 Topic 中发送欢迎

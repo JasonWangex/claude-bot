@@ -23,6 +23,8 @@ export interface Session {
   }>;
   parentTopicId?: number;     // 父 Topic ID（fork 产生的子 topic）
   worktreeBranch?: string;    // worktree 分支名（fork 创建的）
+  iconColor?: number;         // Forum Topic 图标颜色
+  iconCustomEmojiId?: string; // Forum Topic 自定义 emoji 图标 ID
 }
 
 // Group 状态
