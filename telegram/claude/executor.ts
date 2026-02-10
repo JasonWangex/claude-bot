@@ -254,6 +254,8 @@ export class ClaudeExecutor {
       let lastSessionId = '';
       let compactPreTokens: number | null = null;
       let lastOutputTime = Date.now();
+      let stallWarned = false;
+      let compacting = false;   // 自动压缩中，暂停 stall 检测
 
       const readNewData = () => {
         try {
@@ -274,6 +276,8 @@ export class ClaudeExecutor {
           }
           offset = fileSize;
           lastOutputTime = Date.now();
+          // 输出恢复，重置 stall 警告状态（下次 stall 可再次警告）
+          stallWarned = false;
 
           lineBuf += buf.toString('utf8');
 
@@ -291,6 +295,10 @@ export class ClaudeExecutor {
             }
 
             if (event.session_id) lastSessionId = event.session_id;
+
+            // 追踪压缩状态：压缩期间暂停 stall 检测
+            if (event.status === 'compacting') compacting = true;
+            if (event.subtype === 'compact_boundary' || (event.type === 'assistant' && compacting)) compacting = false;
 
             if (event.compact_metadata) {
               compactPreTokens = event.compact_metadata.pre_tokens;
@@ -320,18 +328,19 @@ export class ClaudeExecutor {
 
       const active = this.activeProcesses.get(lockKey);
 
-      // Stall detection: 连续 stallTimeout 毫秒无输出则终止进程
+      // Stall detection: 连续 stallTimeout 毫秒无输出时发送警告（不杀进程）
+      // 用户可通过 /stop 手动终止；command timeout 作为硬性兜底
       const stallTimer = this.stallTimeout > 0 ? setInterval(() => {
-        if (flags.killed || flags.aborted) return;
-        if (Date.now() - lastOutputTime > this.stallTimeout) {
-          logger.warn(`Process stalled: no output for ${this.stallTimeout / 1000}s, killing`);
-          flags.killed = true;
-          flags.stalled = true;
-          child.kill('SIGTERM');
-          const killT = setTimeout(() => {
-            if (child.exitCode === null) child.kill('SIGKILL');
-          }, 5000);
-          if (active) active.killTimer = killT;
+        if (flags.killed || flags.aborted || compacting) return;
+        const elapsed = Date.now() - lastOutputTime;
+        if (elapsed > this.stallTimeout && !stallWarned) {
+          stallWarned = true;
+          logger.warn(`Process stalled: no output for ${this.stallTimeout / 1000}s (warning only, not killing)`);
+          if (onProgress) {
+            try {
+              onProgress({ type: 'system', subtype: 'stall_warning', stallSeconds: Math.round(elapsed / 1000) } as any);
+            } catch {}
+          }
         }
       }, 10000) : null;
 
@@ -392,14 +401,12 @@ export class ClaudeExecutor {
             ClaudeErrorType.ABORTED
           ));
         } else if (flags.killed) {
-          const reason = flags.stalled
-            ? `进程无响应 (${this.stallTimeout / 1000}s 无输出)`
-            : `超时 (${this.commandTimeout / 1000}s)`;
-          reject(new ClaudeExecutionError(reason, ClaudeErrorType.RECOVERABLE));
+          const reason = `超时 (${this.commandTimeout / 1000}s)`;
+          reject(new ClaudeExecutionError(reason, ClaudeErrorType.PROCESS_KILLED));
         } else if (signal) {
           reject(new ClaudeExecutionError(
             `进程被信号终止: ${signal}`,
-            ClaudeErrorType.RECOVERABLE
+            ClaudeErrorType.PROCESS_KILLED
           ));
         } else if (resultEvent) {
           // 从 modelUsage 中提取 contextWindow
