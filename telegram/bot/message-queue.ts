@@ -1,6 +1,9 @@
 /**
  * Telegram 消息队列：生产者-消费者模型
  * 解耦 Claude 输出与 Telegram API 调用，统一 rate limiting 和错误处理
+ *
+ * Per-Topic 节流：普通消息在 TopicBuffer 中缓冲 15 秒后合并发送，
+ * 高优先级消息和每个 topic 的第一条消息立即发送。
  */
 
 import { Telegram } from 'telegraf';
@@ -23,6 +26,7 @@ interface SendOp {
     entities?: any[];     // Telegram MessageEntity[]（与 parseMode 互斥）
     replyMarkup?: any;
     silent?: boolean;  // false = 发出通知；默认 true（静默）
+    priority?: 'high' | 'normal';  // high: 立即发送；normal（默认）: 走缓冲区
   };
   resolve: (messageId: number) => void;
   reject: (error: Error) => void;
@@ -59,6 +63,22 @@ interface DeleteOp {
 
 type TelegramOp = SendOp | SendDocumentOp | EditOp | DeleteOp;
 
+// --- TopicBuffer ---
+
+interface BufferedSend {
+  text: string;           // 原始纯文本（合并用）
+  resolve: (messageId: number) => void;
+  reject: (error: Error) => void;
+}
+
+interface TopicBuffer {
+  pendingTexts: BufferedSend[];
+  timer: NodeJS.Timeout | null;
+  firstSent: boolean;     // 本轮对话是否已发送过第一条消息
+  chatId: number;
+  topicId: number;
+}
+
 // --- MessageQueue ---
 
 export class MessageQueue {
@@ -68,33 +88,63 @@ export class MessageQueue {
   private pendingAsyncOps = 0;  // 追踪 sendLong+recreateProgress 等悬空 Promise
   private telegram: Telegram;
 
+  // Per-topic 缓冲区
+  private topicBuffers = new Map<string, TopicBuffer>();
+
   // 配置
   private readonly FLUSH_INTERVAL = 100;   // 100ms flush 一次
   private readonly MIN_OP_INTERVAL = 35;   // 操作间最小间隔 35ms
   private readonly MAX_RETRY = 2;          // 429 重试次数
+  private readonly TOPIC_BUFFER_WINDOW = 15000;  // 15s 缓冲窗口
+  private readonly MERGE_SEPARATOR = '\n\n───\n\n';
+  private readonly MAX_MERGE_LENGTH = 4000;      // 单条合并消息上限
 
   constructor(telegram: Telegram) {
     this.telegram = telegram;
+  }
+
+  private topicKey(chatId: number, topicId?: number): string {
+    return `${chatId}:${topicId ?? 0}`;
   }
 
   // --- 生产者 API ---
 
   /**
    * 发送消息，返回 messageId
+   * priority: 'high' → 立即发送（flush 缓冲区后入队）
+   * priority: 'normal'（默认）→ 进缓冲区，15 秒后合并发送
    */
   send(chatId: number, topicId: number | undefined, text: string, options?: {
     parseMode?: 'HTML' | 'Markdown';
     entities?: any[];
     replyMarkup?: any;
     silent?: boolean;
+    priority?: 'high' | 'normal';
   }): Promise<number> {
-    return new Promise((resolve, reject) => {
-      this.queue.push({ type: 'send', chatId, topicId, text, options, resolve, reject });
-    });
+    const priority = options?.priority || 'normal';
+    const key = this.topicKey(chatId, topicId);
+    const buffer = this.topicBuffers.get(key);
+
+    // 高优先级、带特殊格式（entities/replyMarkup/parseMode）、或第一条消息 → 立即发送
+    const isFirst = !buffer?.firstSent;
+    const hasSpecialFormat = !!(options?.entities?.length || options?.replyMarkup || options?.parseMode);
+    if (priority === 'high' || isFirst || hasSpecialFormat) {
+      // 先 flush 缓冲区
+      this.flushTopicBuffer(key);
+      // 标记 firstSent
+      this.ensureBuffer(chatId, topicId).firstSent = true;
+      // 直接入队
+      return new Promise((resolve, reject) => {
+        this.queue.push({ type: 'send', chatId, topicId, text, options, resolve, reject });
+      });
+    }
+
+    // 普通消息 → 进缓冲区
+    return this.bufferSend(chatId, topicId, text);
   }
 
   /**
-   * 发送文档附件，返回 messageId
+   * 发送文档附件，返回 messageId（不受缓冲区控制）
    */
   sendDocument(chatId: number, topicId: number | undefined, content: string, filename: string, caption?: string, options?: { silent?: boolean }): Promise<number> {
     return new Promise((resolve, reject) => {
@@ -109,22 +159,37 @@ export class MessageQueue {
   sendLong(chatId: number, topicId: number | undefined, text: string, options?: {
     replyMarkup?: any;
     silent?: boolean;
+    priority?: 'high' | 'normal';
   }): Promise<number> {
     if (text.length > 4000) {
       const caption = text.slice(0, 1000);
       return this.sendDocument(chatId, topicId, text, 'response.md', caption, { silent: options?.silent });
     }
 
-    const html = markdownToHtml(text);
-    return new Promise((resolve, reject) => {
-      this.queue.push({
-        type: 'send', chatId, topicId,
-        text: html,
-        originalText: text,  // 保存原始文本用于 HTML 回退
-        options: { parseMode: 'HTML', replyMarkup: options?.replyMarkup, silent: options?.silent },
-        resolve, reject,
+    const priority = options?.priority || 'normal';
+    const key = this.topicKey(chatId, topicId);
+    const buffer = this.topicBuffers.get(key);
+
+    // 高优先级、带 replyMarkup、或第一条消息 → 立即发送（走 HTML 转换）
+    const isFirst = !buffer?.firstSent;
+    if (priority === 'high' || isFirst || options?.replyMarkup) {
+      this.flushTopicBuffer(key);
+      this.ensureBuffer(chatId, topicId).firstSent = true;
+
+      const html = markdownToHtml(text);
+      return new Promise((resolve, reject) => {
+        this.queue.push({
+          type: 'send', chatId, topicId,
+          text: html,
+          originalText: text,
+          options: { parseMode: 'HTML', replyMarkup: options?.replyMarkup, silent: options?.silent },
+          resolve, reject,
+        });
       });
-    });
+    }
+
+    // 普通消息 → 进缓冲区（存原始文本，flush 时再转 HTML）
+    return this.bufferSend(chatId, topicId, text);
   }
 
   /**
@@ -152,6 +217,116 @@ export class MessageQueue {
     return fn().finally(() => { this.pendingAsyncOps--; });
   }
 
+  // --- Topic 缓冲区管理 ---
+
+  /**
+   * 重置 topic 节流状态（每轮对话开始时调用）
+   */
+  resetTopicState(chatId: number, topicId?: number): void {
+    const key = this.topicKey(chatId, topicId);
+    const buffer = this.topicBuffers.get(key);
+    if (buffer) {
+      // flush 残留缓冲
+      this.flushTopicBuffer(key);
+      buffer.firstSent = false;
+    }
+  }
+
+  /**
+   * flush 所有 topic 缓冲区
+   */
+  flushAllTopicBuffers(): void {
+    for (const key of this.topicBuffers.keys()) {
+      this.flushTopicBuffer(key);
+    }
+  }
+
+  private ensureBuffer(chatId: number, topicId?: number): TopicBuffer {
+    const key = this.topicKey(chatId, topicId);
+    let buffer = this.topicBuffers.get(key);
+    if (!buffer) {
+      buffer = { pendingTexts: [], timer: null, firstSent: false, chatId, topicId: topicId ?? 0 };
+      this.topicBuffers.set(key, buffer);
+    }
+    return buffer;
+  }
+
+  /**
+   * 将普通消息放入 topic 缓冲区
+   */
+  private bufferSend(chatId: number, topicId: number | undefined, text: string): Promise<number> {
+    const buffer = this.ensureBuffer(chatId, topicId);
+    return new Promise((resolve, reject) => {
+      buffer.pendingTexts.push({ text, resolve, reject });
+
+      // 重置定时器
+      if (buffer.timer) clearTimeout(buffer.timer);
+      buffer.timer = setTimeout(() => {
+        this.flushTopicBuffer(this.topicKey(chatId, topicId));
+      }, this.TOPIC_BUFFER_WINDOW);
+    });
+  }
+
+  /**
+   * flush 指定 topic 的缓冲区：合并文本后入队发送
+   */
+  private flushTopicBuffer(key: string): void {
+    const buffer = this.topicBuffers.get(key);
+    if (!buffer || buffer.pendingTexts.length === 0) return;
+
+    // 清除定时器
+    if (buffer.timer) {
+      clearTimeout(buffer.timer);
+      buffer.timer = null;
+    }
+
+    const pending = buffer.pendingTexts.splice(0);
+    const { chatId, topicId } = buffer;
+    const effectiveTopicId = topicId === 0 ? undefined : topicId;
+
+    // 分批合并，尊重 MAX_MERGE_LENGTH
+    const batches: BufferedSend[][] = [];
+    let currentBatch: BufferedSend[] = [];
+    let currentLength = 0;
+
+    for (const item of pending) {
+      const addLength = currentLength === 0
+        ? item.text.length
+        : this.MERGE_SEPARATOR.length + item.text.length;
+
+      if (currentLength + addLength > this.MAX_MERGE_LENGTH && currentBatch.length > 0) {
+        batches.push(currentBatch);
+        currentBatch = [item];
+        currentLength = item.text.length;
+      } else {
+        currentBatch.push(item);
+        currentLength += addLength;
+      }
+    }
+    if (currentBatch.length > 0) batches.push(currentBatch);
+
+    // 每批合并为一条消息入队
+    for (const batch of batches) {
+      const mergedText = batch.map(b => b.text).join(this.MERGE_SEPARATOR);
+      const html = markdownToHtml(mergedText);
+
+      this.queue.push({
+        type: 'send',
+        chatId,
+        topicId: effectiveTopicId,
+        text: html,
+        originalText: mergedText,
+        options: { parseMode: 'HTML', silent: true },
+        resolve: (messageId: number) => {
+          for (const item of batch) item.resolve(messageId);
+        },
+        reject: (error: Error) => {
+          for (const item of batch) item.reject(error);
+        },
+      });
+    }
+  }
+
   // --- 生命周期 ---
 
   start(): void {
@@ -168,8 +343,12 @@ export class MessageQueue {
 
   /**
    * 排空队列，等待所有操作完成（含悬空 Promise）
+   * 先 flush 所有 topic 缓冲区，再排空底层队列
    */
   async drain(timeoutMs = 30000): Promise<void> {
+    // 先 flush 所有 topic buffer，使缓冲消息进入队列
+    this.flushAllTopicBuffers();
+
     const deadline = Date.now() + timeoutMs;
     while ((this.queue.length > 0 || this.processing || this.pendingAsyncOps > 0) && Date.now() < deadline) {
       // stop() 后 timer 已清除，需要主动驱动消费

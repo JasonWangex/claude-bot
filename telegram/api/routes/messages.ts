@@ -10,7 +10,6 @@
 
 import type { RouteHandler, SendMessageRequest } from '../types.js';
 import { sendJson, requireAuth, readJsonBody } from '../middleware.js';
-import { sendLongMessageDirect } from '../../bot/message-utils.js';
 import { logger } from '../../utils/logger.js';
 
 export const sendMessage: RouteHandler = async (req, res, params, deps) => {
@@ -55,7 +54,7 @@ export const sendMessage: RouteHandler = async (req, res, params, deps) => {
       logger.info(`[API] Background chat completed for topic ${topicId}`);
     } catch (error: any) {
       logger.error(`[API] Background chat failed for topic ${topicId}:`, error.message);
-      await sendLongMessageDirect(deps.telegram, groupId, topicId, `❌ 错误: ${error.message}`).catch(() => {});
+      await deps.mq.send(groupId, topicId, `❌ 错误: ${error.message}`).catch(() => {});
     }
   })();
 };

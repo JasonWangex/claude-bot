@@ -7,7 +7,8 @@ import { Markup } from 'telegraf';
 import { StateManager } from './state.js';
 import { MessageHandler } from './handlers.js';
 import { ClaudeClient } from '../claude/client.js';
-import { escapeHtml, sendLongMessageDirect } from './message-utils.js';
+import { escapeHtml } from './message-utils.js';
+import { MessageQueue } from './message-queue.js';
 import { StreamEvent, TelegramBotConfig } from '../types/index.js';
 import { spawn } from 'child_process';
 import { stat, mkdir, readFile } from 'fs/promises';
@@ -43,15 +44,17 @@ export class CommandHandler {
   private stateManager: StateManager;
   private claudeClient: ClaudeClient;
   private messageHandler: MessageHandler;
+  private mq: MessageQueue;
   private config: TelegramBotConfig;
 
   // General 话题文本收集状态 (groupId → PendingTextInput)
   private pendingTextInput: Map<number, PendingTextInput> = new Map();
 
-  constructor(stateManager: StateManager, claudeClient: ClaudeClient, messageHandler: MessageHandler, config: TelegramBotConfig) {
+  constructor(stateManager: StateManager, claudeClient: ClaudeClient, messageHandler: MessageHandler, mq: MessageQueue, config: TelegramBotConfig) {
     this.stateManager = stateManager;
     this.claudeClient = claudeClient;
     this.messageHandler = messageHandler;
+    this.mq = mq;
     this.config = config;
   }
 
@@ -2066,7 +2069,6 @@ export class CommandHandler {
   private spawnQdevProcess(
     prompt: string,
     cwd: string,
-    telegram: Context['telegram'],
     chatId: number,
     topicId: number,
   ): void {
@@ -2098,13 +2100,11 @@ export class CommandHandler {
             result = stdout.trim();
           }
           if (result) {
-            await sendLongMessageDirect(telegram, chatId, topicId, result);
+            await this.mq.sendLong(chatId, topicId, result);
           }
         } else {
           const errMsg = stderr.trim() || `退出码 ${code}`;
-          await telegram.sendMessage(chatId, `❌ qdev 失败: ${errMsg}`, {
-            message_thread_id: topicId,
-          });
+          await this.mq.send(chatId, topicId, `❌ qdev 失败: ${errMsg}`);
         }
       } catch (e: any) {
         logger.error('qdev result delivery failed:', e.message);
@@ -2112,9 +2112,7 @@ export class CommandHandler {
     });
 
     child.on('error', (err: Error) => {
-      telegram.sendMessage(chatId, `❌ qdev 启动失败: ${err.message}`, {
-        message_thread_id: topicId,
-      }).catch(() => {});
+      this.mq.send(chatId, topicId, `❌ qdev 启动失败: ${err.message}`).catch(() => {});
     });
   }
 
@@ -2150,7 +2148,7 @@ export class CommandHandler {
       await ctx.reply(`🚀 正在后台执行 qdev: ${description}`);
 
       // Fire-and-forget: 独立 claude -p 进程，不占用当前 topic 的 session/lock
-      this.spawnQdevProcess(prompt, session.cwd, ctx.telegram, chatId, topicId);
+      this.spawnQdevProcess(prompt, session.cwd, chatId, topicId);
     });
   }
 }

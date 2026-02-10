@@ -13,7 +13,6 @@ import { MessageQueue } from './message-queue.js';
 import { ClaudeClient } from '../claude/client.js';
 import { TelegramBotConfig } from '../types/index.js';
 import { checkAuth } from './auth.js';
-import { sendLongMessageDirect } from './message-utils.js';
 import { logger } from '../utils/logger.js';
 import { getAuthorizedChatId } from '../utils/env.js';
 import { ApiServer } from '../api/server.js';
@@ -63,7 +62,7 @@ export class TelegramBot {
     );
     this.messageQueue = new MessageQueue(this.bot.telegram);
     this.messageHandler = new MessageHandler(this.stateManager, this.claudeClient, this.callbackRegistry, this.messageQueue);
-    this.commandHandler = new CommandHandler(this.stateManager, this.claudeClient, this.messageHandler, this.config);
+    this.commandHandler = new CommandHandler(this.stateManager, this.claudeClient, this.messageHandler, this.messageQueue, this.config);
     this.messageHandler.setCommandHandler(this.commandHandler);
 
     // API 服务器（直接调用服务层，不走 Telegraf 管道）
@@ -73,6 +72,7 @@ export class TelegramBot {
         claudeClient: this.claudeClient,
         messageHandler: this.messageHandler,
         telegram: this.bot.telegram,
+        mq: this.messageQueue,
         config,
       });
     }
@@ -428,7 +428,7 @@ export class TelegramBot {
             this.stateManager.setSessionClaudeId(info.groupId, info.topicId, info.claudeSessionId);
           }
           // 发送结果到对应 topic
-          await sendLongMessageDirect(this.bot.telegram, authorizedChatId, info.topicId, info.result);
+          await this.messageQueue.sendLong(authorizedChatId, info.topicId, info.result);
 
           // 发送完成标记
           const parts: string[] = ['重连恢复'];
@@ -437,10 +437,7 @@ export class TelegramBot {
             const total = info.usage.input_tokens + info.usage.output_tokens;
             parts.push(`${Math.round(total / 1000)}K tokens`);
           }
-          await this.bot.telegram.sendMessage(authorizedChatId, `✅ 完成 (${parts.join(', ')})`, {
-            message_thread_id: info.topicId,
-            disable_notification: false,
-          });
+          await this.messageQueue.send(authorizedChatId, info.topicId, `✅ 完成 (${parts.join(', ')})`, { silent: false, priority: 'high' });
         } else if (info.status === 'failed') {
           await this.bot.telegram.sendMessage(authorizedChatId, '⚠️ Bot 重启期间任务未能完成', {
             message_thread_id: info.topicId,

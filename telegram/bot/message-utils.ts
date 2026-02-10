@@ -2,11 +2,6 @@
  * Telegram 消息发送工具
  */
 
-import { Context, Telegram } from 'telegraf';
-import { writeFileSync, unlinkSync } from 'fs';
-import { tmpdir } from 'os';
-import { join } from 'path';
-import { logger } from '../utils/logger.js';
 import type { FileChange } from '../types/index.js';
 
 /**
@@ -83,67 +78,6 @@ export function markdownToHtml(md: string): string {
   });
 
   return text;
-}
-
-/**
- * 发送长消息：超过 4000 字符时自动转为文件附件
- */
-export async function sendLongMessage(ctx: Context, text: string): Promise<void> {
-  if (text.length > 4000) {
-    const tmpFile = join(tmpdir(), `claude-${Date.now()}.md`);
-    try {
-      writeFileSync(tmpFile, text, 'utf-8');
-      await ctx.replyWithDocument(
-        { source: tmpFile, filename: 'response.md' },
-        { caption: text.slice(0, 1000) + (text.length > 1000 ? '...' : ''), disable_notification: true }
-      );
-    } finally {
-      try { unlinkSync(tmpFile); } catch {}
-    }
-    return;
-  }
-
-  const html = markdownToHtml(text);
-  try {
-    await ctx.reply(html, { parse_mode: 'HTML', disable_notification: true });
-  } catch {
-    logger.debug('HTML parsing failed, using plain text');
-    await ctx.reply(text, { parse_mode: undefined, disable_notification: true });
-  }
-}
-
-/**
- * 发送长消息：不依赖 Context，直接使用 Telegram API
- * 用于 Bot 重启后重连场景
- */
-export async function sendLongMessageDirect(
-  telegram: Telegram,
-  chatId: number,
-  topicId: number,
-  text: string
-): Promise<void> {
-  if (text.length > 4000) {
-    const tmpFile = join(tmpdir(), `claude-${Date.now()}.md`);
-    try {
-      writeFileSync(tmpFile, text, 'utf-8');
-      await telegram.sendDocument(chatId, { source: tmpFile, filename: 'response.md' }, {
-        caption: text.slice(0, 1000) + (text.length > 1000 ? '...' : ''),
-        message_thread_id: topicId,
-        disable_notification: true,
-      });
-    } finally {
-      try { unlinkSync(tmpFile); } catch {}
-    }
-    return;
-  }
-
-  const html = markdownToHtml(text);
-  try {
-    await telegram.sendMessage(chatId, html, { parse_mode: 'HTML', message_thread_id: topicId, disable_notification: true });
-  } catch {
-    logger.debug('HTML parsing failed, using plain text');
-    await telegram.sendMessage(chatId, text, { message_thread_id: topicId, disable_notification: true });
-  }
 }
 
 /**

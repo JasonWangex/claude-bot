@@ -206,6 +206,9 @@ export class MessageHandler {
     const MAX_INTERACTIVE_ROUNDS = 5;
     for (let round = 0; round < MAX_INTERACTIVE_ROUNDS; round++) {
 
+    // 重置 topic 节流状态，确保每轮对话的第一条消息立即发送
+    this.mq.resetTopicState(chatId, session.topicId);
+
     logger.info(`[${session.name}] Message:`, text.substring(0, 100));
 
     // 记录用户消息
@@ -447,14 +450,14 @@ export class MessageHandler {
             try {
               const planContent = readFileSync(planFile.filePath, 'utf-8').trim();
               if (planContent) {
-                await mq.sendLong(chatId, session.topicId, planContent);
+                await mq.sendLong(chatId, session.topicId, planContent, { priority: 'high' });
                 planSent = true;
               }
             } catch {}
           }
         }
         if (!planSent && (sentTextCount === 0 || (response.result.trim() && response.result.trim() !== lastSentText))) {
-          await mq.sendLong(chatId, session.topicId, response.result);
+          await mq.sendLong(chatId, session.topicId, response.result, { priority: 'high' });
         }
 
         // 无 ctx 时无法显示 Inline Keyboard，跳过交互
@@ -556,11 +559,11 @@ export class MessageHandler {
           `📋 方案已生成${summary}\n\n` +
           `回复 "ok" 或 "确认" 将自动压缩上下文并执行实现。\n` +
           `回复其他内容继续讨论方案。`,
-          { silent: false }
+          { silent: false, priority: 'high' }
         );
       } else {
         const fileInfo = fileChanges.length > 0 ? `, ${fileChanges.length} 文件变更` : '';
-        await mq.send(chatId, session.topicId, `✅ 完成${summary}${fileInfo}`, { silent: false });
+        await mq.send(chatId, session.topicId, `✅ 完成${summary}${fileInfo}`, { silent: false, priority: 'high' });
       }
 
     } catch (error: any) {
