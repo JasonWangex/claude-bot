@@ -164,8 +164,6 @@ export interface TelegramEntity {
  *   <diff code block>
  */
 export function buildDiffMessage(change: FileChange): { text: string; entities: TelegramEntity[] } {
-  const MAX_LENGTH = 4096;
-
   // 短路径
   const shortPath = change.filePath.replace(/^\/home\/[^/]+\//, '~/');
   const typeLabel = change.type === 'create' ? 'new file' : 'modified';
@@ -183,67 +181,17 @@ export function buildDiffMessage(change: FileChange): { text: string; entities: 
     }
   }
 
-  // 构建统计文字
-  const stats = change.type === 'create'
-    ? `+${addCount}`
-    : `+${addCount} -${delCount}`;
+  // 用 emoji 颜色标注统计：🟢 +N  🔴 -M
+  const statsParts: string[] = [];
+  if (addCount > 0) statsParts.push(`🟢+${addCount}`);
+  if (delCount > 0) statsParts.push(`🔴-${delCount}`);
+  const stats = statsParts.length > 0 ? `  ${statsParts.join(' ')}` : '';
 
-  // 头部行（含 emoji）
-  const header = `📄 ${shortPath}  ${typeLabel}  ${stats}`;
-
-  // 构建 diff body
-  let diffBody = '';
-  if (change.type === 'create' && change.content) {
-    const lines = change.content.split('\n');
-    const MAX_LINES = 50;
-    const shown = lines.slice(0, MAX_LINES);
-    diffBody = shown.map(l => `+${l}`).join('\n');
-    if (lines.length > MAX_LINES) {
-      diffBody += `\n... (${lines.length - MAX_LINES} more lines)`;
-    }
-  } else if (change.patches) {
-    const parts: string[] = [];
-    for (const patch of change.patches) {
-      parts.push(`@@ -${patch.oldStart},${patch.oldLines} +${patch.newStart},${patch.newLines} @@`);
-      for (const line of patch.lines) {
-        parts.push(line);
-      }
-    }
-    diffBody = parts.join('\n');
-  }
-
-  if (!diffBody) {
-    return { text: header, entities: [{ type: 'bold', offset: 0, length: header.length }] };
-  }
-
-  // 完整文本 = header + 换行 + diffBody
-  let fullText = `${header}\n${diffBody}`;
-
-  // 截断到 4096 字符以内
-  if (fullText.length > MAX_LENGTH) {
-    const suffix = '\n... (truncated)';
-    const available = MAX_LENGTH - header.length - 1 - suffix.length; // 1 for newline
-    // 截断到最近的换行
-    let truncated = diffBody.slice(0, available);
-    const lastNewline = truncated.lastIndexOf('\n');
-    if (lastNewline > 0) {
-      truncated = truncated.slice(0, lastNewline);
-    }
-    diffBody = truncated + suffix;
-    fullText = `${header}\n${diffBody}`;
-  }
-
-  // 构建 entities
-  // JS string.length 就是 UTF-16 code unit 数，与 Telegram 要求一致
-  const headerOffset = 0;
-  const headerLength = header.length;
-  const diffOffset = header.length + 1; // +1 for newline
-  const diffLength = diffBody.length;
-
+  // 只显示文件名和统计，不附带 diff 内容（完整 diff 通过 HTML 文件查看）
+  const text = `📄 ${shortPath}  ${typeLabel}${stats}`;
   const entities: TelegramEntity[] = [
-    { type: 'bold', offset: headerOffset, length: headerLength },
-    { type: 'pre', offset: diffOffset, length: diffLength, language: 'diff' },
+    { type: 'bold', offset: 0, length: text.length },
   ];
 
-  return { text: fullText, entities };
+  return { text, entities };
 }
