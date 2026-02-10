@@ -8,6 +8,7 @@ import type { ClaudeClient } from '../claude/client.js';
 import type { MessageHandler } from '../bot/handlers.js';
 import type { TelegramBotConfig } from '../types/index.js';
 import type { Telegram } from 'telegraf';
+import type { MessageQueue } from '../bot/message-queue.js';
 
 // ========== 通用 ==========
 
@@ -24,6 +25,7 @@ export interface ApiDeps {
   claudeClient: ClaudeClient;
   messageHandler: MessageHandler;
   telegram: Telegram;
+  mq: MessageQueue;
   config: TelegramBotConfig;
 }
 
