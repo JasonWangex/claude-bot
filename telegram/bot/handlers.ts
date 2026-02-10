@@ -11,6 +11,7 @@ import { StateManager } from './state.js';
 import { CallbackRegistry } from './callback-registry.js';
 import { ClaudeClient } from '../claude/client.js';
 import { MessageQueue } from './message-queue.js';
+import { markdownToHtml } from './message-utils.js';
 import { StreamEvent, AskUserQuestionInput, ExitPlanModeInput, ClaudeExecutionError, ClaudeErrorType, Session, FileChange } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 import { checkAuth } from './auth.js';
@@ -233,6 +234,13 @@ export class MessageHandler {
     let lastAssistantUsage: { input_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } | null = null;
     let sendChain = Promise.resolve();  // 文本发送串行链，防止并发导致顺序错乱
 
+    // Text 占位消息：累积 flush 模式，减少 Telegram API 调用
+    let textPlaceholderMsgId: number | null = null;  // 占位消息 ID
+    let textBuffer: string[] = [];                     // 待 flush 的文本段
+    let textFlushedContent = '';                        // 已 flush 到占位消息的完整内容
+    let lastTextFlushTime = 0;
+    const TEXT_FLUSH_INTERVAL = 10000;                  // text: 10 秒最多 flush 1 次
+
     // 交互式工具拦截：CLI 会自动拒绝 AskUserQuestion/ExitPlanMode，
     // 我们在流中检测到后记录问题数据，抑制后续误导性文本，chat() 结束后显示键盘
     // 用对象包装以绕过 TypeScript CFA（callback 内赋值不被追踪）
@@ -259,6 +267,49 @@ export class MessageHandler {
         allProgressMsgIds.add(progressMsgId);
       } finally {
         recreatingProgress = false;
+      }
+    };
+
+    // flush text 占位消息：将 buffer 中的文本累积到占位消息
+    const flushTextBuffer = async () => {
+      if (textBuffer.length === 0) return;
+      const drained = textBuffer.splice(0);
+      const newContent = drained.join('\n\n');
+      const fullContent = textFlushedContent
+        ? textFlushedContent + '\n\n' + newContent
+        : newContent;
+
+      try {
+        if (fullContent.length > 4000) {
+          // 超长：删除旧占位消息，发送为文件附件，重置状态
+          if (textPlaceholderMsgId) {
+            mq.delete(chatId, textPlaceholderMsgId);
+          }
+          await mq.sendDocument(chatId, session.topicId, fullContent, 'response.md', fullContent.slice(0, 1000));
+          textFlushedContent = '';
+          textPlaceholderMsgId = null;
+          await recreateProgress();
+          lastTextFlushTime = Date.now();
+          return;
+        }
+
+        const html = markdownToHtml(fullContent);
+        if (textPlaceholderMsgId) {
+          // edit 现有占位消息
+          mq.edit(chatId, textPlaceholderMsgId, html, { parseMode: 'HTML' });
+        } else {
+          // 首次：创建占位消息
+          textPlaceholderMsgId = await mq.send(chatId, session.topicId, html, {
+            parseMode: 'HTML', priority: 'high',
+          });
+          await recreateProgress();
+        }
+        textFlushedContent = fullContent;
+        lastTextFlushTime = Date.now();
+      } catch (e) {
+        // flush 失败：把内容放回 buffer 头部，下次 flush 重试
+        textBuffer.unshift(...drained);
+        throw e;
       }
     };
 
@@ -305,6 +356,10 @@ export class MessageHandler {
         compactPreTokens = null;
         lastAssistantUsage = null;
         interactiveState.pending = null;
+        textBuffer.length = 0;
+        textFlushedContent = '';
+        textPlaceholderMsgId = null;
+        lastTextFlushTime = 0;
         return;
       }
 
@@ -388,7 +443,7 @@ export class MessageHandler {
             const newText = `🔧 [${toolUseCount}] ${toolLabel}${detail}`;
 
             const now = Date.now();
-            if (newText !== lastProgressText && now - lastEditTime >= 1000) {
+            if (newText !== lastProgressText && now - lastEditTime >= 5000) {
               lastProgressText = newText;
               lastEditTime = now;
               mq.edit(chatId, progressMsgId, newText, { replyMarkup });
@@ -403,15 +458,16 @@ export class MessageHandler {
             sentTextCount++;
             lastSentText = textContent;
 
-            // 串行链：保证多段文本按序发送 + 进度重建不并发
-            sendChain = sendChain.then(async () => {
-              await mq.sendLong(chatId, session.topicId, textContent);
-              await recreateProgress();
-            }).catch((e) => {
-              sentTextCount--;  // 回退计数，确保最终 result 能补发
-              logger.debug('Send text failed:', e);
-            });
-            mq.trackAsync(() => sendChain);  // drain 仍能感知
+            // 累积到 buffer，按节流频率 flush（edit 占位消息）
+            textBuffer.push(textContent);
+            const now = Date.now();
+            if (!textPlaceholderMsgId || now - lastTextFlushTime >= TEXT_FLUSH_INTERVAL) {
+              // 首次或已超过节流间隔 → 通过 sendChain 串行 flush
+              sendChain = sendChain.then(() => flushTextBuffer()).catch(e => {
+                logger.debug('Flush text failed:', e);
+              });
+              mq.trackAsync(() => sendChain);
+            }
           }
         }
       }
@@ -440,6 +496,8 @@ export class MessageHandler {
       if (interactiveState.pending) {
         const pi = interactiveState.pending;
 
+        // 最终 flush text 占位消息
+        await flushTextBuffer();
         // 先排空消息队列
         await mq.drain(10000);
 
@@ -462,7 +520,7 @@ export class MessageHandler {
             } catch {}
           }
         }
-        if (!planSent && (sentTextCount === 0 || (response.result.trim() && response.result.trim() !== lastSentText))) {
+        if (!planSent && (sentTextCount === 0 || (response.result.trim() && response.result.trim() !== textFlushedContent.trim()))) {
           await mq.sendLong(chatId, session.topicId, response.result, { priority: 'high' });
         }
 
@@ -518,6 +576,8 @@ export class MessageHandler {
       // 正常流程（无交互式工具）
       // ==========================================
 
+      // 最终 flush text 占位消息
+      await flushTextBuffer();
       // 等消息队列排空
       await mq.drain();
 
@@ -527,7 +587,7 @@ export class MessageHandler {
       }
 
       // 如果流式过程中没有发送过文本，或最终 result 与最后发送的文本不同，补发 result
-      if (sentTextCount === 0 || (response.result.trim() && response.result.trim() !== lastSentText)) {
+      if (sentTextCount === 0 || (response.result.trim() && response.result.trim() !== textFlushedContent.trim())) {
         await mq.sendLong(chatId, session.topicId, response.result);
       }
 
@@ -573,6 +633,8 @@ export class MessageHandler {
       }
 
     } catch (error: any) {
+      // 最终 flush text 占位消息
+      await flushTextBuffer().catch(() => {});
       // 等待未完成的 recreateProgress 等异步操作，确保 allProgressMsgIds 完整
       await mq.drain(3000).catch(() => {});
 
