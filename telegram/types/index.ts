@@ -42,6 +42,14 @@ export interface StructuredPatch {
   lines: string[];
 }
 
+// 收集的文件变更
+export interface FileChange {
+  filePath: string;
+  type: 'update' | 'create';
+  patches?: StructuredPatch[];
+  content?: string;   // 新建文件的完整内容
+}
+
 // tool_use_result for file operations
 export interface FileToolResult {
   type: 'update' | 'create';

@@ -11,10 +11,10 @@ import { StateManager } from './state.js';
 import { CallbackRegistry } from './callback-registry.js';
 import { ClaudeClient } from '../claude/client.js';
 import { MessageQueue } from './message-queue.js';
-import { StreamEvent, StructuredPatch, AskUserQuestionInput, ExitPlanModeInput, ClaudeExecutionError, ClaudeErrorType, Session } from '../types/index.js';
+import { StreamEvent, AskUserQuestionInput, ExitPlanModeInput, ClaudeExecutionError, ClaudeErrorType, Session, FileChange } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 import { checkAuth } from './auth.js';
-import { escapeHtml } from './message-utils.js';
+import { escapeHtml, buildDiffMessage } from './message-utils.js';
 import type { CommandHandler } from './commands.js';
 
 // 工具名称映射
@@ -30,14 +30,6 @@ const TOOL_NAMES: Record<string, string> = {
   Task: '启动子任务',
   NotebookEdit: '编辑笔记本',
 };
-
-// 收集的文件变更
-interface FileChange {
-  filePath: string;
-  type: 'update' | 'create';
-  patches?: StructuredPatch[];
-  content?: string;   // 新建文件的完整内容
-}
 
 export class MessageHandler {
   private stateManager: StateManager;
@@ -300,24 +292,25 @@ export class MessageHandler {
         return;
       }
 
-      // 收集文件变更（来自 user event 的 tool_use_result）
+      // 收集文件变更（来自 user event 的 tool_use_result）并实时发送 diff
       // Write 工具返回 type:"create"，Edit 工具不返回 type 字段但有 structuredPatch
       if (event.type === 'user' && event.tool_use_result) {
         const tur = event.tool_use_result;
         if (tur.filePath) {
+          let change: FileChange | null = null;
           if (tur.type === 'create') {
-            fileChanges.push({
-              filePath: tur.filePath,
-              type: 'create',
-              patches: tur.structuredPatch,
-              content: tur.content,
-            });
+            change = { filePath: tur.filePath, type: 'create', patches: tur.structuredPatch, content: tur.content };
           } else if (tur.structuredPatch?.length) {
-            fileChanges.push({
-              filePath: tur.filePath,
-              type: 'update',
-              patches: tur.structuredPatch,
-            });
+            change = { filePath: tur.filePath, type: 'update', patches: tur.structuredPatch };
+          }
+          if (change) {
+            fileChanges.push(change);
+            // 实时发送 diff 消息
+            const { text: diffText, entities } = buildDiffMessage(change);
+            mq.trackAsync(async () => {
+              await mq.send(chatId, session.topicId, diffText, { entities, silent: true });
+              await recreateProgress();
+            }).catch(e => logger.debug('Send diff failed:', e));
           }
         }
       }
@@ -503,13 +496,6 @@ export class MessageHandler {
         await mq.sendLong(chatId, session.topicId, response.result);
       }
 
-      // 有文件变更时，生成可视化 HTML diff 附件发送
-      if (fileChanges.length > 0) {
-        const htmlContent = this.buildHtmlDiffReport(fileChanges);
-        await mq.sendDocument(chatId, session.topicId, htmlContent, 'changes.html',
-          `📝 ${fileChanges.length} 个文件变更`);
-      }
-
       // 发送完成标记（HTML 格式，带颜色百分比）
       const parts: string[] = [];
       if (response.duration_ms) parts.push(`${(response.duration_ms / 1000).toFixed(1)}s`);
@@ -547,7 +533,8 @@ export class MessageHandler {
           { silent: false }
         );
       } else {
-        await mq.send(chatId, session.topicId, `✅ 完成${summary}`, { silent: false });
+        const fileInfo = fileChanges.length > 0 ? `, ${fileChanges.length} 文件变更` : '';
+        await mq.send(chatId, session.topicId, `✅ 完成${summary}${fileInfo}`, { silent: false });
       }
 
     } catch (error: any) {
@@ -613,228 +600,6 @@ export class MessageHandler {
       }
       throw error;
     }
-  }
-
-  /**
-   * 从文件路径推断 highlight.js 语言标识
-   */
-  private detectLanguage(filePath: string): string {
-    const ext = filePath.split('.').pop()?.toLowerCase() || '';
-    const map: Record<string, string> = {
-      ts: 'typescript', tsx: 'typescript', js: 'javascript', jsx: 'javascript',
-      py: 'python', rb: 'ruby', go: 'go', rs: 'rust', java: 'java',
-      kt: 'kotlin', swift: 'swift', cs: 'csharp', cpp: 'cpp', c: 'c',
-      h: 'c', hpp: 'cpp', vue: 'xml', svelte: 'xml',
-      html: 'xml', htm: 'xml', xml: 'xml', svg: 'xml',
-      css: 'css', scss: 'scss', less: 'less',
-      json: 'json', yaml: 'yaml', yml: 'yaml', toml: 'ini',
-      md: 'markdown', sql: 'sql', sh: 'bash', bash: 'bash', zsh: 'bash',
-      dockerfile: 'dockerfile', makefile: 'makefile',
-      graphql: 'graphql', gql: 'graphql', proto: 'protobuf',
-    };
-    return map[ext] || 'plaintext';
-  }
-
-  /**
-   * 将收集到的文件变更生成可视化 HTML diff 报告（GitHub 风格 + 语法高亮）
-   */
-  private buildHtmlDiffReport(changes: FileChange[]): string {
-    const esc = escapeHtml;
-
-    // 统计增删行数
-    let totalAdd = 0, totalDel = 0;
-    for (const c of changes) {
-      if (c.type === 'create' && c.content) {
-        totalAdd += c.content.split('\n').length;
-      } else if (c.patches) {
-        for (const p of c.patches) {
-          for (const l of p.lines) {
-            if (l[0] === '+') totalAdd++;
-            else if (l[0] === '-') totalDel++;
-          }
-        }
-      }
-    }
-
-    // 生成文件索引列表
-    const fileIndex = changes.map((c, i) => {
-      const badge = c.type === 'create'
-        ? '<span class="badge new">new file</span>'
-        : '<span class="badge mod">modified</span>';
-      let stats = '';
-      if (c.type === 'create' && c.content) {
-        const n = c.content.split('\n').length;
-        stats = `<span class="stat-add">+${n}</span>`;
-      } else if (c.patches) {
-        let a = 0, d = 0;
-        for (const p of c.patches) for (const l of p.lines) { if (l[0] === '+') a++; else if (l[0] === '-') d++; }
-        stats = `<span class="stat-add">+${a}</span> <span class="stat-del">-${d}</span>`;
-      }
-      const shortPath = c.filePath.replace(/^\/home\/[^/]+\//, '~/');
-      return `<a href="#file-${i}" class="file-link"><span class="file-icon">📄</span> ${esc(shortPath)} ${badge} <span class="stats">${stats}</span></a>`;
-    }).join('\n');
-
-    // 生成每个文件的 diff 区块
-    const fileSections = changes.map((change, i) => {
-      const lang = this.detectLanguage(change.filePath);
-      const badge = change.type === 'create'
-        ? '<span class="badge new">new file</span>'
-        : '<span class="badge mod">modified</span>';
-      const shortPath = change.filePath.replace(/^\/home\/[^/]+\//, '~/');
-      const header = `<div class="file-header" id="file-${i}"><span class="file-icon">📄</span> ${esc(shortPath)} ${badge}</div>`;
-
-      let rows = '';
-
-      if (change.type === 'create' && change.content) {
-        const contentLines = change.content.split('\n');
-        rows = contentLines.map((line, idx) =>
-          `<tr class="line-add"><td class="ln ln-empty"></td><td class="ln ln-add">${idx + 1}</td><td class="sign">+</td><td class="code"><code class="language-${lang}">${esc(line) || ' '}</code></td></tr>`
-        ).join('\n');
-      } else if (change.type === 'update' && change.patches) {
-        for (const patch of change.patches) {
-          rows += `<tr class="hunk-header"><td class="ln" colspan="2"></td><td class="sign"></td><td class="code"><code>@@ -${patch.oldStart},${patch.oldLines} +${patch.newStart},${patch.newLines} @@</code></td></tr>\n`;
-          let oldLine = patch.oldStart;
-          let newLine = patch.newStart;
-          for (const line of patch.lines) {
-            const prefix = line[0];
-            const content = line.slice(1);
-            if (prefix === '+') {
-              rows += `<tr class="line-add"><td class="ln ln-empty"></td><td class="ln ln-add">${newLine}</td><td class="sign sign-add">+</td><td class="code"><code class="language-${lang}">${esc(content) || ' '}</code></td></tr>\n`;
-              newLine++;
-            } else if (prefix === '-') {
-              rows += `<tr class="line-del"><td class="ln ln-del">${oldLine}</td><td class="ln ln-empty"></td><td class="sign sign-del">-</td><td class="code"><code class="language-${lang}">${esc(content) || ' '}</code></td></tr>\n`;
-              oldLine++;
-            } else {
-              rows += `<tr class="line-ctx"><td class="ln">${oldLine}</td><td class="ln">${newLine}</td><td class="sign"></td><td class="code"><code class="language-${lang}">${esc(content) || ' '}</code></td></tr>\n`;
-              oldLine++;
-              newLine++;
-            }
-          }
-        }
-      }
-
-      return `<div class="file-block">${header}<table class="diff-table">${rows}</table></div>`;
-    }).join('\n');
-
-    return `<!DOCTYPE html>
-<html lang="zh">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>${changes.length} files changed</title>
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/styles/github-dark.min.css">
-<style>
-:root {
-  --bg: #0d1117; --bg-subtle: #161b22; --border: #30363d;
-  --fg: #e6edf3; --fg-muted: #8b949e;
-  --add-bg: rgba(63,185,80,0.15); --add-bg-hl: rgba(63,185,80,0.3);
-  --add-fg: #aff5b4; --add-ln: rgba(63,185,80,0.1);
-  --del-bg: rgba(248,81,73,0.15); --del-bg-hl: rgba(248,81,73,0.3);
-  --del-fg: #ffa198; --del-ln: rgba(248,81,73,0.1);
-  --hunk-bg: rgba(56,139,253,0.1);
-}
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body { background: var(--bg); color: var(--fg); font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; font-size: 14px; padding: 16px; max-width: 1280px; margin: 0 auto; }
-
-/* summary */
-.summary { background: var(--bg-subtle); border: 1px solid var(--border); border-radius: 6px; padding: 16px; margin-bottom: 16px; }
-.summary h1 { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
-.summary .meta { color: var(--fg-muted); font-size: 13px; margin-bottom: 12px; }
-.stat-add { color: #3fb950; font-weight: 600; margin-right: 4px; }
-.stat-del { color: #f85149; font-weight: 600; }
-.file-link { display: flex; align-items: center; gap: 6px; color: #58a6ff; text-decoration: none; padding: 3px 0; font-size: 13px; font-family: 'SF Mono', 'Fira Code', Consolas, monospace; }
-.file-link:hover { text-decoration: underline; }
-.file-icon { font-size: 12px; }
-.stats { margin-left: auto; font-size: 12px; }
-
-/* badges */
-.badge { display: inline-block; font-size: 11px; padding: 1px 6px; border-radius: 12px; font-weight: 500; vertical-align: middle; margin-left: 6px; }
-.badge.new { background: rgba(63,185,80,0.2); color: #3fb950; border: 1px solid rgba(63,185,80,0.3); }
-.badge.mod { background: rgba(210,153,34,0.2); color: #d29922; border: 1px solid rgba(210,153,34,0.3); }
-
-/* file blocks */
-.file-block { margin-bottom: 16px; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); }
-.file-header { background: var(--bg-subtle); padding: 8px 16px; font-weight: 600; font-size: 13px; color: var(--fg); border-bottom: 1px solid var(--border); font-family: 'SF Mono', 'Fira Code', Consolas, monospace; display: flex; align-items: center; gap: 6px; }
-
-/* diff table */
-.diff-table { width: 100%; border-collapse: collapse; font-family: 'SF Mono', 'Fira Code', Consolas, monospace; font-size: 12px; line-height: 20px; }
-.diff-table td { vertical-align: top; }
-.ln { width: 40px; min-width: 40px; text-align: right; padding: 0 8px; color: var(--fg-muted); user-select: none; font-size: 12px; border-right: 1px solid var(--border); }
-.ln-empty { color: transparent; }
-.sign { width: 16px; min-width: 16px; text-align: center; user-select: none; padding: 0 2px; color: var(--fg-muted); }
-.sign-add { color: #3fb950; }
-.sign-del { color: #f85149; }
-.code { width: 100%; }
-.code code { display: block; margin: 0; padding: 0 12px; white-space: pre-wrap; word-break: break-all; background: transparent !important; font-size: 12px; line-height: 20px; }
-
-/* line backgrounds */
-.line-add { background: var(--add-bg); }
-.line-add .ln { background: var(--add-ln); }
-.line-add .code code { color: var(--add-fg); }
-.line-del { background: var(--del-bg); }
-.line-del .ln { background: var(--del-ln); }
-.line-del .code code { color: var(--del-fg); }
-.line-ctx { background: var(--bg); }
-.hunk-header { background: var(--hunk-bg); }
-.hunk-header .code code { color: var(--fg-muted); font-style: italic; }
-
-/* hljs syntax tokens — apply to all line types (ctx/add/del) */
-.code code .hljs-keyword,
-.code code .hljs-built_in,
-.code code .hljs-type,
-.code code .hljs-literal { color: #ff7b72; }
-.code code .hljs-string,
-.code code .hljs-regexp { color: #a5d6ff; }
-.code code .hljs-number { color: #79c0ff; }
-.code code .hljs-comment { color: #8b949e; font-style: italic; }
-.code code .hljs-function .hljs-title,
-.code code .hljs-title.function_ { color: #d2a8ff; }
-.code code .hljs-attr,
-.code code .hljs-attribute { color: #79c0ff; }
-.code code .hljs-variable,
-.code code .hljs-template-variable { color: #ffa657; }
-.code code .hljs-meta { color: #79c0ff; }
-.code code .hljs-tag { color: #7ee787; }
-.code code .hljs-name { color: #7ee787; }
-.code code .hljs-selector-class,
-.code code .hljs-selector-id { color: #d2a8ff; }
-.code code .hljs-params { color: var(--fg); }
-.line-add .code code .hljs-comment,
-.line-del .code code .hljs-comment { opacity: 0.7; }
-
-/* expandable marker */
-.expand-marker { text-align: center; padding: 4px; background: var(--bg-subtle); cursor: pointer; color: var(--fg-muted); font-size: 12px; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); }
-
-/* mobile responsive */
-@media (max-width: 768px) {
-  body { padding: 8px; font-size: 13px; }
-  .summary { padding: 12px; }
-  .summary h1 { font-size: 14px; }
-  .file-link { font-size: 12px; }
-  .file-header { padding: 6px 8px; font-size: 12px; }
-  .file-block { overflow-x: auto; }
-  .diff-table { font-size: 11px; line-height: 18px; }
-  .ln { width: 28px; min-width: 28px; padding: 0 4px; font-size: 11px; }
-  .sign { width: 12px; min-width: 12px; }
-  .code code { padding: 0 6px; font-size: 11px; line-height: 18px; }
-}
-</style>
-</head>
-<body>
-<div class="summary">
-<h1>${changes.length} files changed</h1>
-<div class="meta"><span class="stat-add">+${totalAdd}</span> additions, <span class="stat-del">-${totalDel}</span> deletions</div>
-${fileIndex}
-</div>
-${fileSections}
-<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.11.1/highlight.min.js"></script>
-<script>
-document.querySelectorAll('.code code[class*="language-"]').forEach(el => {
-  hljs.highlightElement(el);
-});
-</script>
-</body>
-</html>`;
   }
 
   /**

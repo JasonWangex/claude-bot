@@ -7,6 +7,7 @@ import { writeFileSync, unlinkSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { logger } from '../utils/logger.js';
+import type { FileChange } from '../types/index.js';
 
 /**
  * HTML 转义
@@ -143,4 +144,106 @@ export async function sendLongMessageDirect(
     logger.debug('HTML parsing failed, using plain text');
     await telegram.sendMessage(chatId, text, { message_thread_id: topicId, disable_notification: true });
   }
+}
+
+/**
+ * Telegram MessageEntity 类型（仅用于 buildDiffMessage 输出）
+ */
+export interface TelegramEntity {
+  type: string;
+  offset: number;
+  length: number;
+  language?: string;
+}
+
+/**
+ * 将 FileChange 构建为 Telegram 消息文本 + entities（使用 pre language="diff" 高亮）
+ *
+ * 消息格式：
+ *   📄 path/to/file  modified  +3 -2
+ *   <diff code block>
+ */
+export function buildDiffMessage(change: FileChange): { text: string; entities: TelegramEntity[] } {
+  const MAX_LENGTH = 4096;
+
+  // 短路径
+  const shortPath = change.filePath.replace(/^\/home\/[^/]+\//, '~/');
+  const typeLabel = change.type === 'create' ? 'new file' : 'modified';
+
+  // 统计增删行数
+  let addCount = 0, delCount = 0;
+  if (change.type === 'create' && change.content) {
+    addCount = change.content.split('\n').length;
+  } else if (change.patches) {
+    for (const p of change.patches) {
+      for (const l of p.lines) {
+        if (l[0] === '+') addCount++;
+        else if (l[0] === '-') delCount++;
+      }
+    }
+  }
+
+  // 构建统计文字
+  const stats = change.type === 'create'
+    ? `+${addCount}`
+    : `+${addCount} -${delCount}`;
+
+  // 头部行（含 emoji）
+  const header = `📄 ${shortPath}  ${typeLabel}  ${stats}`;
+
+  // 构建 diff body
+  let diffBody = '';
+  if (change.type === 'create' && change.content) {
+    const lines = change.content.split('\n');
+    const MAX_LINES = 50;
+    const shown = lines.slice(0, MAX_LINES);
+    diffBody = shown.map(l => `+${l}`).join('\n');
+    if (lines.length > MAX_LINES) {
+      diffBody += `\n... (${lines.length - MAX_LINES} more lines)`;
+    }
+  } else if (change.patches) {
+    const parts: string[] = [];
+    for (const patch of change.patches) {
+      parts.push(`@@ -${patch.oldStart},${patch.oldLines} +${patch.newStart},${patch.newLines} @@`);
+      for (const line of patch.lines) {
+        parts.push(line);
+      }
+    }
+    diffBody = parts.join('\n');
+  }
+
+  if (!diffBody) {
+    return { text: header, entities: [{ type: 'bold', offset: 0, length: header.length }] };
+  }
+
+  // 完整文本 = header + 换行 + diffBody
+  let fullText = `${header}\n${diffBody}`;
+
+  // 截断到 4096 字符以内
+  if (fullText.length > MAX_LENGTH) {
+    const suffix = '\n... (truncated)';
+    const available = MAX_LENGTH - header.length - 1 - suffix.length; // 1 for newline
+    // 截断到最近的换行
+    let truncated = diffBody.slice(0, available);
+    const lastNewline = truncated.lastIndexOf('\n');
+    if (lastNewline > 0) {
+      truncated = truncated.slice(0, lastNewline);
+    }
+    diffBody = truncated + suffix;
+    fullText = `${header}\n${diffBody}`;
+  }
+
+  // 构建 entities
+  // JS string.length 就是 UTF-16 code unit 数，与 Telegram 要求一致
+  const headerOffset = 0;
+  const headerLength = header.length;
+  const diffOffset = header.length + 1; // +1 for newline
+  const diffLength = diffBody.length;
+
+  const entities: TelegramEntity[] = [
+    { type: 'bold', offset: headerOffset, length: headerLength },
+    { type: 'pre', offset: diffOffset, length: diffLength, language: 'diff' },
+  ];
+
+  return { text: fullText, entities };
 }
