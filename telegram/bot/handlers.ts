@@ -232,10 +232,22 @@ export class MessageHandler {
     const mq = this.mq;
     const replyMarkup = stopKeyboard.reply_markup;
 
+    // 追踪所有曾经创建的进度消息 ID，用于最终清理
+    const allProgressMsgIds = new Set<number>([progressMsgId]);
+    let recreatingProgress = false;
+
     // 重建进度消息到底部，确保进度始终可见
     const recreateProgress = async () => {
-      mq.delete(chatId, progressMsgId);
-      progressMsgId = await mq.send(chatId, session.topicId, lastProgressText, { replyMarkup });
+      // 防止并发 recreate 导致 progressMsgId 竞态
+      if (recreatingProgress) return;
+      recreatingProgress = true;
+      try {
+        mq.delete(chatId, progressMsgId);
+        progressMsgId = await mq.send(chatId, session.topicId, lastProgressText, { replyMarkup });
+        allProgressMsgIds.add(progressMsgId);
+      } finally {
+        recreatingProgress = false;
+      }
     };
 
     // 进度回调
@@ -413,8 +425,10 @@ export class MessageHandler {
         // 先排空消息队列
         await mq.drain(10000);
 
-        // 删除进度消息
-        mq.delete(chatId, progressMsgId);
+        // 删除所有进度消息（包括 recreateProgress 产生的残留）
+        for (const msgId of allProgressMsgIds) {
+          mq.delete(chatId, msgId);
+        }
 
         // 补发内容：ExitPlanMode 时优先发送 plan 文件完整内容
         let planSent = false;
@@ -489,8 +503,10 @@ export class MessageHandler {
       // 等消息队列排空
       await mq.drain();
 
-      // 删除进度消息
-      mq.delete(chatId, progressMsgId);
+      // 删除所有进度消息（包括 recreateProgress 产生的残留）
+      for (const msgId of allProgressMsgIds) {
+        mq.delete(chatId, msgId);
+      }
 
       // 如果流式过程中没有发送过文本，或最终 result 与最后发送的文本不同，补发 result
       if (sentTextCount === 0 || (response.result.trim() && response.result.trim() !== lastSentText)) {
@@ -539,6 +555,14 @@ export class MessageHandler {
       }
 
     } catch (error: any) {
+      // 等待未完成的 recreateProgress 等异步操作，确保 allProgressMsgIds 完整
+      await mq.drain(3000).catch(() => {});
+
+      // 清理 recreateProgress 产生的残留进度消息（保留当前 progressMsgId 用于显示错误）
+      for (const msgId of allProgressMsgIds) {
+        if (msgId !== progressMsgId) mq.delete(chatId, msgId);
+      }
+
       // ABORTED: 用户主动停止，不显示错误
       if (error instanceof ClaudeExecutionError && error.errorType === ClaudeErrorType.ABORTED) {
         logger.info(`[${session.name}] Task aborted by user`);
