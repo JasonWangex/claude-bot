@@ -14,6 +14,7 @@ import { TelegramBotConfig } from '../types/index.js';
 import { checkAuth } from './auth.js';
 import { logger } from '../utils/logger.js';
 import { CLIStatsReader } from './cli-stats-reader.js';
+import { UsageReader } from './usage-reader.js';
 import { getAuthorizedChatId } from '../utils/env.js';
 
 export class TelegramBot {
@@ -24,6 +25,7 @@ export class TelegramBot {
   private messageHandler: MessageHandler;
   private claudeClient: ClaudeClient;
   private cliStatsReader: CLIStatsReader;
+  private usageReader: UsageReader;
   private dailyReportTimer: NodeJS.Timeout | null = null;
 
   constructor(config: TelegramBotConfig) {
@@ -52,6 +54,7 @@ export class TelegramBot {
     this.stateManager = new StateManager(config.defaultWorkDir);
     this.callbackRegistry = new CallbackRegistry();
     this.cliStatsReader = new CLIStatsReader();
+    this.usageReader = new UsageReader();
     this.claudeClient = new ClaudeClient(
       config.claudeCliPath,
       config.commandTimeout,
@@ -277,13 +280,13 @@ export class TelegramBot {
     }
 
     try {
-      const yesterday = await this.cliStatsReader.getYesterdayStats();
+      const yesterday = await this.usageReader.getYesterdayStats();
       if (!yesterday) {
         logger.info('No stats available for yesterday');
         return;
       }
 
-      const report = this.cliStatsReader.formatDailyReport(yesterday, '📊 昨日使用报告');
+      const report = this.usageReader.formatReport(yesterday, '📊 昨日使用报告');
 
       await this.bot.telegram.sendMessage(authorizedChatId, report, { parse_mode: 'HTML' });
       logger.info('Daily report sent successfully');
