@@ -60,7 +60,7 @@ export class ClaudeClient {
     } catch (error: any) {
       if (!(error instanceof ClaudeExecutionError)) throw error;
 
-      if (error.errorType === ClaudeErrorType.FATAL || error.errorType === ClaudeErrorType.ABORTED) {
+      if (error.errorType === ClaudeErrorType.FATAL || error.errorType === ClaudeErrorType.ABORTED || error.errorType === ClaudeErrorType.PROCESS_KILLED) {
         throw error;
       }
 

@@ -290,6 +290,12 @@ export class MessageHandler {
         mq.edit(chatId, progressMsgId, newText, { replyMarkup });
         return;
       }
+      if (event.type === 'system' && subtype === 'stall_warning') {
+        const secs = (event as any).stallSeconds || '?';
+        const newText = `${lastProgressText}\n⚠️ 已 ${secs}s 无输出，可能在深度思考中...\n使用 ⏹ 可手动停止`;
+        mq.edit(chatId, progressMsgId, newText, { replyMarkup });
+        return;
+      }
       if (event.type === 'system' && subtype === 'reset_state') {
         // 重置发送状态，防止重试时重复发送消息
         sentTextCount = 0;
@@ -590,7 +596,10 @@ export class MessageHandler {
 
       let hint = '提示: 使用 /clear 清空会话';
       if (error instanceof ClaudeExecutionError) {
-        if (error.errorType === ClaudeErrorType.SESSION_RECOVERABLE) {
+        if (error.errorType === ClaudeErrorType.PROCESS_KILLED) {
+          // 进程被杀（超时/信号）— 保留 session，用户可继续对话
+          hint = '会话上下文已保留，可以直接继续发消息';
+        } else if (error.errorType === ClaudeErrorType.SESSION_RECOVERABLE) {
           // 重试也失败了，自动清除坏 session
           this.stateManager.clearSessionClaudeId(session.groupId, session.topicId);
           hint = '会话已自动重置，请重新发送消息';

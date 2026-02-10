@@ -113,10 +113,11 @@ export interface StreamEvent {
 
 // 错误分类
 export enum ClaudeErrorType {
-  RECOVERABLE = 'recoverable',                  // 超时/崩溃 → 重试一次
+  RECOVERABLE = 'recoverable',                  // 临时故障 → 重试一次
   SESSION_RECOVERABLE = 'session_recoverable',   // 上下文溢出 → 清除 session 重试
   FATAL = 'fatal',                               // CLI 不可用 → 不重试
   ABORTED = 'aborted',                           // 用户主动中断
+  PROCESS_KILLED = 'process_killed',             // 进程被杀（超时/信号） → 不重试、保留 session
 }
 
 export class ClaudeExecutionError extends Error {
