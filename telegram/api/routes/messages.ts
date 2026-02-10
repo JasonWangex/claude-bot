@@ -47,20 +47,14 @@ export const sendMessage: RouteHandler = async (req, res, params, deps) => {
     data: { status: 'accepted', topic_id: topicId },
   });
 
-  // 3. 后台执行 Claude 并发送回复（不依赖 HTTP 连接）
+  // 3. 后台执行 Claude（sendChatInternal 已包含完整的流式进度和消息发送）
   (async () => {
     try {
       logger.info(`[API] Background chat started for topic ${topicId}`);
-      const response = await deps.messageHandler.handleBackgroundChat(groupId, topicId, body.text);
-
-      // 4. 发送 Claude 回复到 Telegram Topic
-      if (response.result) {
-        await sendLongMessageDirect(deps.telegram, groupId, topicId, response.result);
-      }
-      logger.info(`[API] Background chat completed for topic ${topicId}, length: ${response.result.length}`);
+      await deps.messageHandler.handleBackgroundChat(groupId, topicId, body.text);
+      logger.info(`[API] Background chat completed for topic ${topicId}`);
     } catch (error: any) {
       logger.error(`[API] Background chat failed for topic ${topicId}:`, error.message);
-      // 发送错误到 Telegram Topic，确保用户能看到
       await sendLongMessageDirect(deps.telegram, groupId, topicId, `❌ 错误: ${error.message}`).catch(() => {});
     }
   })();

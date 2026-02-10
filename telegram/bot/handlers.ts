@@ -219,6 +219,7 @@ export class MessageHandler {
     let lastSentText = '';
     let compactPreTokens: number | null = null;
     let lastAssistantUsage: { input_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } | null = null;
+    let sendChain = Promise.resolve();  // 文本发送串行链，防止并发导致顺序错乱
 
     // 交互式工具拦截：CLI 会自动拒绝 AskUserQuestion/ExitPlanMode，
     // 我们在流中检测到后记录问题数据，抑制后续误导性文本，chat() 结束后显示键盘
@@ -372,15 +373,15 @@ export class MessageHandler {
             sentTextCount++;
             lastSentText = textContent;
 
-            // 通过消息队列发送，sendLong 自动处理长消息
-            // trackAsync 让 drain 能感知这个悬空 Promise
-            mq.trackAsync(async () => {
+            // 串行链：保证多段文本按序发送 + 进度重建不并发
+            sendChain = sendChain.then(async () => {
               await mq.sendLong(chatId, session.topicId, textContent);
               await recreateProgress();
             }).catch((e) => {
               sentTextCount--;  // 回退计数，确保最终 result 能补发
               logger.debug('Send text failed:', e);
             });
+            mq.trackAsync(() => sendChain);  // drain 仍能感知
           }
         }
       }
@@ -572,34 +573,12 @@ export class MessageHandler {
     groupId: number,
     topicId: number,
     message: string
-  ): Promise<{ result: string; sessionId: string }> {
+  ): Promise<void> {
     const session = this.stateManager.getSession(groupId, topicId);
     if (!session) throw new Error('会话不存在');
 
-    this.stateManager.updateSessionMessage(groupId, topicId, message, 'user');
-
-    const lockKey = StateManager.topicLockKey(groupId, topicId);
-    try {
-      const effectiveModel = session.model ?? this.stateManager.getGroupDefaultModel(groupId);
-      const response = await this.claudeClient.chat(message, {
-        sessionId: session.claudeSessionId,
-        cwd: session.cwd,
-        lockKey,
-        model: effectiveModel,
-        groupId,
-        topicId,
-      });
-
-      this.stateManager.setSessionClaudeId(groupId, topicId, response.sessionId);
-      this.stateManager.updateSessionMessage(groupId, topicId, response.result, 'assistant');
-
-      return response;
-    } catch (error: any) {
-      if (error instanceof ClaudeExecutionError && error.errorType === ClaudeErrorType.SESSION_RECOVERABLE) {
-        this.stateManager.clearSessionClaudeId(groupId, topicId);
-      }
-      throw error;
-    }
+    // 复用 sendChatInternal：完整的流式进度、消息队列、完成消息
+    await this.sendChatInternal(groupId, session, message);
   }
 
   /**
