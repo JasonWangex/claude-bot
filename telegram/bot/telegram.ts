@@ -366,6 +366,13 @@ export class TelegramBot {
       }
     });
 
+    // 图片消息（fire-and-forget）
+    this.bot.on('photo', (ctx) => {
+      this.messageHandler.handlePhoto(ctx).catch((err) => {
+        logger.error('Photo handler error:', err);
+      });
+    });
+
     // fire-and-forget: 长时间 Claude 任务不阻塞 Telegraf 中间件链
     this.bot.on('text', (ctx) => {
       this.messageHandler.handleText(ctx).catch((err) => {

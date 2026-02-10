@@ -194,6 +194,12 @@ export interface ReconnectedResult {
   total_cost_usd?: number;
 }
 
+// 图片附件（base64 编码）
+export interface ImageAttachment {
+  data: string;        // base64 encoded
+  mediaType: string;   // image/jpeg | image/png
+}
+
 // Claude Code 调用选项
 export interface ClaudeOptions {
   cwd?: string;
@@ -206,6 +212,7 @@ export interface ClaudeOptions {
   model?: string;
   groupId?: number;
   topicId?: number;
+  images?: ImageAttachment[];
 }
 
 // Telegram Bot 配置
