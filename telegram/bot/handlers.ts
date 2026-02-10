@@ -12,10 +12,11 @@ import { CallbackRegistry } from './callback-registry.js';
 import { ClaudeClient } from '../claude/client.js';
 import { MessageQueue } from './message-queue.js';
 import { markdownToHtml } from './message-utils.js';
-import { StreamEvent, AskUserQuestionInput, ExitPlanModeInput, ClaudeExecutionError, ClaudeErrorType, Session, FileChange } from '../types/index.js';
+import { StreamEvent, AskUserQuestionInput, ExitPlanModeInput, ClaudeExecutionError, ClaudeErrorType, Session, FileChange, ImageAttachment } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 import { checkAuth } from './auth.js';
 import { escapeHtml, buildChangesHtml } from './message-utils.js';
+import { downloadAndProcessImage } from '../utils/image-processor.js';
 import type { CommandHandler } from './commands.js';
 
 // 工具名称映射
@@ -122,6 +123,61 @@ export class MessageHandler {
   }
 
   /**
+   * 处理图片消息：下载、压缩、传给 Claude
+   */
+  async handlePhoto(ctx: Context): Promise<void> {
+    if (!ctx.chat) return;
+    const groupId = ctx.chat.id;
+    const msg = ctx.message as any;
+    const topicId = msg?.message_thread_id as number | undefined;
+
+    // 鉴权
+    if (!checkAuth(ctx)) return;
+
+    // General topic 不处理
+    if (!topicId) return;
+
+    // 获取最大尺寸的图片（Telegram photo 数组按尺寸从小到大排列）
+    const photos = msg?.photo;
+    if (!photos?.length) return;
+    const largestPhoto = photos[photos.length - 1];
+
+    // 获取或创建 session
+    const replyMsg = msg?.reply_to_message;
+    const topicCreated = replyMsg?.forum_topic_created;
+    const topicName = topicCreated?.name || `topic-${topicId}`;
+    const session = this.stateManager.getOrCreateSession(groupId, topicId, {
+      name: topicName,
+      cwd: this.stateManager.getGroupDefaultCwd(groupId),
+    });
+
+    // 发送处理中提示
+    const processingMsgId = await this.mq.send(groupId, topicId, '🖼️ 正在处理图片...');
+
+    try {
+      // 获取文件下载链接
+      const file = await ctx.telegram.getFile(largestPhoto.file_id);
+      const fileUrl = `https://api.telegram.org/file/bot${ctx.telegram.token}/${file.file_path}`;
+
+      // 下载并压缩图片
+      const image = await downloadAndProcessImage(fileUrl);
+      logger.info(`[${session.name}] Photo processed: ${image.mediaType}, ${Math.round(image.data.length * 3 / 4 / 1024)}KB`);
+
+      // 删除处理中提示
+      this.mq.delete(groupId, processingMsgId);
+
+      // 使用 caption 作为文本，没有则用默认提示
+      const caption = (msg?.caption as string)?.trim() || '请查看这张图片';
+
+      // 发送到 Claude（带图片）
+      return this.sendChat(ctx, session, caption, undefined, [image]);
+    } catch (error: any) {
+      logger.error(`[${session.name}] Photo processing error:`, error.message);
+      this.mq.edit(groupId, processingMsgId, `❌ 图片处理失败: ${error.message}`);
+    }
+  }
+
+  /**
    * /plan 命令调用：以 plan 模式发送消息
    */
   async handleTextWithMode(ctx: Context, mode: 'plan'): Promise<void> {
@@ -192,9 +248,10 @@ export class MessageHandler {
     ctx: Context,
     session: Session,
     text: string,
-    mode?: 'plan'
+    mode?: 'plan',
+    images?: ImageAttachment[],
   ): Promise<void> {
-    return this.sendChatInternal(ctx.chat!.id, session, text, mode, ctx);
+    return this.sendChatInternal(ctx.chat!.id, session, text, mode, ctx, images);
   }
 
   private async sendChatInternal(
@@ -203,6 +260,7 @@ export class MessageHandler {
     text: string,
     mode?: 'plan',
     ctx?: Context,
+    images?: ImageAttachment[],
   ): Promise<void> {
     const MAX_INTERACTIVE_ROUNDS = 5;
     for (let round = 0; round < MAX_INTERACTIVE_ROUNDS; round++) {
@@ -477,7 +535,10 @@ export class MessageHandler {
         model: effectiveModel,
         groupId: session.groupId,
         topicId: session.topicId,
+        images,
       }, onProgress);
+      // 图片只在第一轮发送，后续交互轮次不重复发送
+      images = undefined;
 
       this.stateManager.setSessionClaudeId(session.groupId, session.topicId, response.sessionId);
       this.stateManager.updateSessionMessage(session.groupId, session.topicId, response.result, 'assistant');

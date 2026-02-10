@@ -52,6 +52,7 @@ export class ClaudeClient {
       model?: string;
       groupId?: number;
       topicId?: number;
+      images?: import('../types/index.js').ImageAttachment[];
     } = {},
     onProgress?: ProgressCallback
   ): Promise<ChatResult> {
@@ -106,6 +107,7 @@ export class ClaudeClient {
       model?: string;
       groupId?: number;
       topicId?: number;
+      images?: import('../types/index.js').ImageAttachment[];
     },
     onProgress?: ProgressCallback
   ): Promise<ChatResult> {
@@ -119,6 +121,7 @@ export class ClaudeClient {
       model: options.model,
       groupId: options.groupId,
       topicId: options.topicId,
+      images: options.images,
     };
 
     logger.debug('Calling Claude with options:', claudeOptions);

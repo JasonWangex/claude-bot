@@ -153,9 +153,20 @@ export class ClaudeExecutor {
       });
 
       // 通过 stdin 写入 stream-json 格式的用户消息
+      // 有图片时使用 content block 数组（Messages API 格式），无图片时保持字符串
+      let content: string | Array<Record<string, unknown>> = prompt;
+      if (options.images?.length) {
+        content = [
+          ...options.images.map(img => ({
+            type: 'image',
+            source: { type: 'base64', media_type: img.mediaType, data: img.data },
+          })),
+          { type: 'text', text: prompt },
+        ];
+      }
       const input = JSON.stringify({
         type: 'user',
-        message: { role: 'user', content: prompt },
+        message: { role: 'user', content },
         session_id: 'default',
         parent_tool_use_id: null,
       });
