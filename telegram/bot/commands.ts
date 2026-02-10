@@ -379,7 +379,7 @@ export class CommandHandler {
       };
 
       try {
-        const lockKey = session.claudeSessionId || session.id;
+        const lockKey = StateManager.topicLockKey(chatId, topicId);
         await this.claudeClient.compact(session.claudeSessionId, session.cwd, lockKey, onProgress);
 
         let info = `✅ 上下文已压缩`;
@@ -463,7 +463,7 @@ export class CommandHandler {
 
   async handleStop(ctx: Context): Promise<void> {
     await this.requireTopic(ctx, async (session) => {
-      const lockKey = session.claudeSessionId || session.id;
+      const lockKey = StateManager.topicLockKey(session.groupId, session.topicId);
       const wasRunning = this.claudeClient.abort(lockKey);
       await ctx.reply(wasRunning
         ? `⏹ 正在停止任务...`

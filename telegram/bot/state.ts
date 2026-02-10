@@ -26,6 +26,14 @@ export class StateManager {
   private saveTimer: NodeJS.Timeout | null = null;
   private savePromise: Promise<void> = Promise.resolve();
 
+  /**
+   * 生成 topic 级别的固定 lockKey，用于 Claude 进程互斥
+   * 固定格式避免因 claudeSessionId 变化导致锁失效
+   */
+  static topicLockKey(groupId: number, topicId: number): string {
+    return `${groupId}:${topicId}`;
+  }
+
   constructor(defaultWorkDir: string) {
     this.defaultWorkDir = defaultWorkDir;
     this.filePath = join(dirname(new URL(import.meta.url).pathname), '../../data/telegram-states.json');

@@ -7,6 +7,7 @@
 
 import type { RouteHandler } from '../types.js';
 import { sendJson, requireAuth } from '../middleware.js';
+import { StateManager } from '../../bot/state.js';
 
 export const clearSession: RouteHandler = async (_req, res, params, deps) => {
   const groupId = requireAuth(res);
@@ -44,7 +45,7 @@ export const compactSession: RouteHandler = async (_req, res, params, deps) => {
   }
 
   try {
-    const lockKey = session.claudeSessionId || session.id;
+    const lockKey = StateManager.topicLockKey(groupId, topicId);
     const result = await deps.claudeClient.compact(session.claudeSessionId, session.cwd, lockKey);
 
     sendJson(res, 200, {
@@ -90,7 +91,7 @@ export const stopSession: RouteHandler = async (_req, res, params, deps) => {
     return;
   }
 
-  const lockKey = session.claudeSessionId || session.id;
+  const lockKey = StateManager.topicLockKey(groupId, topicId);
   const wasRunning = deps.claudeClient.abort(lockKey);
 
   sendJson(res, 200, {

@@ -155,7 +155,7 @@ export class MessageHandler {
     // 1. Compact 上下文
     const compactMsg = await ctx.reply(`🗜️ 正在压缩上下文后执行方案...`);
     try {
-      const lockKey = session.claudeSessionId || session.id;
+      const lockKey = StateManager.topicLockKey(session.groupId, session.topicId);
       await this.claudeClient.compact(session.claudeSessionId, session.cwd, lockKey);
       await ctx.telegram.editMessageText(
         chatId, compactMsg.message_id, undefined,
@@ -192,7 +192,7 @@ export class MessageHandler {
 
     const modeLabel = mode === 'plan' ? ' Plan' : '';
     // 停止按钮
-    const lockKey = session.claudeSessionId || session.id;
+    const lockKey = StateManager.topicLockKey(session.groupId, session.topicId);
     const stopKeyboard = Markup.inlineKeyboard([[
       Markup.button.callback('⏹ 停止', `stop:${lockKey.slice(0, 20)}`)
     ]]);
@@ -562,7 +562,7 @@ export class MessageHandler {
 
     this.stateManager.updateSessionMessage(groupId, topicId, message, 'user');
 
-    const lockKey = session.claudeSessionId || session.id;
+    const lockKey = StateManager.topicLockKey(groupId, topicId);
     try {
       const effectiveModel = session.model ?? this.stateManager.getGroupDefaultModel(groupId);
       const response = await this.claudeClient.chat(message, {
