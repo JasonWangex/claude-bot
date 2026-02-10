@@ -214,6 +214,7 @@ export interface TelegramBotConfig {
   claudeCliPath: string;
   maxTurns: number;
   commandTimeout: number;
+  stallTimeout: number;                      // CLI 进程无输出的最大等待时间（ms），0 = 禁用
   accessToken: string;
   authorizedChatId?: number;
   projectsRoot: string;                    // 项目主目录（所有 Topic 工作目录的父目录）

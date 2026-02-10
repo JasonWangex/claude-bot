@@ -172,6 +172,10 @@ export class MessageQueue {
   async drain(timeoutMs = 30000): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     while ((this.queue.length > 0 || this.processing || this.pendingAsyncOps > 0) && Date.now() < deadline) {
+      // stop() 后 timer 已清除，需要主动驱动消费
+      if (this.queue.length > 0 && !this.processing) {
+        await this.flush();
+      }
       await new Promise(r => setTimeout(r, 50));
     }
   }

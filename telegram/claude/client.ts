@@ -23,9 +23,10 @@ export class ClaudeClient {
   constructor(
     claudeCliPath: string = 'claude',
     commandTimeout: number = 300000,
-    maxTurns: number = 20
+    maxTurns: number = 20,
+    stallTimeout: number = 60000
   ) {
-    this.executor = new ClaudeExecutor(claudeCliPath, commandTimeout);
+    this.executor = new ClaudeExecutor(claudeCliPath, commandTimeout, stallTimeout);
     this.maxTurns = maxTurns;
 
     this.defaultAllowedTools = [

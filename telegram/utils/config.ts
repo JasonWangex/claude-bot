@@ -41,6 +41,7 @@ export function loadTelegramConfig(): TelegramBotConfig {
     claudeCliPath: process.env.CLAUDE_CLI_PATH || 'claude',
     maxTurns: parseInt(process.env.MAX_TURNS || '20', 10),
     commandTimeout: parseInt(process.env.COMMAND_TIMEOUT || '300000', 10),
+    stallTimeout: parseInt(process.env.STALL_TIMEOUT || '60000', 10),
     projectsRoot,
     autoCreateProjectDir,
     topicDirNaming,

@@ -570,6 +570,10 @@ export class MessageHandler {
         return;
       }
 
+      // 非 ABORTED 错误：等待已提交的发送操作完成，防止与 error 消息竞态
+      await sendChain.catch(() => {});
+      await mq.drain(5000);
+
       logger.error(`[${session.name}] error:`, error.message);
 
       let hint = '提示: 使用 /clear 清空会话';
