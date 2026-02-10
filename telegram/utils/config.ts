@@ -26,13 +26,25 @@ export function loadTelegramConfig(): TelegramBotConfig {
     ? parseInt(process.env.AUTHORIZED_CHAT_ID, 10)
     : undefined;
 
+  const defaultWorkDir = process.env.DEFAULT_WORK_DIR || process.env.HOME || '/tmp';
+  const projectsRoot = process.env.PROJECTS_ROOT || defaultWorkDir;
+  const autoCreateProjectDir = process.env.AUTO_CREATE_PROJECT_DIR !== 'false'; // 默认 true
+  const topicDirNaming = (process.env.TOPIC_DIR_NAMING || 'kebab-case') as 'kebab-case' | 'snake_case' | 'original';
+  const worktreesDir = process.env.WORKTREES_DIR || `${projectsRoot}/worktrees`;
+  const apiPort = parseInt(process.env.API_PORT || '3456', 10);
+
   return {
     telegramToken,
     accessToken,
     authorizedChatId,
-    defaultWorkDir: process.env.DEFAULT_WORK_DIR || process.env.HOME || '/tmp',
+    defaultWorkDir,
     claudeCliPath: process.env.CLAUDE_CLI_PATH || 'claude',
     maxTurns: parseInt(process.env.MAX_TURNS || '20', 10),
     commandTimeout: parseInt(process.env.COMMAND_TIMEOUT || '300000', 10),
+    projectsRoot,
+    autoCreateProjectDir,
+    topicDirNaming,
+    worktreesDir,
+    apiPort,
   };
 }

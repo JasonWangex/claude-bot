@@ -16,6 +16,7 @@ import { StreamEvent, FileToolResult, StructuredPatch, AskUserQuestionInput, Exi
 import { logger } from '../utils/logger.js';
 import { checkAuth } from './auth.js';
 import { sendLongMessage, escapeHtml } from './message-utils.js';
+import type { CommandHandler } from './commands.js';
 
 // 工具名称映射
 const TOOL_NAMES: Record<string, string> = {
@@ -43,11 +44,16 @@ export class MessageHandler {
   private stateManager: StateManager;
   private claudeClient: ClaudeClient;
   private callbackRegistry: CallbackRegistry;
+  private commandHandler?: CommandHandler;
 
   constructor(stateManager: StateManager, claudeClient: ClaudeClient, callbackRegistry: CallbackRegistry) {
     this.stateManager = stateManager;
     this.claudeClient = claudeClient;
     this.callbackRegistry = callbackRegistry;
+  }
+
+  setCommandHandler(handler: CommandHandler): void {
+    this.commandHandler = handler;
   }
 
   // Plan mode 确认关键词
@@ -62,11 +68,18 @@ export class MessageHandler {
     if (!text) return;
     if (text.startsWith('/')) return;
 
-    // General topic (无 thread_id) → 不处理普通消息
-    if (!topicId) return;
-
     // 鉴权
     if (!checkAuth(ctx)) return;
+
+    // 检查是否有 pending 的 topics 操作（create/rename/fork）
+    // 注意：General Topic 中的消息也可能带有 message_thread_id，因此不能仅在 !topicId 时检查
+    if (this.commandHandler) {
+      const handled = await this.commandHandler.handleGeneralText(ctx, groupId, text);
+      if (handled) return;
+    }
+
+    // General topic (无 thread_id) → 不进入聊天流程
+    if (!topicId) return;
 
     // 检查是否有等待自定义文本输入的交互
     const pendingCustom = this.callbackRegistry.getPendingCustomText(groupId, topicId);
@@ -76,11 +89,22 @@ export class MessageHandler {
       return;
     }
 
+    // 尝试从消息上下文获取 Topic 名称
+    const replyMsg = (ctx.message as any)?.reply_to_message;
+    const topicCreated = replyMsg?.forum_topic_created;
+    const topicName = topicCreated?.name || `topic-${topicId}`;
+
     // 获取或创建 session
     const session = this.stateManager.getOrCreateSession(groupId, topicId, {
-      name: `topic-${topicId}`,
+      name: topicName,
       cwd: this.stateManager.getGroupDefaultCwd(groupId),
     });
+
+    // 如果之前名称是默认值，且现在拿到了真实名称，同步更新
+    if (topicCreated?.name && session.name !== topicCreated.name && session.name.startsWith('topic-')) {
+      this.stateManager.setSessionName(groupId, topicId, topicCreated.name);
+      session.name = topicCreated.name;
+    }
 
     // Plan mode 确认流程
     if (session.planMode) {
@@ -350,6 +374,8 @@ export class MessageHandler {
         lockKey,
         permissionMode: mode === 'plan' ? 'plan' : undefined,
         model: effectiveModel,
+        groupId: session.groupId,
+        topicId: session.topicId,
       }, onProgress);
 
       this.stateManager.setSessionClaudeId(session.groupId, session.topicId, response.sessionId);
@@ -543,6 +569,8 @@ export class MessageHandler {
         cwd: session.cwd,
         lockKey,
         model: effectiveModel,
+        groupId,
+        topicId,
       });
 
       this.stateManager.setSessionClaudeId(groupId, topicId, response.sessionId);

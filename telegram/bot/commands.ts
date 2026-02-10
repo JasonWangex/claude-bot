@@ -8,14 +8,23 @@ import { StateManager } from './state.js';
 import { MessageHandler } from './handlers.js';
 import { ClaudeClient } from '../claude/client.js';
 import { escapeHtml } from './message-utils.js';
-import { StreamEvent } from '../types/index.js';
-import { stat } from 'fs/promises';
-import { resolve } from 'path';
+import { StreamEvent, TelegramBotConfig } from '../types/index.js';
+import { stat, mkdir, readFile } from 'fs/promises';
+import { resolve, join } from 'path';
+import { homedir } from 'os';
 import { timingSafeEqual } from 'crypto';
 import { updateAuthorizedChatId, getAuthorizedChatId } from '../utils/env.js';
 import { checkAuth } from './auth.js';
 import { logger } from '../utils/logger.js';
 import { CLIStatsReader } from './cli-stats-reader.js';
+import { UsageReader } from './usage-reader.js';
+import {
+  normalizeTopicName,
+  resolveTopicWorkDir,
+  ensureProjectDir,
+  resolveCustomPath
+} from '../utils/topic-path.js';
+import { isGitRepo, getRepoName, createWorktree, mergeBranch, removeWorktree, deleteBranch } from '../utils/git-utils.js';
 
 export const MODEL_OPTIONS = [
   { id: 'claude-sonnet-4-5-20250929', label: 'Sonnet 4.5' },
@@ -23,17 +32,32 @@ export const MODEL_OPTIONS = [
   { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
 ] as const;
 
+// General 话题中等待文本输入的状态
+interface PendingTextInput {
+  type: 'create' | 'rename' | 'fork';
+  chatId: number;
+  messageId: number;  // 提示消息 ID，完成后编辑
+  topicId?: number;   // rename/fork 操作的目标 topicId
+}
+
 export class CommandHandler {
   private stateManager: StateManager;
   private claudeClient: ClaudeClient;
   private messageHandler: MessageHandler;
   private cliStatsReader: CLIStatsReader;
+  private usageReader: UsageReader;
+  private config: TelegramBotConfig;
 
-  constructor(stateManager: StateManager, claudeClient: ClaudeClient, messageHandler: MessageHandler, cliStatsReader: CLIStatsReader) {
+  // General 话题文本收集状态 (groupId → PendingTextInput)
+  private pendingTextInput: Map<number, PendingTextInput> = new Map();
+
+  constructor(stateManager: StateManager, claudeClient: ClaudeClient, messageHandler: MessageHandler, cliStatsReader: CLIStatsReader, config: TelegramBotConfig) {
     this.stateManager = stateManager;
     this.claudeClient = claudeClient;
     this.messageHandler = messageHandler;
     this.cliStatsReader = cliStatsReader;
+    this.usageReader = new UsageReader();
+    this.config = config;
   }
 
   private getAccessToken(): string {
@@ -75,10 +99,22 @@ export class CommandHandler {
         return;
       }
       const groupId = ctx.chat!.id;
+
+      // 尝试从消息上下文获取 Topic 真实名称
+      const replyMsg = (ctx.message as any)?.reply_to_message;
+      const topicCreated = replyMsg?.forum_topic_created;
+      const topicName = topicCreated?.name || `topic-${topicId}`;
+
       const session = this.stateManager.getOrCreateSession(groupId, topicId, {
-        name: `topic-${topicId}`,
+        name: topicName,
         cwd: this.stateManager.getGroupDefaultCwd(groupId),
       });
+
+      // 如果名称是默认值且拿到了真实名称，同步
+      if (topicCreated?.name && session.name !== topicCreated.name && session.name.startsWith('topic-')) {
+        this.stateManager.setSessionName(groupId, topicId, topicCreated.name);
+        session.name = topicCreated.name;
+      }
       await handler(session, topicId);
     });
   }
@@ -145,15 +181,35 @@ export class CommandHandler {
       if (topicId) {
         // Topic 内
         const groupId = ctx.chat!.id;
+
+        // 尝试从消息上下文获取 Topic 真实名称
+        const replyMsg = (ctx.message as any)?.reply_to_message;
+        const topicCreated = replyMsg?.forum_topic_created;
+        const topicName = topicCreated?.name || `topic-${topicId}`;
+
         const session = this.stateManager.getOrCreateSession(groupId, topicId, {
-          name: `topic-${topicId}`,
+          name: topicName,
           cwd: this.stateManager.getGroupDefaultCwd(groupId),
         });
+
+        // 同步名称
+        if (topicCreated?.name && session.name !== topicCreated.name && session.name.startsWith('topic-')) {
+          this.stateManager.setSessionName(groupId, topicId, topicCreated.name);
+          session.name = topicCreated.name;
+        }
         await ctx.reply(
           `👋 Claude Code 已就绪\n\n` +
           `工作目录: ${session.cwd}\n\n` +
-          `直接发送消息即可开始对话。\n` +
-          `可用命令: /cd /clear /compact /rewind /plan /stop /model /info`
+          `直接发送消息即可开始对话。\n\n` +
+          `可用命令:\n` +
+          `• /cd - 切换工作目录\n` +
+          `• /clear - 清空上下文\n` +
+          `• /compact - 压缩上下文\n` +
+          `• /rewind - 撤销上一轮\n` +
+          `• /plan - 规划模式\n` +
+          `• /stop - 停止任务\n` +
+          `• /model - 切换模型\n` +
+          `• /info - 查看详情`
         );
       } else {
         // General topic
@@ -161,13 +217,18 @@ export class CommandHandler {
         const sessionCount = this.stateManager.getAllSessions(ctx.chat!.id).length;
         await ctx.reply(
           `👋 欢迎使用 Claude Code Telegram Bot！\n\n` +
-          `默认工作目录: ${defaultCwd}\n` +
           `活跃 Topic 数: ${sessionCount}\n\n` +
           `使用方法:\n` +
-          `1. 在此 Group 中创建 Topic（每个 Topic = 一个独立会话）\n` +
+          `1. 使用 /topics 管理 Topic（创建/查看/Fork/重命名/归档/删除）\n` +
           `2. 在 Topic 中直接发消息与 Claude 对话\n` +
           `3. 不同 Topic 可以同时工作，互不干扰\n\n` +
-          `General 命令: /login /start /help /status /setcwd`
+          `General 命令:\n` +
+          `• /topics - 管理 Topic（多层级按钮）\n` +
+          `• /newtopic - 快速创建 Topic\n` +
+          `• /status - 查看全局状态\n` +
+          `• /usage - Token 使用统计\n` +
+          `• /model - 切换全局默认模型\n` +
+          `• /help - 查看完整帮助`
         );
       }
     });
@@ -177,27 +238,30 @@ export class CommandHandler {
     await this.requireAuth(ctx, async () => {
       await ctx.reply(
         `🤖 Claude Code Telegram Bot 帮助\n\n` +
-        `<b>General 话题命令</b>\n` +
+        `<b>Topic 管理（General 话题）</b>\n` +
+        `/topics - 管理 Topic（多层级按钮：创建/查看/Fork/重命名/归档/删除）\n` +
+        `/newtopic &lt;名称&gt; [路径] - 快速创建新 Topic\n\n` +
+        `<b>General 命令</b>\n` +
         `/login &lt;token&gt; - 绑定 Bot 到此 Group\n` +
         `/start - 显示欢迎信息\n` +
         `/help - 显示此帮助\n` +
         `/status - 全局状态概览\n` +
-        `/setcwd &lt;path&gt; - 设置新 Topic 默认工作目录\n` +
-        `/usage - 查看 Token 使用统计\n\n` +
+        `/usage - 查看 Token 使用统计\n` +
+        `/model - 切换全局默认模型\n\n` +
         `<b>Topic 内命令</b>\n` +
-        `/cd &lt;path&gt; - 切换工作目录\n` +
+        `/cd [path] - 切换工作目录\n` +
         `/clear - 清空 Claude 上下文\n` +
         `/compact - 压缩上下文\n` +
         `/rewind - 撤销最后一轮对话\n` +
         `/plan &lt;msg&gt; - Plan 模式（只规划不执行）\n` +
         `/stop - 停止当前任务\n` +
-        `/model - 切换 Claude 模型\n` +
-        `/info - 查看会话详情\n\n` +
+        `/model - 切换当前 Topic 模型\n` +
+        `/info - 查看当前 Topic 详情\n\n` +
         `<b>使用方法</b>\n` +
-        `• 每个 Topic = 一个独立的 Claude 会话\n` +
+        `• /topics 统一管理所有 Topic（每个 Topic = 独立会话）\n` +
         `• 在 Topic 中直接发消息即可对话\n` +
-        `• 不同 Topic 可以同时执行任务\n` +
-        `• 创建新 Topic 自动初始化新会话`,
+        `• 不同 Topic 可以同时执行任务，互不干扰\n` +
+        `• 支持 Fork（git worktree）创建分支 Topic`,
         { parse_mode: 'HTML' }
       );
     });
@@ -238,35 +302,6 @@ export class CommandHandler {
     });
   }
 
-  async handleSetCwd(ctx: Context): Promise<void> {
-    await this.requireAuth(ctx, async () => {
-      const groupId = ctx.chat!.id;
-      const text = (ctx.message as any)?.text || '';
-      const args = text.split(/\s+/).slice(1);
-
-      if (args.length === 0) {
-        const currentCwd = this.stateManager.getGroupDefaultCwd(groupId);
-        await ctx.reply(`当前默认工作目录: <code>${escapeHtml(currentCwd)}</code>`, { parse_mode: 'HTML' });
-        return;
-      }
-
-      const input = args[0];
-      const currentCwd = this.stateManager.getGroupDefaultCwd(groupId);
-      const resolvedPath = resolve(currentCwd, input);
-
-      try {
-        const s = await stat(resolvedPath);
-        if (!s.isDirectory()) {
-          await ctx.reply(`❌ 不是目录: ${resolvedPath}`);
-          return;
-        }
-        this.stateManager.setGroupDefaultCwd(groupId, resolvedPath);
-        await ctx.reply(`✅ 默认工作目录已设为: <code>${escapeHtml(resolvedPath)}</code>`, { parse_mode: 'HTML' });
-      } catch {
-        await ctx.reply(`❌ 目录不存在: ${resolvedPath}`);
-      }
-    });
-  }
 
   async handleUsage(ctx: Context): Promise<void> {
     await this.requireAuth(ctx, async () => {
@@ -280,11 +315,11 @@ export class CommandHandler {
       if (args.length > 0) {
         const arg = args[0].toLowerCase();
         if (arg === 'yesterday' || arg === '昨天') {
-          stats = await this.cliStatsReader.getYesterdayStats();
+          stats = await this.usageReader.getYesterdayStats();
           title = '昨日使用统计';
         } else if (/^\d{4}-\d{2}-\d{2}$/.test(arg)) {
           // 指定日期 YYYY-MM-DD
-          stats = await this.cliStatsReader.getDailyStats(arg);
+          stats = await this.usageReader.getDailyStats(arg);
           title = `${arg} 使用统计`;
         } else {
           await ctx.reply(
@@ -296,15 +331,15 @@ export class CommandHandler {
           return;
         }
       } else {
-        stats = await this.cliStatsReader.getTodayStats();
+        stats = await this.usageReader.getTodayStats();
       }
 
       if (!stats) {
-        await ctx.reply('❌ 无法读取统计数据，请确保 Claude CLI 已初始化并产生使用记录。');
+        await ctx.reply('❌ 暂无该日期的使用数据');
         return;
       }
 
-      const report = this.cliStatsReader.formatDailyReport(stats, title);
+      const report = this.usageReader.formatReport(stats, title);
       await ctx.reply(report, { parse_mode: 'HTML' });
     });
   }
@@ -513,5 +548,1558 @@ export class CommandHandler {
     if (!model) return 'Sonnet 4.5 (默认)';
     const found = MODEL_OPTIONS.find(m => m.id === model);
     return found ? found.label : model;
+  }
+
+  // ========== Topic 管理命令 ==========
+
+  /**
+   * /newtopic - 创建新 Topic
+   * 语法: /newtopic <名称> [工作目录]
+   */
+  async handleNewTopic(ctx: Context): Promise<void> {
+    await this.requireAuth(ctx, async () => {
+      const topicId = this.getTopicId(ctx);
+
+      // 必须在 General Topic 中执行
+      if (topicId) {
+        await ctx.reply('❌ 此命令只能在 General 话题中使用。');
+        return;
+      }
+
+      const text = (ctx.message as any)?.text || '';
+      const args = text.split(/\s+/).slice(1);
+
+      if (args.length === 0) {
+        await ctx.reply(
+          '📝 创建新 Topic\n\n' +
+          '用法: /newtopic <名称> [工作目录]\n\n' +
+          '参数:\n' +
+          '  <名称> - Topic 名称（必需）\n' +
+          '  [工作目录] - 可选，自定义工作目录路径\n\n' +
+          '示例:\n' +
+          '  /newtopic claude-bot\n' +
+          '  /newtopic my-project /home/jason/projects/my-project'
+        );
+        return;
+      }
+
+      const topicName = args[0];
+      const customCwd = args.length > 1 ? args.slice(1).join(' ') : undefined;
+      const groupId = ctx.chat!.id;
+
+      try {
+        // 解析工作目录
+        let cwd: string;
+        let dirCreated = false;
+
+        if (customCwd) {
+          // 用户指定了自定义路径
+          cwd = resolveCustomPath(customCwd, this.stateManager.getGroupDefaultCwd(groupId));
+
+          // 检查并创建目录
+          const dirResult = await ensureProjectDir(cwd, this.config.autoCreateProjectDir);
+          dirCreated = dirResult.created;
+
+          if (!dirResult.exists && !this.config.autoCreateProjectDir) {
+            await ctx.reply(
+              `❌ 目录不存在: ${cwd}\n\n` +
+              `请先创建目录，或设置 AUTO_CREATE_PROJECT_DIR=true 以自动创建。`
+            );
+            return;
+          }
+        } else {
+          // 自动推导路径
+          const occupiedPaths = this.stateManager.getOccupiedWorkDirs(groupId);
+          cwd = await resolveTopicWorkDir(
+            topicName,
+            this.config.projectsRoot,
+            this.config.topicDirNaming,
+            occupiedPaths
+          );
+
+          // 检查并创建目录
+          const dirResult = await ensureProjectDir(cwd, this.config.autoCreateProjectDir);
+          dirCreated = dirResult.created;
+
+          if (!dirResult.exists && !this.config.autoCreateProjectDir) {
+            await ctx.reply(
+              `❌ 推导的目录不存在: ${cwd}\n\n` +
+              `请使用 /newtopic ${topicName} <路径> 手动指定目录，\n` +
+              `或设置 AUTO_CREATE_PROJECT_DIR=true 以自动创建。`
+            );
+            return;
+          }
+        }
+
+        // 调用 Telegram API 创建 Forum Topic
+        const forumTopic = await ctx.telegram.createForumTopic(groupId, topicName, {
+          icon_color: 0x6FB9F0,  // 蓝色图标
+        });
+
+        const newTopicId = forumTopic.message_thread_id;
+
+        // 初始化 Session
+        this.stateManager.getOrCreateSession(groupId, newTopicId, {
+          name: topicName,
+          cwd,
+        });
+
+        // 发送确认消息到新 Topic
+        await ctx.telegram.sendMessage(
+          groupId,
+          `✅ Topic 已创建\n\n` +
+          `名称: <code>${escapeHtml(topicName)}</code>\n` +
+          `工作目录: <code>${escapeHtml(cwd)}</code>\n` +
+          `${dirCreated ? '📁 目录已自动创建\n' : ''}\n` +
+          `直接发送消息即可开始对话。`,
+          {
+            message_thread_id: newTopicId,
+            parse_mode: 'HTML',
+          }
+        );
+
+        // 在 General Topic 也回复确认
+        await ctx.reply(
+          `✅ 成功创建 Topic: ${topicName}\n` +
+          `工作目录: ${cwd}\n` +
+          `${dirCreated ? '📁 目录已自动创建\n' : ''}\n` +
+          `现在可以在新 Topic 中开始对话。`
+        );
+
+      } catch (error: any) {
+        logger.error('Failed to create topic:', error);
+        await ctx.reply(
+          `❌ 创建 Topic 失败: ${error.message}\n\n` +
+          `请检查:\n` +
+          `1. Bot 是否有管理 Topic 的权限\n` +
+          `2. 群组是否启用了 Forum Topics 功能\n` +
+          `3. Topic 名称是否符合要求（1-128 字符）`
+        );
+      }
+    });
+  }
+
+  /**
+   * /listtopics - 列出所有 Topic
+   */
+  async handleListTopics(ctx: Context): Promise<void> {
+    await this.requireAuth(ctx, async () => {
+      const groupId = ctx.chat!.id;
+      const sessions = this.stateManager.getAllSessions(groupId);
+
+      if (sessions.length === 0) {
+        await ctx.reply(
+          '📋 当前群组还没有 Topic\n\n' +
+          '使用 /newtopic <名称> 创建新 Topic'
+        );
+        return;
+      }
+
+      // 并发探测每个 Topic 是否还存在（使用 reopenForumTopic，5 秒超时）
+      const deadTopicIds: number[] = [];
+      await Promise.allSettled(
+        sessions.map(async (s) => {
+          try {
+            const alive = await Promise.race([
+              (async () => {
+                try {
+                  await ctx.telegram.reopenForumTopic(groupId, s.topicId);
+                  return true;
+                } catch (err: any) {
+                  const desc = err?.response?.description || '';
+                  if (desc.includes('not found') || desc.includes('TOPIC_DELETED')) {
+                    return false;
+                  }
+                  return true; // TOPIC_NOT_MODIFIED 等 → 存在
+                }
+              })(),
+              new Promise<boolean>((r) => setTimeout(() => r(true), 5000)), // 超时视为存活
+            ]);
+            if (!alive) deadTopicIds.push(s.topicId);
+          } catch {
+            // ignore
+          }
+        })
+      );
+
+      // 清理已删除的 Topic
+      if (deadTopicIds.length > 0) {
+        for (const topicId of deadTopicIds) {
+          this.stateManager.deleteSession(groupId, topicId);
+          logger.info(`Cleaned up dead topic: ${topicId}`);
+        }
+      }
+
+      // 重新获取存活的 sessions
+      const liveSessions = this.stateManager.getAllSessions(groupId);
+
+      if (liveSessions.length === 0) {
+        await ctx.reply(
+          `📋 当前群组还没有 Topic\n` +
+          (deadTopicIds.length > 0 ? `\n🗑️ 已自动清理 ${deadTopicIds.length} 个已删除的 Topic\n` : '') +
+          `\n使用 /newtopic &lt;名称&gt; 创建新 Topic`
+        );
+        return;
+      }
+
+      const now = Date.now();
+      const formatStatus = (lastMessageAt?: number): string => {
+        if (!lastMessageAt) return '⚪ 休眠';
+        const elapsed = now - lastMessageAt;
+        const minutes = Math.floor(elapsed / 60000);
+
+        if (minutes < 10) return '🟢 活跃';
+        if (minutes < 1440) return '🟡 空闲';  // 24小时
+        return '⚪ 休眠';
+      };
+
+      const formatTime = (timestamp: number): string => {
+        const elapsed = now - timestamp;
+        const minutes = Math.floor(elapsed / 60000);
+        const hours = Math.floor(elapsed / 3600000);
+        const days = Math.floor(elapsed / 86400000);
+
+        if (minutes < 1) return '刚刚';
+        if (minutes < 60) return `${minutes} 分钟前`;
+        if (hours < 24) return `${hours} 小时前`;
+        return `${days} 天前`;
+      };
+
+      const lines = liveSessions.map((s, idx) => {
+        const status = formatStatus(s.lastMessageAt);
+        const lastActive = s.lastMessageAt || s.createdAt;
+        const hasSession = s.claudeSessionId ? 'active' : 'none';
+
+        return (
+          `${idx + 1}. ${status} <b>${escapeHtml(s.name)}</b>\n` +
+          `   <code>${escapeHtml(s.cwd)}</code>\n` +
+          `   ${formatTime(lastActive)} · Claude: ${hasSession}`
+        );
+      });
+
+      // 每个 Topic 一行按钮：[详情] [归档] [删除]
+      const buttons = liveSessions.map(s => [
+        Markup.button.callback(`📊 ${s.name.slice(0, 12)}`, `topic:info:${s.topicId}`),
+        Markup.button.callback('🗄️ 归档', `topic:archive:${s.topicId}`),
+        Markup.button.callback('🗑️ 删除', `topic:delete:${s.topicId}`),
+      ]);
+
+      const cleanupNote = deadTopicIds.length > 0
+        ? `\n🗑️ 已自动清理 ${deadTopicIds.length} 个已删除的 Topic\n\n`
+        : '';
+
+      await ctx.reply(
+        `📋 当前群组的 Topic 列表 (共 ${liveSessions.length} 个):\n\n` +
+        lines.join('\n\n') +
+        (cleanupNote ? '\n\n' + cleanupNote : ''),
+        {
+          parse_mode: 'HTML',
+          ...Markup.inlineKeyboard(buttons),
+        }
+      );
+    });
+  }
+
+  /**
+   * /topicinfo - 查看 Topic 详细信息
+   * 语法: /topicinfo [topicId]
+   */
+  async handleTopicInfo(ctx: Context): Promise<void> {
+    await this.requireAuth(ctx, async () => {
+      const groupId = ctx.chat!.id;
+      const text = (ctx.message as any)?.text || '';
+      const args = text.split(/\s+/).slice(1);
+      const currentTopicId = this.getTopicId(ctx);
+
+      let targetTopicId: number;
+
+      if (args.length > 0) {
+        // 提供了 topicId 参数
+        targetTopicId = parseInt(args[0], 10);
+        if (isNaN(targetTopicId)) {
+          await ctx.reply('❌ 无效的 Topic ID');
+          return;
+        }
+      } else if (currentTopicId) {
+        // 在 Topic 中，未提供参数，显示当前 Topic 信息
+        targetTopicId = currentTopicId;
+      } else {
+        // 在 General Topic 中，未提供参数
+        await ctx.reply(
+          '用法: /topicinfo <topicId>\n\n' +
+          '在 Topic 中可省略参数以查看当前 Topic 信息。\n' +
+          '使用 /listtopics 查看所有 Topic ID。'
+        );
+        return;
+      }
+
+      const session = this.stateManager.getSession(groupId, targetTopicId);
+
+      if (!session) {
+        await ctx.reply(`❌ 未找到 Topic ID ${targetTopicId} 的会话信息`);
+        return;
+      }
+
+      const createdDate = new Date(session.createdAt).toLocaleString('zh-CN');
+      const lastMsgDate = session.lastMessageAt
+        ? new Date(session.lastMessageAt).toLocaleString('zh-CN')
+        : '无';
+
+      const recentMessages = session.messageHistory.slice(-3).map(m => {
+        const role = m.role === 'user' ? '用户' : '助手';
+        const preview = escapeHtml(m.text.slice(0, 100));
+        return `  [${role}] ${preview}${m.text.length > 100 ? '...' : ''}`;
+      }).join('\n');
+
+      const topicButtons = [
+        [
+          Markup.button.callback('🗄️ 归档', `topic:archive:${targetTopicId}`),
+          Markup.button.callback('🗑️ 删除', `topic:delete:${targetTopicId}`),
+        ],
+      ];
+
+      await ctx.reply(
+        `📊 Topic 详细信息\n\n` +
+        `名称: <b>${escapeHtml(session.name)}</b>\n` +
+        `Topic 编号: <code>${session.topicId}</code>\n` +
+        `群组编号: <code>${session.groupId}</code>\n\n` +
+        `工作目录: <code>${escapeHtml(session.cwd)}</code>\n` +
+        `Claude 会话: <code>${session.claudeSessionId || '无'}</code>\n` +
+        `模型: ${this.getModelLabel(session.model)}\n` +
+        `Plan Mode: ${session.planMode ? '✅' : '❌'}\n\n` +
+        `创建时间: ${createdDate}\n` +
+        `最后消息: ${lastMsgDate}\n` +
+        `消息历史: ${session.messageHistory.length} 条\n\n` +
+        (recentMessages ? `最近对话:\n${recentMessages}` : ''),
+        {
+          parse_mode: 'HTML',
+          ...Markup.inlineKeyboard(topicButtons),
+        }
+      );
+    });
+  }
+
+  /**
+   * /renametopic - 重命名 Topic
+   * 语法: /renametopic [topicId] <新名称>
+   */
+  async handleRenameTopic(ctx: Context): Promise<void> {
+    await this.requireAuth(ctx, async () => {
+      const groupId = ctx.chat!.id;
+      const text = (ctx.message as any)?.text || '';
+      const args = text.split(/\s+/).slice(1);
+      const currentTopicId = this.getTopicId(ctx);
+
+      let targetTopicId: number;
+      let newName: string;
+
+      if (currentTopicId && args.length === 1) {
+        // 在 Topic 中，提供了新名称
+        targetTopicId = currentTopicId;
+        newName = args[0];
+      } else if (args.length >= 2) {
+        // 提供了 topicId 和新名称
+        targetTopicId = parseInt(args[0], 10);
+        if (isNaN(targetTopicId)) {
+          await ctx.reply('❌ 无效的 Topic ID');
+          return;
+        }
+        newName = args.slice(1).join(' ');
+      } else {
+        await ctx.reply(
+          '用法:\n' +
+          '  在 Topic 中: /renametopic <新名称>\n' +
+          '  在 General 中: /renametopic <topicId> <新名称>'
+        );
+        return;
+      }
+
+      const session = this.stateManager.getSession(groupId, targetTopicId);
+
+      if (!session) {
+        await ctx.reply(`❌ 未找到 Topic ID ${targetTopicId} 的会话信息`);
+        return;
+      }
+
+      // 验证新名称
+      if (newName.length < 1 || newName.length > 128) {
+        await ctx.reply('❌ Topic 名称长度必须在 1-128 字符之间');
+        return;
+      }
+
+      try {
+        // 调用 Telegram API 重命名
+        await ctx.telegram.editForumTopic(groupId, targetTopicId, {
+          name: newName,
+        });
+
+        // 更新本地 Session
+        this.stateManager.setSessionName(groupId, targetTopicId, newName);
+
+        await ctx.reply(
+          `✅ Topic 已重命名\n\n` +
+          `旧名称: ${escapeHtml(session.name)}\n` +
+          `新名称: ${escapeHtml(newName)}\n\n` +
+          `工作目录未改变: ${escapeHtml(session.cwd)}`
+        );
+
+      } catch (error: any) {
+        logger.error('Failed to rename topic:', error);
+        await ctx.reply(`❌ 重命名失败: ${error.message}`);
+      }
+    });
+  }
+
+  /**
+   * /deletetopic - 删除或归档 Topic
+   * 语法: /deletetopic <topicId> [--archive]
+   */
+  async handleDeleteTopic(ctx: Context): Promise<void> {
+    await this.requireAuth(ctx, async () => {
+      const groupId = ctx.chat!.id;
+      const text = (ctx.message as any)?.text || '';
+      const args = text.split(/\s+/).slice(1);
+
+      if (args.length === 0) {
+        await ctx.reply(
+          '用法: /deletetopic &lt;topicId&gt;\n\n' +
+          '或使用 /listtopics 通过按钮操作。',
+          { parse_mode: 'HTML' }
+        );
+        return;
+      }
+
+      const targetTopicId = parseInt(args[0], 10);
+
+      if (isNaN(targetTopicId)) {
+        await ctx.reply('❌ 无效的 Topic ID');
+        return;
+      }
+
+      const session = this.stateManager.getSession(groupId, targetTopicId);
+
+      if (!session) {
+        await ctx.reply(`❌ 未找到该 Topic 的会话信息`);
+        return;
+      }
+
+      // 弹出确认按钮
+      await ctx.reply(
+        `⚠️ 对 Topic <b>${escapeHtml(session.name)}</b> 执行什么操作?\n\n` +
+        `工作目录: <code>${escapeHtml(session.cwd)}</code>`,
+        {
+          parse_mode: 'HTML',
+          ...Markup.inlineKeyboard([
+            [
+              Markup.button.callback('🗄️ 归档（保留数据）', `topic:archive:${targetTopicId}`),
+            ],
+            [
+              Markup.button.callback('🗑️ 彻底删除', `topic:confirmdelete:${targetTopicId}`),
+            ],
+            [
+              Markup.button.callback('取消', `topic:cancel`),
+            ],
+          ]),
+        }
+      );
+    });
+  }
+
+  // ========== Topic 按钮回调处理 ==========
+
+  /**
+   * 处理 topic:info:<topicId> 回调
+   */
+  async handleTopicInfoCallback(ctx: any): Promise<void> {
+    const topicId = parseInt(ctx.match[1], 10);
+    const groupId = ctx.chat!.id;
+
+    const session = this.stateManager.getSession(groupId, topicId);
+    if (!session) {
+      await ctx.answerCbQuery('❌ Topic 不存在');
+      return;
+    }
+
+    const createdDate = new Date(session.createdAt).toLocaleString('zh-CN');
+    const lastMsgDate = session.lastMessageAt
+      ? new Date(session.lastMessageAt).toLocaleString('zh-CN')
+      : '无';
+
+    await ctx.answerCbQuery();
+    await ctx.reply(
+      `📊 <b>${escapeHtml(session.name)}</b>\n\n` +
+      `工作目录: <code>${escapeHtml(session.cwd)}</code>\n` +
+      `Claude 会话: <code>${session.claudeSessionId ? session.claudeSessionId.slice(0, 8) + '...' : '无'}</code>\n` +
+      `模型: ${this.getModelLabel(session.model)}\n` +
+      `创建: ${createdDate}\n` +
+      `最后活动: ${lastMsgDate}\n` +
+      `消息: ${session.messageHistory.length} 条`,
+      {
+        parse_mode: 'HTML',
+        ...Markup.inlineKeyboard([
+          [
+            Markup.button.callback('🗄️ 归档', `topic:archive:${topicId}`),
+            Markup.button.callback('🗑️ 删除', `topic:delete:${topicId}`),
+          ],
+        ]),
+      }
+    );
+  }
+
+  /**
+   * 处理 topic:delete:<topicId> 回调 — 弹出确认
+   */
+  async handleTopicDeleteCallback(ctx: any): Promise<void> {
+    const topicId = parseInt(ctx.match[1], 10);
+    const groupId = ctx.chat!.id;
+
+    const session = this.stateManager.getSession(groupId, topicId);
+    if (!session) {
+      await ctx.answerCbQuery('❌ Topic 不存在');
+      return;
+    }
+
+    await ctx.answerCbQuery();
+    await ctx.editMessageText(
+      `⚠️ 确认删除 <b>${escapeHtml(session.name)}</b>?\n\n` +
+      `工作目录: <code>${escapeHtml(session.cwd)}</code>\n` +
+      `此操作不可恢复！`,
+      {
+        parse_mode: 'HTML',
+        ...Markup.inlineKeyboard([
+          [
+            Markup.button.callback('✅ 确认删除', `topic:confirmdelete:${topicId}`),
+            Markup.button.callback('❌ 取消', `topic:cancel`),
+          ],
+        ]),
+      }
+    );
+  }
+
+  /**
+   * 处理 topic:confirmdelete:<topicId> 回调 — 执行删除
+   */
+  async handleTopicConfirmDeleteCallback(ctx: any): Promise<void> {
+    const topicId = parseInt(ctx.match[1], 10);
+    const groupId = ctx.chat!.id;
+
+    const session = this.stateManager.getSession(groupId, topicId);
+    if (!session) {
+      await ctx.answerCbQuery('❌ Topic 不存在');
+      return;
+    }
+
+    const name = session.name;
+
+    try {
+      this.stateManager.deleteSession(groupId, topicId);
+      await ctx.telegram.deleteForumTopic(groupId, topicId).catch(() => {});
+      await ctx.answerCbQuery('✅ 已删除');
+      await ctx.editMessageText(`🗑️ Topic <b>${escapeHtml(name)}</b> 已彻底删除`, { parse_mode: 'HTML' });
+    } catch (error: any) {
+      logger.error('Failed to delete topic:', error);
+      await ctx.answerCbQuery(`❌ 删除失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * 处理 topic:archive:<topicId> 回调 — 执行归档
+   */
+  async handleTopicArchiveCallback(ctx: any): Promise<void> {
+    const topicId = parseInt(ctx.match[1], 10);
+    const groupId = ctx.chat!.id;
+
+    const session = this.stateManager.getSession(groupId, topicId);
+    if (!session) {
+      await ctx.answerCbQuery('❌ Topic 不存在');
+      return;
+    }
+
+    const name = session.name;
+
+    try {
+      const userId = ctx.from?.id;
+      this.stateManager.archiveSession(groupId, topicId, userId, '按钮归档');
+      await ctx.telegram.closeForumTopic(groupId, topicId).catch(() => {});
+      await ctx.answerCbQuery('🗄️ 已归档');
+      await ctx.editMessageText(`🗄️ Topic <b>${escapeHtml(name)}</b> 已归档\n数据已保留，可恢复。`, { parse_mode: 'HTML' });
+    } catch (error: any) {
+      logger.error('Failed to archive topic:', error);
+      await ctx.answerCbQuery(`❌ 归档失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * 处理 topic:cancel 回调
+   */
+  async handleTopicCancelCallback(ctx: any): Promise<void> {
+    await ctx.answerCbQuery('已取消');
+    await ctx.editMessageText('已取消操作。');
+  }
+
+  // ========== /topics 多层级按钮管理 ==========
+
+  private formatStatus(lastMessageAt?: number): string {
+    if (!lastMessageAt) return '⚪';
+    const elapsed = Date.now() - lastMessageAt;
+    const minutes = Math.floor(elapsed / 60000);
+    if (minutes < 10) return '🟢';
+    if (minutes < 1440) return '🟡';
+    return '⚪';
+  }
+
+  private formatTime(timestamp: number): string {
+    const elapsed = Date.now() - timestamp;
+    const minutes = Math.floor(elapsed / 60000);
+    const hours = Math.floor(elapsed / 3600000);
+    const days = Math.floor(elapsed / 86400000);
+    if (minutes < 1) return '刚刚';
+    if (minutes < 60) return `${minutes} 分钟前`;
+    if (hours < 24) return `${hours} 小时前`;
+    return `${days} 天前`;
+  }
+
+  /**
+   * /topics — 多层级 Topic 管理入口（一级列表）
+   */
+  async handleTopics(ctx: Context): Promise<void> {
+    await this.requireAuth(ctx, async () => {
+      const groupId = ctx.chat!.id;
+      await this.sendTopicListMessage(ctx, groupId);
+    });
+  }
+
+  /**
+   * 发送/编辑一级列表消息
+   */
+  private async sendTopicListMessage(ctx: Context, groupId: number, editMessageId?: number): Promise<void> {
+    const sessions = this.stateManager.getAllSessions(groupId);
+
+    // 并发探测死 Topic
+    const deadTopicIds: number[] = [];
+    await Promise.allSettled(
+      sessions.map(async (s) => {
+        try {
+          const alive = await Promise.race([
+            (async () => {
+              try {
+                await ctx.telegram.reopenForumTopic(groupId, s.topicId);
+                return true;
+              } catch (err: any) {
+                const desc = err?.response?.description || '';
+                if (desc.includes('not found') || desc.includes('TOPIC_DELETED')) {
+                  return false;
+                }
+                return true;
+              }
+            })(),
+            new Promise<boolean>((r) => setTimeout(() => r(true), 5000)),
+          ]);
+          if (!alive) deadTopicIds.push(s.topicId);
+        } catch { /* ignore */ }
+      })
+    );
+
+    if (deadTopicIds.length > 0) {
+      for (const topicId of deadTopicIds) {
+        this.stateManager.deleteSession(groupId, topicId);
+        logger.info(`Cleaned up dead topic: ${topicId}`);
+      }
+    }
+
+    const liveSessions = this.stateManager.getAllSessions(groupId);
+
+    // 分离父子关系：顶层 topic + 子 topic
+    // 父已不存在的子 topic 视为顶层（孤儿提升）
+    const liveTopicIds = new Set(liveSessions.map(s => s.topicId));
+    const topLevel = liveSessions.filter(s => !s.parentTopicId || !liveTopicIds.has(s.parentTopicId));
+    const childMap = new Map<number, typeof liveSessions>();
+    for (const s of liveSessions) {
+      if (s.parentTopicId && liveTopicIds.has(s.parentTopicId)) {
+        const arr = childMap.get(s.parentTopicId) || [];
+        arr.push(s);
+        childMap.set(s.parentTopicId, arr);
+      }
+    }
+
+    if (liveSessions.length === 0) {
+      const text = '📋 当前群组还没有 Topic' +
+        (deadTopicIds.length > 0 ? `\n\n🗑️ 已自动清理 ${deadTopicIds.length} 个已删除的 Topic` : '');
+      const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('➕ 创建新 Topic', 'topics:create')],
+      ]);
+      if (editMessageId) {
+        await ctx.telegram.editMessageText(groupId, editMessageId, undefined, text, { ...keyboard });
+      } else {
+        await ctx.reply(text, keyboard);
+      }
+      return;
+    }
+
+    // 构建列表文本
+    const lines: string[] = [];
+    let idx = 0;
+    for (const s of topLevel) {
+      idx++;
+      const status = this.formatStatus(s.lastMessageAt);
+      const lastActive = s.lastMessageAt || s.createdAt;
+      lines.push(
+        `${idx}. ${status} <b>${escapeHtml(s.name)}</b>\n` +
+        `   <code>${escapeHtml(s.cwd)}</code>\n` +
+        `   ${this.formatTime(lastActive)}`
+      );
+      // 子 topic
+      const children = childMap.get(s.topicId) || [];
+      for (let ci = 0; ci < children.length; ci++) {
+        const c = children[ci];
+        const cStatus = this.formatStatus(c.lastMessageAt);
+        const cActive = c.lastMessageAt || c.createdAt;
+        const prefix = ci === children.length - 1 ? '└──' : '├──';
+        lines.push(
+          `   ${prefix} ${cStatus} <b>${escapeHtml(c.name)}</b>\n` +
+          `       <code>${escapeHtml(c.cwd)}</code>\n` +
+          `       ${this.formatTime(cActive)}`
+        );
+      }
+    }
+
+    const cleanupNote = deadTopicIds.length > 0
+      ? `\n\n🗑️ 已自动清理 ${deadTopicIds.length} 个已删除的 Topic`
+      : '';
+
+    const text = `📋 Topic 列表 (共 ${liveSessions.length} 个)\n\n` +
+      lines.join('\n\n') + cleanupNote;
+
+    // 构建按钮：每个 topic 一个按钮（包括子 topic）
+    const buttons: any[][] = [];
+    // 每行 2-3 个按钮
+    let row: any[] = [];
+    for (const s of topLevel) {
+      row.push(Markup.button.callback(
+        `${this.formatStatus(s.lastMessageAt)} ${s.name.slice(0, 16)}`,
+        `topics:select:${s.topicId}`
+      ));
+      if (row.length >= 3) { buttons.push(row); row = []; }
+
+      // 子 topic 按钮
+      for (const c of (childMap.get(s.topicId) || [])) {
+        row.push(Markup.button.callback(
+          `  ↳ ${c.name.slice(0, 14)}`,
+          `topics:select:${c.topicId}`
+        ));
+        if (row.length >= 3) { buttons.push(row); row = []; }
+      }
+    }
+    if (row.length > 0) buttons.push(row);
+
+    // 底部操作行
+    buttons.push([
+      Markup.button.callback('➕ 创建新 Topic', 'topics:create'),
+      Markup.button.callback('🔄 刷新', 'topics:refresh'),
+    ]);
+
+    const keyboard = Markup.inlineKeyboard(buttons);
+
+    if (editMessageId) {
+      await ctx.telegram.editMessageText(groupId, editMessageId, undefined, text, {
+        parse_mode: 'HTML',
+        ...keyboard,
+      });
+    } else {
+      await ctx.reply(text, { parse_mode: 'HTML', ...keyboard });
+    }
+  }
+
+  /**
+   * topics:select:<topicId> — 二级详情/操作菜单
+   */
+  async handleTopicsSelectCallback(ctx: any): Promise<void> {
+    const topicId = parseInt(ctx.match[1], 10);
+    const groupId = ctx.chat!.id;
+
+    const session = this.stateManager.getSession(groupId, topicId);
+    if (!session) {
+      await ctx.answerCbQuery('❌ Topic 不存在');
+      return;
+    }
+
+    await ctx.answerCbQuery();
+
+    const createdDate = new Date(session.createdAt).toLocaleString('zh-CN');
+    const lastMsgDate = session.lastMessageAt
+      ? new Date(session.lastMessageAt).toLocaleString('zh-CN')
+      : '无';
+    const modelLabel = this.getModelLabel(session.model);
+
+    let parentInfo = '';
+    if (session.parentTopicId) {
+      const parent = this.stateManager.getSession(groupId, session.parentTopicId);
+      parentInfo = `\n父 Topic: <b>${escapeHtml(parent?.name || String(session.parentTopicId))}</b>`;
+    }
+    let branchInfo = '';
+    if (session.worktreeBranch) {
+      branchInfo = `\n分支: <code>${escapeHtml(session.worktreeBranch)}</code>`;
+    }
+
+    // 子 topic 列表
+    const children = this.stateManager.getChildSessions(groupId, topicId);
+    let childInfo = '';
+    if (children.length > 0) {
+      childInfo = `\n\n子 Topic (${children.length}):\n` +
+        children.map(c => `  • ${escapeHtml(c.name)}`).join('\n');
+    }
+
+    const text =
+      `📊 <b>${escapeHtml(session.name)}</b>\n\n` +
+      `工作目录: <code>${escapeHtml(session.cwd)}</code>\n` +
+      `Claude 会话: <code>${session.claudeSessionId ? session.claudeSessionId.slice(0, 8) + '...' : '无'}</code>\n` +
+      `模型: ${modelLabel}\n` +
+      `创建: ${createdDate}\n` +
+      `最后活动: ${lastMsgDate}\n` +
+      `消息: ${session.messageHistory.length} 条` +
+      parentInfo + branchInfo + childInfo;
+
+    const buttons: any[][] = [
+      [
+        Markup.button.callback('✏️ 重命名', `topics:rename:${topicId}`),
+        Markup.button.callback('🔀 Fork', `topics:fork:${topicId}`),
+      ],
+    ];
+
+    // 子 topic 显示 Merge 按钮
+    if (session.parentTopicId && session.worktreeBranch) {
+      buttons.push([
+        Markup.button.callback('🔀 Merge', `topics:merge:${topicId}`),
+      ]);
+    }
+
+    buttons.push(
+      [
+        Markup.button.callback('🗄️ 归档', `topics:archive:${topicId}`),
+        Markup.button.callback('🗑️ 删除', `topics:delete:${topicId}`),
+      ],
+      [
+        Markup.button.callback('⬅️ 返回列表', 'topics:back'),
+      ],
+    );
+
+    await ctx.editMessageText(text, {
+      parse_mode: 'HTML',
+      ...Markup.inlineKeyboard(buttons),
+    });
+  }
+
+  /**
+   * topics:back — 返回一级列表
+   */
+  async handleTopicsBackCallback(ctx: any): Promise<void> {
+    const groupId = ctx.chat!.id;
+    const messageId = ctx.callbackQuery?.message?.message_id;
+    await ctx.answerCbQuery();
+    await this.sendTopicListMessage(ctx, groupId, messageId);
+  }
+
+  /**
+   * topics:refresh — 刷新列表
+   */
+  async handleTopicsRefreshCallback(ctx: any): Promise<void> {
+    const groupId = ctx.chat!.id;
+    const messageId = ctx.callbackQuery?.message?.message_id;
+    await ctx.answerCbQuery('🔄 刷新中...');
+    await this.sendTopicListMessage(ctx, groupId, messageId);
+  }
+
+  /**
+   * topics:create — 启动创建流程（文本收集模式）
+   */
+  async handleTopicsCreateCallback(ctx: any): Promise<void> {
+    const groupId = ctx.chat!.id;
+    await ctx.answerCbQuery();
+
+    const text = '📝 请输入项目名称\n\n下一条消息将作为 Topic 名称:';
+    const keyboard = Markup.inlineKeyboard([
+      [Markup.button.callback('⬅️ 取消', 'topics:cancel')],
+    ]);
+    await ctx.editMessageText(text, keyboard);
+
+    const messageId = ctx.callbackQuery?.message?.message_id;
+    this.pendingTextInput.set(groupId, {
+      type: 'create',
+      chatId: groupId,
+      messageId,
+    });
+  }
+
+  /**
+   * topics:rename:<topicId> — 启动重命名流程
+   */
+  async handleTopicsRenameCallback(ctx: any): Promise<void> {
+    const topicId = parseInt(ctx.match[1], 10);
+    const groupId = ctx.chat!.id;
+
+    const session = this.stateManager.getSession(groupId, topicId);
+    if (!session) {
+      await ctx.answerCbQuery('❌ Topic 不存在');
+      return;
+    }
+
+    await ctx.answerCbQuery();
+
+    const text =
+      `✏️ 重命名 <b>${escapeHtml(session.name)}</b>\n\n` +
+      `请输入新名称（下一条消息）:`;
+    const keyboard = Markup.inlineKeyboard([
+      [Markup.button.callback('⬅️ 取消', `topics:backto:${topicId}`)],
+    ]);
+    await ctx.editMessageText(text, { parse_mode: 'HTML', ...keyboard });
+
+    const messageId = ctx.callbackQuery?.message?.message_id;
+    this.pendingTextInput.set(groupId, {
+      type: 'rename',
+      chatId: groupId,
+      messageId,
+      topicId,
+    });
+  }
+
+  /**
+   * topics:fork:<topicId> — 启动 Fork 流程
+   */
+  async handleTopicsForkCallback(ctx: any): Promise<void> {
+    const topicId = parseInt(ctx.match[1], 10);
+    const groupId = ctx.chat!.id;
+
+    const session = this.stateManager.getSession(groupId, topicId);
+    if (!session) {
+      await ctx.answerCbQuery('❌ Topic 不存在');
+      return;
+    }
+
+    // 检查是否为 git 仓库
+    const gitRepo = await isGitRepo(session.cwd);
+    if (!gitRepo) {
+      await ctx.answerCbQuery('❌ 不是 Git 仓库');
+      await ctx.editMessageText(
+        `❌ Fork 失败\n\n` +
+        `<code>${escapeHtml(session.cwd)}</code> 不是 Git 仓库。\n` +
+        `Fork 功能需要目标目录为 Git 仓库。`,
+        {
+          parse_mode: 'HTML',
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback('⬅️ 返回', `topics:backto:${topicId}`)],
+          ]),
+        }
+      );
+      return;
+    }
+
+    await ctx.answerCbQuery();
+
+    const text =
+      `🔀 Fork <b>${escapeHtml(session.name)}</b>\n\n` +
+      `工作目录: <code>${escapeHtml(session.cwd)}</code>\n\n` +
+      `请输入新分支名称（下一条消息）:`;
+    const keyboard = Markup.inlineKeyboard([
+      [Markup.button.callback('⬅️ 取消', `topics:backto:${topicId}`)],
+    ]);
+    await ctx.editMessageText(text, { parse_mode: 'HTML', ...keyboard });
+
+    const messageId = ctx.callbackQuery?.message?.message_id;
+    this.pendingTextInput.set(groupId, {
+      type: 'fork',
+      chatId: groupId,
+      messageId,
+      topicId,
+    });
+  }
+
+  /**
+   * topics:merge:<topicId> — Merge 确认视图
+   */
+  async handleTopicsMergeCallback(ctx: any): Promise<void> {
+    const topicId = parseInt(ctx.match[1], 10);
+    const groupId = ctx.chat!.id;
+
+    const session = this.stateManager.getSession(groupId, topicId);
+    if (!session) {
+      await ctx.answerCbQuery('❌ Topic 不存在');
+      return;
+    }
+
+    if (!session.parentTopicId || !session.worktreeBranch) {
+      await ctx.answerCbQuery('❌ 不是子 Topic');
+      return;
+    }
+
+    const parent = this.stateManager.getSession(groupId, session.parentTopicId);
+    if (!parent) {
+      await ctx.answerCbQuery('❌ 父 Topic 不存在');
+      return;
+    }
+
+    await ctx.answerCbQuery();
+
+    const text =
+      `🔀 <b>合并分支</b>\n\n` +
+      `当前 Topic: <b>${escapeHtml(session.name)}</b>\n` +
+      `分支: <code>${escapeHtml(session.worktreeBranch)}</code>\n` +
+      `工作目录: <code>${escapeHtml(session.cwd)}</code>\n\n` +
+      `⬇️ 合并到\n\n` +
+      `目标 Topic: <b>${escapeHtml(parent.name)}</b>\n` +
+      `目标目录: <code>${escapeHtml(parent.cwd)}</code>\n\n` +
+      `<b>操作流程:</b>\n` +
+      `1. 将分支 <code>${escapeHtml(session.worktreeBranch)}</code> 合并到父分支\n` +
+      `2. 删除 worktree 和分支\n` +
+      `3. 删除此 Topic\n\n` +
+      `⚠️ 如有未提交的修改或合并冲突，操作将失败。`;
+
+    await ctx.editMessageText(text, {
+      parse_mode: 'HTML',
+      ...Markup.inlineKeyboard([
+        [
+          Markup.button.callback('✅ 确认 Merge', `topics:confirmmerge:${topicId}`),
+          Markup.button.callback('❌ 取消', `topics:backto:${topicId}`),
+        ],
+      ]),
+    });
+  }
+
+  /**
+   * topics:confirmmerge:<topicId> — 执行 Merge
+   */
+  async handleTopicsConfirmMergeCallback(ctx: any): Promise<void> {
+    const topicId = parseInt(ctx.match[1], 10);
+    const groupId = ctx.chat!.id;
+
+    const session = this.stateManager.getSession(groupId, topicId);
+    if (!session) {
+      await ctx.answerCbQuery('❌ Topic 不存在');
+      return;
+    }
+
+    if (!session.parentTopicId || !session.worktreeBranch) {
+      await ctx.answerCbQuery('❌ 不是子 Topic');
+      return;
+    }
+
+    const parent = this.stateManager.getSession(groupId, session.parentTopicId);
+    if (!parent) {
+      await ctx.answerCbQuery('❌ 父 Topic 不存在');
+      return;
+    }
+
+    const name = session.name;
+    const branchName = session.worktreeBranch;
+    const worktreeDir = session.cwd;
+
+    try {
+      await ctx.answerCbQuery('🔄 正在合并...');
+      await ctx.editMessageText(
+        `🔀 正在合并分支 <code>${escapeHtml(branchName)}</code>...`,
+        { parse_mode: 'HTML' },
+      );
+
+      // 1. 在父仓库中合并分支
+      await mergeBranch(parent.cwd, branchName);
+
+      // 2. 删除 worktree
+      await removeWorktree(parent.cwd, worktreeDir);
+
+      // 3. 删除分支
+      await deleteBranch(parent.cwd, branchName);
+
+      // 4. 删除 Session + Telegram Topic
+      this.stateManager.deleteSession(groupId, topicId);
+      await ctx.telegram.deleteForumTopic(groupId, topicId).catch(() => {});
+
+      await ctx.editMessageText(
+        `✅ <b>Merge 成功</b>\n\n` +
+        `已将 <code>${escapeHtml(branchName)}</code> 合并到 <b>${escapeHtml(parent.name)}</b>\n` +
+        `Topic <b>${escapeHtml(name)}</b> 已删除`,
+        {
+          parse_mode: 'HTML',
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback('⬅️ 返回列表', 'topics:back')],
+          ]),
+        },
+      );
+    } catch (error: any) {
+      logger.error('Failed to merge topic:', error);
+
+      let errorMsg = error.message || String(error);
+      if (errorMsg.includes('CONFLICT') || errorMsg.includes('conflict')) {
+        errorMsg = '合并冲突，请手动解决后再试';
+      } else if (errorMsg.includes('uncommitted') || errorMsg.includes('modified')) {
+        errorMsg = '存在未提交的修改，请先提交或清理';
+      }
+
+      await ctx.editMessageText(
+        `❌ <b>Merge 失败</b>\n\n` +
+        `错误: ${escapeHtml(errorMsg)}\n\n` +
+        `Topic <b>${escapeHtml(name)}</b> 未被删除`,
+        {
+          parse_mode: 'HTML',
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback('⬅️ 返回', `topics:backto:${topicId}`)],
+          ]),
+        },
+      );
+    }
+  }
+
+  /**
+   * topics:delete:<topicId> — 删除确认视图
+   */
+  async handleTopicsDeleteCallback(ctx: any): Promise<void> {
+    const topicId = parseInt(ctx.match[1], 10);
+    const groupId = ctx.chat!.id;
+
+    const session = this.stateManager.getSession(groupId, topicId);
+    if (!session) {
+      await ctx.answerCbQuery('❌ Topic 不存在');
+      return;
+    }
+
+    const children = this.stateManager.getChildSessions(groupId, topicId);
+
+    await ctx.answerCbQuery();
+
+    if (children.length > 0) {
+      // 有子 Topic，提供选择
+      const childNames = children.map(c => `  • ${escapeHtml(c.name)}`).join('\n');
+      const buttons = [
+        [Markup.button.callback('🗑️ 全部删除（含子 Topic）', `topics:confirmdeleteall:${topicId}`)],
+        [Markup.button.callback('❌ 取消', `topics:backto:${topicId}`)],
+      ];
+      await ctx.editMessageText(
+        `⚠️ <b>${escapeHtml(session.name)}</b> 有 ${children.length} 个子 Topic:\n\n` +
+        `${childNames}\n\n` +
+        `无法单独删除父 Topic，请选择操作:`,
+        {
+          parse_mode: 'HTML',
+          ...Markup.inlineKeyboard(buttons),
+        }
+      );
+    } else {
+      await ctx.editMessageText(
+        `⚠️ 确认删除 <b>${escapeHtml(session.name)}</b>?\n\n` +
+        `工作目录: <code>${escapeHtml(session.cwd)}</code>\n` +
+        `此操作不可恢复！`,
+        {
+          parse_mode: 'HTML',
+          ...Markup.inlineKeyboard([
+            [
+              Markup.button.callback('✅ 确认删除', `topics:confirmdelete:${topicId}`),
+              Markup.button.callback('❌ 取消', `topics:backto:${topicId}`),
+            ],
+          ]),
+        }
+      );
+    }
+  }
+
+  /**
+   * topics:confirmdelete:<topicId> — 执行单个删除
+   */
+  async handleTopicsConfirmDeleteCallback(ctx: any): Promise<void> {
+    const topicId = parseInt(ctx.match[1], 10);
+    const groupId = ctx.chat!.id;
+
+    const session = this.stateManager.getSession(groupId, topicId);
+    if (!session) {
+      await ctx.answerCbQuery('❌ Topic 不存在');
+      return;
+    }
+
+    const name = session.name;
+
+    try {
+      this.stateManager.deleteSession(groupId, topicId);
+      await ctx.telegram.deleteForumTopic(groupId, topicId).catch(() => {});
+      await ctx.answerCbQuery('✅ 已删除');
+      await ctx.editMessageText(
+        `🗑️ Topic <b>${escapeHtml(name)}</b> 已彻底删除`,
+        {
+          parse_mode: 'HTML',
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback('⬅️ 返回列表', 'topics:back')],
+          ]),
+        }
+      );
+    } catch (error: any) {
+      logger.error('Failed to delete topic:', error);
+      await ctx.answerCbQuery(`❌ 删除失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * topics:confirmdeleteall:<topicId> — 级联删除父 + 所有子 Topic
+   */
+  async handleTopicsConfirmDeleteAllCallback(ctx: any): Promise<void> {
+    const topicId = parseInt(ctx.match[1], 10);
+    const groupId = ctx.chat!.id;
+
+    const session = this.stateManager.getSession(groupId, topicId);
+    if (!session) {
+      await ctx.answerCbQuery('❌ Topic 不存在');
+      return;
+    }
+
+    const name = session.name;
+    const children = this.stateManager.getChildSessions(groupId, topicId);
+
+    try {
+      // 先删除所有子 Topic
+      for (const child of children) {
+        this.stateManager.deleteSession(groupId, child.topicId);
+        await ctx.telegram.deleteForumTopic(groupId, child.topicId).catch(() => {});
+      }
+      // 再删除父 Topic
+      this.stateManager.deleteSession(groupId, topicId);
+      await ctx.telegram.deleteForumTopic(groupId, topicId).catch(() => {});
+
+      await ctx.answerCbQuery('✅ 已全部删除');
+      await ctx.editMessageText(
+        `🗑️ Topic <b>${escapeHtml(name)}</b> 及 ${children.length} 个子 Topic 已彻底删除`,
+        {
+          parse_mode: 'HTML',
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback('⬅️ 返回列表', 'topics:back')],
+          ]),
+        }
+      );
+    } catch (error: any) {
+      logger.error('Failed to delete topics:', error);
+      await ctx.answerCbQuery(`❌ 删除失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * topics:archive:<topicId> — 执行归档
+   */
+  async handleTopicsArchiveCallback(ctx: any): Promise<void> {
+    const topicId = parseInt(ctx.match[1], 10);
+    const groupId = ctx.chat!.id;
+
+    const session = this.stateManager.getSession(groupId, topicId);
+    if (!session) {
+      await ctx.answerCbQuery('❌ Topic 不存在');
+      return;
+    }
+
+    const children = this.stateManager.getChildSessions(groupId, topicId);
+    const name = session.name;
+
+    try {
+      const userId = ctx.from?.id;
+
+      // 如果有子 Topic，一并归档
+      if (children.length > 0) {
+        for (const child of children) {
+          this.stateManager.archiveSession(groupId, child.topicId, userId, '随父 Topic 归档');
+          await ctx.telegram.closeForumTopic(groupId, child.topicId).catch(() => {});
+        }
+      }
+
+      this.stateManager.archiveSession(groupId, topicId, userId, '按钮归档');
+      await ctx.telegram.closeForumTopic(groupId, topicId).catch(() => {});
+      await ctx.answerCbQuery('🗄️ 已归档');
+
+      const childNote = children.length > 0 ? `\n（含 ${children.length} 个子 Topic）` : '';
+      await ctx.editMessageText(
+        `🗄️ Topic <b>${escapeHtml(name)}</b> 已归档${childNote}\n数据已保留，可恢复。`,
+        {
+          parse_mode: 'HTML',
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback('⬅️ 返回列表', 'topics:back')],
+          ]),
+        }
+      );
+    } catch (error: any) {
+      logger.error('Failed to archive topic:', error);
+      await ctx.answerCbQuery(`❌ 归档失败: ${error.message}`);
+    }
+  }
+
+  /**
+   * topics:backto:<topicId> — 返回某 topic 的二级菜单
+   */
+  async handleTopicsBackToCallback(ctx: any): Promise<void> {
+    // 复用 select 逻辑
+    await this.handleTopicsSelectCallback(ctx);
+  }
+
+  /**
+   * topics:cancel — 取消操作并返回列表
+   */
+  async handleTopicsCancelCallback(ctx: any): Promise<void> {
+    const groupId = ctx.chat!.id;
+    // 清除 pending 文本收集
+    this.pendingTextInput.delete(groupId);
+    await ctx.answerCbQuery('已取消');
+    const messageId = ctx.callbackQuery?.message?.message_id;
+    await this.sendTopicListMessage(ctx, groupId, messageId);
+  }
+
+  /**
+   * 处理 General 话题中的文本输入（创建/重命名/fork）
+   * 由 handlers.ts 调用
+   * @returns true 表示已处理，false 表示没有 pending 操作
+   */
+  async handleGeneralText(ctx: Context, groupId: number, text: string): Promise<boolean> {
+    const pending = this.pendingTextInput.get(groupId);
+    if (!pending) return false;
+
+    // 清除 pending 状态
+    this.pendingTextInput.delete(groupId);
+
+    if (pending.type === 'create') {
+      await this.executeTopicCreate(ctx, groupId, text, pending.messageId);
+    } else if (pending.type === 'rename') {
+      await this.executeTopicRename(ctx, groupId, pending.topicId!, text, pending.messageId);
+    } else if (pending.type === 'fork') {
+      await this.executeTopicFork(ctx, groupId, pending.topicId!, text, pending.messageId);
+    }
+
+    return true;
+  }
+
+  /**
+   * 执行 Topic 创建
+   */
+  private async executeTopicCreate(ctx: Context, groupId: number, topicName: string, promptMessageId: number): Promise<void> {
+    topicName = topicName.trim();
+    if (!topicName || topicName.length > 128) {
+      await ctx.telegram.editMessageText(groupId, promptMessageId, undefined,
+        '❌ 名称无效（1-128 字符）');
+      return;
+    }
+
+    try {
+      // 自动推导路径
+      const occupiedPaths = this.stateManager.getOccupiedWorkDirs(groupId);
+      const cwd = await resolveTopicWorkDir(
+        topicName,
+        this.config.projectsRoot,
+        this.config.topicDirNaming,
+        occupiedPaths
+      );
+
+      const dirResult = await ensureProjectDir(cwd, this.config.autoCreateProjectDir);
+
+      if (!dirResult.exists && !this.config.autoCreateProjectDir) {
+        await ctx.telegram.editMessageText(groupId, promptMessageId, undefined,
+          `❌ 推导的目录不存在: ${cwd}\n设置 AUTO_CREATE_PROJECT_DIR=true 以自动创建。`);
+        return;
+      }
+
+      // 创建 Forum Topic
+      const forumTopic = await ctx.telegram.createForumTopic(groupId, topicName, {
+        icon_color: 0x6FB9F0,
+      });
+
+      const newTopicId = forumTopic.message_thread_id;
+
+      this.stateManager.getOrCreateSession(groupId, newTopicId, {
+        name: topicName,
+        cwd,
+      });
+
+      // 在新 Topic 中发送欢迎
+      await ctx.telegram.sendMessage(
+        groupId,
+        `✅ Topic 已创建\n\n` +
+        `名称: <code>${escapeHtml(topicName)}</code>\n` +
+        `工作目录: <code>${escapeHtml(cwd)}</code>\n` +
+        `${dirResult.created ? '📁 目录已自动创建\n' : ''}\n` +
+        `直接发送消息即可开始对话。`,
+        { message_thread_id: newTopicId, parse_mode: 'HTML' }
+      );
+
+      // 编辑提示消息为确认
+      await ctx.telegram.editMessageText(groupId, promptMessageId, undefined,
+        `✅ 成功创建 Topic: <b>${escapeHtml(topicName)}</b>\n工作目录: <code>${escapeHtml(cwd)}</code>`,
+        {
+          parse_mode: 'HTML',
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback('⬅️ 返回列表', 'topics:back')],
+          ]),
+        }
+      );
+    } catch (error: any) {
+      logger.error('Failed to create topic:', error);
+      await ctx.telegram.editMessageText(groupId, promptMessageId, undefined,
+        `❌ 创建失败: ${error.message}`).catch(() => {});
+    }
+  }
+
+  /**
+   * 执行 Topic 重命名
+   */
+  private async executeTopicRename(ctx: Context, groupId: number, topicId: number, newName: string, promptMessageId: number): Promise<void> {
+    newName = newName.trim();
+    if (!newName || newName.length > 128) {
+      await ctx.telegram.editMessageText(groupId, promptMessageId, undefined,
+        '❌ 名称无效（1-128 字符）');
+      return;
+    }
+
+    const session = this.stateManager.getSession(groupId, topicId);
+    if (!session) {
+      await ctx.telegram.editMessageText(groupId, promptMessageId, undefined,
+        '❌ Topic 不存在');
+      return;
+    }
+
+    try {
+      await ctx.telegram.editForumTopic(groupId, topicId, { name: newName });
+      const oldName = session.name;
+      this.stateManager.setSessionName(groupId, topicId, newName);
+
+      await ctx.telegram.editMessageText(groupId, promptMessageId, undefined,
+        `✅ 已重命名: ${escapeHtml(oldName)} → <b>${escapeHtml(newName)}</b>`,
+        {
+          parse_mode: 'HTML',
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback('⬅️ 返回列表', 'topics:back')],
+          ]),
+        }
+      );
+    } catch (error: any) {
+      logger.error('Failed to rename topic:', error);
+      await ctx.telegram.editMessageText(groupId, promptMessageId, undefined,
+        `❌ 重命名失败: ${error.message}`).catch(() => {});
+    }
+  }
+
+  /**
+   * 执行 Topic Fork（git worktree）
+   */
+  private async executeTopicFork(ctx: Context, groupId: number, topicId: number, branchName: string, promptMessageId: number): Promise<void> {
+    branchName = branchName.trim();
+    if (!branchName || /\s/.test(branchName) || branchName.startsWith('-') || !/^[\w.\-/]+$/.test(branchName)) {
+      await ctx.telegram.editMessageText(groupId, promptMessageId, undefined,
+        '❌ 分支名无效（仅允许字母、数字、下划线、点、横杠、斜杠，且不能以 - 开头）');
+      return;
+    }
+
+    const session = this.stateManager.getSession(groupId, topicId);
+    if (!session) {
+      await ctx.telegram.editMessageText(groupId, promptMessageId, undefined,
+        '❌ Topic 不存在');
+      return;
+    }
+
+    try {
+      // 更新提示消息
+      await ctx.telegram.editMessageText(groupId, promptMessageId, undefined,
+        `🔀 正在创建 worktree...`).catch(() => {});
+
+      // 获取仓库名
+      const repoName = await getRepoName(session.cwd);
+
+      // 创建 worktree 目录
+      const worktreeDir = resolve(this.config.worktreesDir, `${repoName}_${branchName}`);
+      await mkdir(this.config.worktreesDir, { recursive: true });
+
+      // 创建 worktree
+      await createWorktree(session.cwd, worktreeDir, branchName);
+
+      // 创建新 Forum Topic
+      const newTopicName = `${session.name}/${branchName}`;
+      const forumTopic = await ctx.telegram.createForumTopic(groupId, newTopicName, {
+        icon_color: 0x6FB9F0, // 蓝色
+      });
+
+      const newTopicId = forumTopic.message_thread_id;
+
+      // 创建 Session 并设置父子关系
+      this.stateManager.getOrCreateSession(groupId, newTopicId, {
+        name: newTopicName,
+        cwd: worktreeDir,
+      });
+      this.stateManager.setSessionForkInfo(groupId, newTopicId, topicId, branchName);
+
+      // 在新 Topic 中发送欢迎
+      await ctx.telegram.sendMessage(
+        groupId,
+        `✅ Fork 已创建\n\n` +
+        `名称: <code>${escapeHtml(newTopicName)}</code>\n` +
+        `分支: <code>${escapeHtml(branchName)}</code>\n` +
+        `工作目录: <code>${escapeHtml(worktreeDir)}</code>\n` +
+        `父 Topic: <b>${escapeHtml(session.name)}</b>\n\n` +
+        `直接发送消息即可开始对话。`,
+        { message_thread_id: newTopicId, parse_mode: 'HTML' }
+      );
+
+      // 编辑提示消息
+      await ctx.telegram.editMessageText(groupId, promptMessageId, undefined,
+        `✅ Fork 成功: <b>${escapeHtml(newTopicName)}</b>\n` +
+        `分支: <code>${escapeHtml(branchName)}</code>\n` +
+        `工作目录: <code>${escapeHtml(worktreeDir)}</code>`,
+        {
+          parse_mode: 'HTML',
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback('⬅️ 返回列表', 'topics:back')],
+          ]),
+        }
+      );
+    } catch (error: any) {
+      logger.error('Failed to fork topic:', error);
+      await ctx.telegram.editMessageText(groupId, promptMessageId, undefined,
+        `❌ Fork 失败: ${error.message}`).catch(() => {});
+    }
+  }
+
+  /**
+   * /qdev - 快速创建开发分支和任务（临时 Claude 进程）
+   */
+  async handleQdev(ctx: Context): Promise<void> {
+    await this.requireTopic(ctx, async (session, topicId) => {
+      const text = (ctx.message as any)?.text || '';
+      const description = text.replace(/^\/qdev\s*/, '').trim();
+
+      if (!description) {
+        await ctx.reply('用法: /qdev <任务描述>\n\n例如: /qdev 修复统计负数');
+        return;
+      }
+
+      const chatId = ctx.chat!.id;
+
+      const skillPath = join(homedir(), '.claude/skills/qdev/SKILL.md');
+      let skillContent: string;
+      try {
+        skillContent = await readFile(skillPath, 'utf-8');
+      } catch {
+        await ctx.reply('❌ 未找到 qdev skill 文件: ~/.claude/skills/qdev/SKILL.md');
+        return;
+      }
+
+      // 提取 frontmatter 之后的内容
+      const bodyMatch = skillContent.match(/^---[\s\S]*?---\s*([\s\S]*)$/);
+      const prompt = (bodyMatch ? bodyMatch[1] : skillContent)
+        .replace('{{SKILL_ARGS}}', description);
+
+      const tempLockKey = `qdev-${Date.now()}`;
+
+      await ctx.reply(`🚀 正在后台执行 qdev: ${description}`);
+
+      // Fire-and-forget: 不 await，避免 Telegraf 90s 超时
+      this.claudeClient.chat(prompt, {
+        cwd: session.cwd,
+        lockKey: tempLockKey,
+        groupId: chatId,
+        topicId,
+      }).then(async (response) => {
+        await ctx.telegram.sendMessage(chatId, `✅ qdev 完成:\n${response.result.slice(0, 4000)}`, {
+          message_thread_id: topicId,
+        });
+      }).catch(async (error: any) => {
+        logger.error('qdev error:', error.message);
+        await ctx.telegram.sendMessage(chatId, `❌ qdev 失败: ${error.message}`, {
+          message_thread_id: topicId,
+        }).catch(() => {});
+      });
+    });
   }
 }

@@ -21,6 +21,8 @@ export interface Session {
     text: string;
     timestamp: number;
   }>;
+  parentTopicId?: number;     // 父 Topic ID（fork 产生的子 topic）
+  worktreeBranch?: string;    // worktree 分支名（fork 创建的）
 }
 
 // Group 状态
@@ -141,6 +143,32 @@ export interface ExitPlanModeInput {
   }>;
 }
 
+// 进程注册表条目（用于 Bot 重启后重连）
+export interface ProcessRegistryEntry {
+  pid: number;
+  outputFile: string;     // JSONL 输出文件路径
+  stderrFile: string;     // stderr 输出文件路径
+  groupId: number;
+  topicId: number;
+  lockKey: string;
+  claudeSessionId?: string;
+  cwd?: string;
+  startTime: number;
+}
+
+// 重连结果
+export interface ReconnectedResult {
+  groupId: number;
+  topicId: number;
+  lockKey: string;
+  claudeSessionId?: string;
+  status: 'completed' | 'running' | 'failed';
+  result?: string;
+  usage?: { input_tokens: number; output_tokens: number };
+  duration_ms?: number;
+  total_cost_usd?: number;
+}
+
 // Claude Code 调用选项
 export interface ClaudeOptions {
   cwd?: string;
@@ -151,6 +179,8 @@ export interface ClaudeOptions {
   permissionMode?: string;
   forkSession?: boolean;
   model?: string;
+  groupId?: number;
+  topicId?: number;
 }
 
 // Telegram Bot 配置
@@ -162,4 +192,16 @@ export interface TelegramBotConfig {
   commandTimeout: number;
   accessToken: string;
   authorizedChatId?: number;
+  projectsRoot: string;                    // 项目主目录（所有 Topic 工作目录的父目录）
+  autoCreateProjectDir: boolean;           // 是否自动创建不存在的项目目录
+  topicDirNaming: 'kebab-case' | 'snake_case' | 'original';  // Topic 工作目录命名策略
+  worktreesDir: string;                    // worktree 存放目录
+  apiPort: number;                          // 本地 HTTP API 端口（0 = 禁用）
+}
+
+// Topic 归档会话
+export interface ArchivedSession extends Session {
+  archivedAt: number;        // 归档时间戳
+  archivedBy?: number;       // 归档操作者 user ID
+  archiveReason?: string;    // 归档原因
 }

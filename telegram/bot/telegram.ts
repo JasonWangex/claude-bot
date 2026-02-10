@@ -12,9 +12,12 @@ import { MessageHandler } from './handlers.js';
 import { ClaudeClient } from '../claude/client.js';
 import { TelegramBotConfig } from '../types/index.js';
 import { checkAuth } from './auth.js';
+import { sendLongMessageDirect } from './message-utils.js';
 import { logger } from '../utils/logger.js';
 import { CLIStatsReader } from './cli-stats-reader.js';
 import { getAuthorizedChatId } from '../utils/env.js';
+import { ApiServer } from '../api/server.js';
+import { UsageReader } from './usage-reader.js';
 
 export class TelegramBot {
   private bot: Telegraf;
@@ -24,9 +27,12 @@ export class TelegramBot {
   private messageHandler: MessageHandler;
   private claudeClient: ClaudeClient;
   private cliStatsReader: CLIStatsReader;
+  private apiServer: ApiServer | null = null;
   private dailyReportTimer: NodeJS.Timeout | null = null;
+  private config: TelegramBotConfig;
 
   constructor(config: TelegramBotConfig) {
+    this.config = config;
     // 尝试多种代理配置
     const proxyUrl = process.env.https_proxy || process.env.http_proxy;
     const botOptions: any = {};
@@ -58,7 +64,20 @@ export class TelegramBot {
       config.maxTurns
     );
     this.messageHandler = new MessageHandler(this.stateManager, this.claudeClient, this.callbackRegistry);
-    this.commandHandler = new CommandHandler(this.stateManager, this.claudeClient, this.messageHandler, this.cliStatsReader);
+    this.commandHandler = new CommandHandler(this.stateManager, this.claudeClient, this.messageHandler, this.cliStatsReader, this.config);
+    this.messageHandler.setCommandHandler(this.commandHandler);
+
+    // API 服务器（直接调用服务层，不走 Telegraf 管道）
+    if (config.apiPort > 0) {
+      this.apiServer = new ApiServer({
+        stateManager: this.stateManager,
+        claudeClient: this.claudeClient,
+        messageHandler: this.messageHandler,
+        usageReader: new UsageReader(),
+        telegram: this.bot.telegram,
+        config,
+      });
+    }
 
     // 注册处理器
     this.registerHandlers();
@@ -76,8 +95,15 @@ export class TelegramBot {
     this.bot.command('start', (ctx) => this.commandHandler.handleStart(ctx));
     this.bot.command('help', (ctx) => this.commandHandler.handleHelp(ctx));
     this.bot.command('status', (ctx) => this.commandHandler.handleStatus(ctx));
-    this.bot.command('setcwd', (ctx) => this.commandHandler.handleSetCwd(ctx));
     this.bot.command('usage', (ctx) => this.commandHandler.handleUsage(ctx));
+
+    // Topic 管理命令
+    this.bot.command('topics', (ctx) => this.commandHandler.handleTopics(ctx));
+    this.bot.command('newtopic', (ctx) => this.commandHandler.handleNewTopic(ctx));
+    this.bot.command('listtopics', (ctx) => this.commandHandler.handleTopics(ctx));  // 兼容别名
+    this.bot.command('topicinfo', (ctx) => this.commandHandler.handleTopicInfo(ctx));
+    this.bot.command('renametopic', (ctx) => this.commandHandler.handleRenameTopic(ctx));
+    this.bot.command('deletetopic', (ctx) => this.commandHandler.handleDeleteTopic(ctx));
 
     // Topic 内命令
     this.bot.command('cd', (ctx) => this.commandHandler.handleCd(ctx));
@@ -87,7 +113,7 @@ export class TelegramBot {
     this.bot.command('plan', (ctx) => this.commandHandler.handlePlan(ctx));
     this.bot.command('stop', (ctx) => this.commandHandler.handleStop(ctx));
     this.bot.command('info', (ctx) => this.commandHandler.handleInfo(ctx));
-
+    this.bot.command('qdev', (ctx) => this.commandHandler.handleQdev(ctx));
     // General + Topic 通用命令
     this.bot.command('model', (ctx) => this.commandHandler.handleModel(ctx));
 
@@ -185,6 +211,86 @@ export class TelegramBot {
       ctx.editMessageText(`✅ 全局默认模型已切换为: ${label}`).catch(() => {});
     });
 
+    // Topic 管理回调
+    this.bot.action(/^topic:info:(\d+)$/, (ctx) => {
+      if (!ctx.chat || !checkAuth(ctx)) { ctx.answerCbQuery('❌ 未授权').catch(() => {}); return; }
+      this.commandHandler.handleTopicInfoCallback(ctx).catch(e => logger.error('topic:info error:', e));
+    });
+    this.bot.action(/^topic:delete:(\d+)$/, (ctx) => {
+      if (!ctx.chat || !checkAuth(ctx)) { ctx.answerCbQuery('❌ 未授权').catch(() => {}); return; }
+      this.commandHandler.handleTopicDeleteCallback(ctx).catch(e => logger.error('topic:delete error:', e));
+    });
+    this.bot.action(/^topic:confirmdelete:(\d+)$/, (ctx) => {
+      if (!ctx.chat || !checkAuth(ctx)) { ctx.answerCbQuery('❌ 未授权').catch(() => {}); return; }
+      this.commandHandler.handleTopicConfirmDeleteCallback(ctx).catch(e => logger.error('topic:confirmdelete error:', e));
+    });
+    this.bot.action(/^topic:archive:(\d+)$/, (ctx) => {
+      if (!ctx.chat || !checkAuth(ctx)) { ctx.answerCbQuery('❌ 未授权').catch(() => {}); return; }
+      this.commandHandler.handleTopicArchiveCallback(ctx).catch(e => logger.error('topic:archive error:', e));
+    });
+    this.bot.action(/^topic:cancel$/, (ctx) => {
+      if (!ctx.chat || !checkAuth(ctx)) { ctx.answerCbQuery('❌ 未授权').catch(() => {}); return; }
+      this.commandHandler.handleTopicCancelCallback(ctx).catch(e => logger.error('topic:cancel error:', e));
+    });
+
+    // /topics 多层级按钮回调
+    this.bot.action(/^topics:select:(\d+)$/, (ctx) => {
+      if (!ctx.chat || !checkAuth(ctx)) { ctx.answerCbQuery('❌ 未授权').catch(() => {}); return; }
+      this.commandHandler.handleTopicsSelectCallback(ctx).catch(e => logger.error('topics:select error:', e));
+    });
+    this.bot.action(/^topics:back$/, (ctx) => {
+      if (!ctx.chat || !checkAuth(ctx)) { ctx.answerCbQuery('❌ 未授权').catch(() => {}); return; }
+      this.commandHandler.handleTopicsBackCallback(ctx).catch(e => logger.error('topics:back error:', e));
+    });
+    this.bot.action(/^topics:refresh$/, (ctx) => {
+      if (!ctx.chat || !checkAuth(ctx)) { ctx.answerCbQuery('❌ 未授权').catch(() => {}); return; }
+      this.commandHandler.handleTopicsRefreshCallback(ctx).catch(e => logger.error('topics:refresh error:', e));
+    });
+    this.bot.action(/^topics:create$/, (ctx) => {
+      if (!ctx.chat || !checkAuth(ctx)) { ctx.answerCbQuery('❌ 未授权').catch(() => {}); return; }
+      this.commandHandler.handleTopicsCreateCallback(ctx).catch(e => logger.error('topics:create error:', e));
+    });
+    this.bot.action(/^topics:rename:(\d+)$/, (ctx) => {
+      if (!ctx.chat || !checkAuth(ctx)) { ctx.answerCbQuery('❌ 未授权').catch(() => {}); return; }
+      this.commandHandler.handleTopicsRenameCallback(ctx).catch(e => logger.error('topics:rename error:', e));
+    });
+    this.bot.action(/^topics:fork:(\d+)$/, (ctx) => {
+      if (!ctx.chat || !checkAuth(ctx)) { ctx.answerCbQuery('❌ 未授权').catch(() => {}); return; }
+      this.commandHandler.handleTopicsForkCallback(ctx).catch(e => logger.error('topics:fork error:', e));
+    });
+    this.bot.action(/^topics:merge:(\d+)$/, (ctx) => {
+      if (!ctx.chat || !checkAuth(ctx)) { ctx.answerCbQuery('❌ 未授权').catch(() => {}); return; }
+      this.commandHandler.handleTopicsMergeCallback(ctx).catch(e => logger.error('topics:merge error:', e));
+    });
+    this.bot.action(/^topics:confirmmerge:(\d+)$/, (ctx) => {
+      if (!ctx.chat || !checkAuth(ctx)) { ctx.answerCbQuery('❌ 未授权').catch(() => {}); return; }
+      this.commandHandler.handleTopicsConfirmMergeCallback(ctx).catch(e => logger.error('topics:confirmmerge error:', e));
+    });
+    this.bot.action(/^topics:delete:(\d+)$/, (ctx) => {
+      if (!ctx.chat || !checkAuth(ctx)) { ctx.answerCbQuery('❌ 未授权').catch(() => {}); return; }
+      this.commandHandler.handleTopicsDeleteCallback(ctx).catch(e => logger.error('topics:delete error:', e));
+    });
+    this.bot.action(/^topics:confirmdelete:(\d+)$/, (ctx) => {
+      if (!ctx.chat || !checkAuth(ctx)) { ctx.answerCbQuery('❌ 未授权').catch(() => {}); return; }
+      this.commandHandler.handleTopicsConfirmDeleteCallback(ctx).catch(e => logger.error('topics:confirmdelete error:', e));
+    });
+    this.bot.action(/^topics:confirmdeleteall:(\d+)$/, (ctx) => {
+      if (!ctx.chat || !checkAuth(ctx)) { ctx.answerCbQuery('❌ 未授权').catch(() => {}); return; }
+      this.commandHandler.handleTopicsConfirmDeleteAllCallback(ctx).catch(e => logger.error('topics:confirmdeleteall error:', e));
+    });
+    this.bot.action(/^topics:archive:(\d+)$/, (ctx) => {
+      if (!ctx.chat || !checkAuth(ctx)) { ctx.answerCbQuery('❌ 未授权').catch(() => {}); return; }
+      this.commandHandler.handleTopicsArchiveCallback(ctx).catch(e => logger.error('topics:archive error:', e));
+    });
+    this.bot.action(/^topics:backto:(\d+)$/, (ctx) => {
+      if (!ctx.chat || !checkAuth(ctx)) { ctx.answerCbQuery('❌ 未授权').catch(() => {}); return; }
+      this.commandHandler.handleTopicsBackToCallback(ctx).catch(e => logger.error('topics:backto error:', e));
+    });
+    this.bot.action(/^topics:cancel$/, (ctx) => {
+      if (!ctx.chat || !checkAuth(ctx)) { ctx.answerCbQuery('❌ 未授权').catch(() => {}); return; }
+      this.commandHandler.handleTopicsCancelCallback(ctx).catch(e => logger.error('topics:cancel error:', e));
+    });
+
     // 停止按钮回调: stop:<lockKey-prefix>
     this.bot.action(/^stop:(.+)$/, (ctx) => {
       if (!ctx.chat) return;
@@ -196,6 +302,33 @@ export class TelegramBot {
       const lockKeyPrefix = ctx.match[1];
       const wasRunning = this.claudeClient.abort(lockKeyPrefix);
       ctx.answerCbQuery(wasRunning ? '⏹ 正在停止...' : 'ℹ️ 没有运行中的任务').catch(() => {});
+    });
+
+    // 监听 Forum Topic 事件：自动同步名称
+    this.bot.on('forum_topic_created' as any, (ctx: any) => {
+      if (!ctx.chat) return;
+      const topicId = ctx.message?.message_thread_id;
+      const topicData = ctx.message?.forum_topic_created;
+      if (topicId && topicData?.name) {
+        const session = this.stateManager.getSession(ctx.chat.id, topicId);
+        if (session && session.name !== topicData.name) {
+          this.stateManager.setSessionName(ctx.chat.id, topicId, topicData.name);
+          logger.info(`Topic name synced: ${session.name} → ${topicData.name}`);
+        }
+      }
+    });
+
+    this.bot.on('forum_topic_edited' as any, (ctx: any) => {
+      if (!ctx.chat) return;
+      const topicId = ctx.message?.message_thread_id;
+      const topicData = ctx.message?.forum_topic_edited;
+      if (topicId && topicData?.name) {
+        const session = this.stateManager.getSession(ctx.chat.id, topicId);
+        if (session && session.name !== topicData.name) {
+          this.stateManager.setSessionName(ctx.chat.id, topicId, topicData.name);
+          logger.info(`Topic name synced: ${session.name} → ${topicData.name}`);
+        }
+      }
     });
 
     // fire-and-forget: 长时间 Claude 任务不阻塞 Telegraf 中间件链
@@ -229,8 +362,16 @@ export class TelegramBot {
     // 从磁盘恢复会话状态
     await this.stateManager.load();
 
+    // 重连上次部署时正在运行的 Claude 进程
+    await this.reconnectOrphanedProcesses();
+
     // 启动每日报告定时任务
     this.scheduleDailyReport();
+
+    // 启动本地 API 服务器
+    if (this.apiServer) {
+      await this.apiServer.start();
+    }
 
     logger.info('Starting long polling...');
     await this.bot.launch({ dropPendingUpdates: true });
@@ -292,12 +433,54 @@ export class TelegramBot {
     }
   }
 
+  private async reconnectOrphanedProcesses(): Promise<void> {
+    await this.claudeClient.reconnectAll(async (info) => {
+      const authorizedChatId = getAuthorizedChatId();
+      if (!authorizedChatId) return;
+
+      try {
+        if (info.status === 'completed' && info.result) {
+          // 更新 session 状态
+          if (info.claudeSessionId) {
+            this.stateManager.setSessionClaudeId(info.groupId, info.topicId, info.claudeSessionId);
+          }
+          // 发送结果到对应 topic
+          await sendLongMessageDirect(this.bot.telegram, authorizedChatId, info.topicId, info.result);
+
+          // 发送完成标记
+          const parts: string[] = ['重连恢复'];
+          if (info.duration_ms) parts.push(`${(info.duration_ms / 1000).toFixed(1)}s`);
+          if (info.usage) {
+            const total = info.usage.input_tokens + info.usage.output_tokens;
+            parts.push(`${Math.round(total / 1000)}K tokens`);
+          }
+          await this.bot.telegram.sendMessage(authorizedChatId, `✅ 完成 (${parts.join(', ')})`, {
+            message_thread_id: info.topicId,
+          });
+        } else if (info.status === 'failed') {
+          await this.bot.telegram.sendMessage(authorizedChatId, '⚠️ Bot 重启期间任务未能完成', {
+            message_thread_id: info.topicId,
+          });
+        }
+        // 'running' 状态由 monitorOrphanedProcess 继续处理
+      } catch (err: any) {
+        logger.error('Failed to send reconnected result:', err.message);
+      }
+    });
+  }
+
   private async stop(signal: string): Promise<void> {
     logger.info(`Received ${signal}, stopping bot...`);
     if (this.dailyReportTimer) {
       clearTimeout(this.dailyReportTimer);
       this.dailyReportTimer = null;
     }
+    // 关闭 API 服务器
+    if (this.apiServer) {
+      await this.apiServer.stop();
+    }
+    // 先 detach 所有正在运行的 Claude CLI 子进程，让它们继续独立运行
+    this.claudeClient.detachAll();
     await this.stateManager.flush();
     this.bot.stop(signal);
   }

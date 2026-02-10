@@ -3,7 +3,7 @@
  */
 
 import { ClaudeExecutor } from './executor.js';
-import { ClaudeOptions, ProgressCallback, ClaudeErrorType, ClaudeExecutionError } from '../types/index.js';
+import { ClaudeOptions, ProgressCallback, ClaudeErrorType, ClaudeExecutionError, ReconnectedResult } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 
 interface ChatResult {
@@ -48,6 +48,8 @@ export class ClaudeClient {
       lockKey?: string;
       permissionMode?: string;
       model?: string;
+      groupId?: number;
+      topicId?: number;
     } = {},
     onProgress?: ProgressCallback
   ): Promise<ChatResult> {
@@ -100,6 +102,8 @@ export class ClaudeClient {
       lockKey?: string;
       permissionMode?: string;
       model?: string;
+      groupId?: number;
+      topicId?: number;
     },
     onProgress?: ProgressCallback
   ): Promise<ChatResult> {
@@ -111,6 +115,8 @@ export class ClaudeClient {
       lockKey: options.lockKey,
       permissionMode: options.permissionMode,
       model: options.model,
+      groupId: options.groupId,
+      topicId: options.topicId,
     };
 
     logger.debug('Calling Claude with options:', claudeOptions);
@@ -148,6 +154,14 @@ export class ClaudeClient {
 
   isRunning(lockKey: string): boolean {
     return this.executor.isRunning(lockKey);
+  }
+
+  detachAll(): void {
+    this.executor.detachAll();
+  }
+
+  async reconnectAll(onResult: (info: ReconnectedResult) => Promise<void>): Promise<void> {
+    return this.executor.reconnectAll(onResult);
   }
 
   async verify(): Promise<boolean> {

@@ -4,7 +4,10 @@
 
 import { spawn, ChildProcess, execFile } from 'child_process';
 import { promisify } from 'util';
-import { ClaudeResponse, ClaudeOptions, StreamEvent, ProgressCallback, ClaudeErrorType, ClaudeExecutionError } from '../types/index.js';
+import { openSync, closeSync, readSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, statSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
+import { ClaudeResponse, ClaudeOptions, StreamEvent, ProgressCallback, ClaudeErrorType, ClaudeExecutionError, ProcessRegistryEntry, ReconnectedResult } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 
 const execFileAsync = promisify(execFile);
@@ -19,6 +22,21 @@ interface ActiveProcess {
   flags: { killed: boolean; aborted: boolean };
   timeoutHandle: NodeJS.Timeout | null;
   killTimer: NodeJS.Timeout | null;
+  outputFile?: string;
+  stderrFile?: string;
+  groupId?: number;
+  topicId?: number;
+  claudeSessionId?: string;
+  cwd?: string;
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export class ClaudeExecutor {
@@ -26,10 +44,16 @@ export class ClaudeExecutor {
   private commandTimeout: number;
   private locks: Map<string, LockEntry> = new Map();
   private activeProcesses: Map<string, ActiveProcess> = new Map();
+  private processDir: string;
+  private registryFile: string;
 
   constructor(claudeCliPath: string = 'claude', commandTimeout: number = 300000) {
     this.claudeCliPath = claudeCliPath;
     this.commandTimeout = commandTimeout;
+    const thisDir = dirname(fileURLToPath(import.meta.url));
+    this.processDir = join(thisDir, '../../data/processes');
+    this.registryFile = join(thisDir, '../../data/active-processes.json');
+    mkdirSync(this.processDir, { recursive: true });
   }
 
   private getLock(key: string): LockEntry {
@@ -101,15 +125,30 @@ export class ClaudeExecutor {
         args: args.map(a => a.length > 50 ? `${a.slice(0, 50)}...` : a),
       });
 
+      const outputFile = join(this.processDir, `${Date.now()}-${lockKey.replace(/[^a-zA-Z0-9_-]/g, '_')}.jsonl`);
+      const stderrFile = outputFile.replace('.jsonl', '.stderr');
+      const outputFd = openSync(outputFile, 'w');
+      const stderrFd = openSync(stderrFile, 'w');
+
       const child = spawn(this.claudeCliPath, args, {
         cwd: options.cwd,
-        stdio: ['pipe', 'pipe', 'pipe'],
+        stdio: ['pipe', outputFd, stderrFd],
+        detached: true,
       });
 
-      logger.debug(`Process spawned: PID=${child.pid}`);
+      // 父进程关闭自己的 fd 副本（子进程仍持有自己的副本）
+      closeSync(outputFd);
+      closeSync(stderrFd);
+
+      logger.debug(`Process spawned: PID=${child.pid}, outputFile=${outputFile}`);
 
       const flags = { killed: false, aborted: false };
-      this.activeProcesses.set(lockKey, { child, flags, timeoutHandle: null, killTimer: null });
+      this.activeProcesses.set(lockKey, {
+        child, flags, timeoutHandle: null, killTimer: null,
+        outputFile, stderrFile,
+        groupId: options.groupId, topicId: options.topicId,
+        cwd: options.cwd,
+      });
 
       // 通过 stdin 写入 stream-json 格式的用户消息
       const input = JSON.stringify({
@@ -124,7 +163,7 @@ export class ClaudeExecutor {
       child.stdin.write(input + '\n', 'utf8', () => child.stdin!.end());
       child.stdin.on('error', () => {}); // 进程提前退出时忽略 pipe 错误
 
-      return await this.processStream(child, lockKey, flags, onProgress);
+      return await this.tailOutputFile(outputFile, stderrFile, child, lockKey, flags, onProgress);
     } catch (error: any) {
       if (error instanceof ClaudeExecutionError) throw error;
       logger.error('Claude CLI execution failed:', error.message);
@@ -155,13 +194,22 @@ export class ClaudeExecutor {
 
       logger.debug('Spawning Claude CLI (compact):', { sessionId });
 
+      const outputFile = join(this.processDir, `${Date.now()}-compact-${key.replace(/[^a-zA-Z0-9_-]/g, '_')}.jsonl`);
+      const stderrFile = outputFile.replace('.jsonl', '.stderr');
+      const outputFd = openSync(outputFile, 'w');
+      const stderrFd = openSync(stderrFile, 'w');
+
       const child = spawn(this.claudeCliPath, args, {
         cwd,
-        stdio: ['pipe', 'pipe', 'pipe'],
+        stdio: ['pipe', outputFd, stderrFd],
+        detached: true,
       });
 
+      closeSync(outputFd);
+      closeSync(stderrFd);
+
       const flags = { killed: false, aborted: false };
-      this.activeProcesses.set(key, { child, flags, timeoutHandle: null, killTimer: null });
+      this.activeProcesses.set(key, { child, flags, timeoutHandle: null, killTimer: null, outputFile, stderrFile });
 
       // 发送 /compact slash command
       const input = JSON.stringify({
@@ -176,7 +224,7 @@ export class ClaudeExecutor {
       child.stdin.write(input + '\n', 'utf8', () => child.stdin!.end());
       child.stdin.on('error', () => {});
 
-      return await this.processStream(child, key, flags, onProgress);
+      return await this.tailOutputFile(outputFile, stderrFile, child, key, flags, onProgress);
     } catch (error: any) {
       if (error instanceof ClaudeExecutionError) throw error;
       throw new ClaudeExecutionError(`Compact 失败: ${error.message}`, ClaudeErrorType.RECOVERABLE);
@@ -187,20 +235,83 @@ export class ClaudeExecutor {
   }
 
   /**
-   * 逐行读取 stream-json，解析事件并回调
+   * 通过轮询文件获取 JSONL 事件流（替代 pipe 监听）
    */
-  private processStream(
+  private tailOutputFile(
+    outputFile: string,
+    stderrFile: string,
     child: ChildProcess,
     lockKey: string,
     flags: { killed: boolean; aborted: boolean },
     onProgress?: ProgressCallback
   ): Promise<ClaudeResponse> {
     return new Promise((resolve, reject) => {
+      let offset = 0;
       let lineBuf = '';
       let resultEvent: StreamEvent | null = null;
       let lastSessionId = '';
       let compactPreTokens: number | null = null;
-      const stderrChunks: Buffer[] = [];
+
+      const readNewData = () => {
+        try {
+          let fileSize: number;
+          try {
+            fileSize = statSync(outputFile).size;
+          } catch {
+            return; // 文件不存在（已清理）
+          }
+          if (fileSize <= offset) return;
+
+          const buf = Buffer.alloc(fileSize - offset);
+          const fd = openSync(outputFile, 'r');
+          try {
+            readSync(fd, buf, 0, buf.length, offset);
+          } finally {
+            closeSync(fd);
+          }
+          offset = fileSize;
+
+          lineBuf += buf.toString('utf8');
+
+          let newlineIdx: number;
+          while ((newlineIdx = lineBuf.indexOf('\n')) !== -1) {
+            const line = lineBuf.slice(0, newlineIdx).trim();
+            lineBuf = lineBuf.slice(newlineIdx + 1);
+            if (!line) continue;
+
+            let event: StreamEvent;
+            try {
+              event = JSON.parse(line) as StreamEvent;
+            } catch {
+              continue;
+            }
+
+            if (event.session_id) lastSessionId = event.session_id;
+
+            if (event.compact_metadata) {
+              compactPreTokens = event.compact_metadata.pre_tokens;
+              logger.info(`Compact triggered (${event.compact_metadata.trigger}): pre_tokens=${compactPreTokens}`);
+            }
+
+            if (onProgress) {
+              try { onProgress(event); } catch (e) {
+                logger.debug('Progress callback error:', e);
+              }
+            }
+
+            if (event.type === 'result') {
+              resultEvent = event;
+              const compactInfo = compactPreTokens ? `, compact: ${compactPreTokens} → ${event.usage?.input_tokens}` : '';
+              logger.debug(`Result: ${event.num_turns} turns, ${event.duration_ms}ms${compactInfo}`);
+            }
+          }
+        } catch (e) {
+          logger.debug('tailOutputFile readNewData error:', e);
+        }
+      };
+
+      // 每 300ms 轮询一次文件
+      const pollTimer = setInterval(readNewData, 300);
 
       // 超时处理
       const active = this.activeProcesses.get(lockKey);
@@ -217,77 +328,41 @@ export class ClaudeExecutor {
         if (active) active.timeoutHandle = timeoutHandle;
       }
 
-      // 逐行解析 stdout（JSONL 格式）
-      child.stdout!.on('data', (chunk: Buffer) => {
-        lineBuf += chunk.toString('utf8');
-
-        let newlineIdx: number;
-        while ((newlineIdx = lineBuf.indexOf('\n')) !== -1) {
-          const line = lineBuf.slice(0, newlineIdx).trim();
-          lineBuf = lineBuf.slice(newlineIdx + 1);
-
-          if (!line) continue;
-
-          let event: StreamEvent;
-          try {
-            event = JSON.parse(line) as StreamEvent;
-          } catch (parseError: any) {
-            logger.warn('Failed to parse stream event JSON:', parseError.message, 'Line:', line.slice(0, 100));
-            continue;
-          }
-
-          try {
-            if (event.session_id) {
-              lastSessionId = event.session_id;
-            }
-
-            // 记录 compact 事件
-            if (event.compact_metadata) {
-              compactPreTokens = event.compact_metadata.pre_tokens;
-              logger.info(`Compact triggered (${event.compact_metadata.trigger}): pre_tokens=${compactPreTokens}`);
-            }
-
-            // 回调进度
-            if (onProgress) {
-              try { onProgress(event); } catch (e) {
-                logger.debug('Progress callback error:', e);
-              }
-            }
-
-            // 记录最终结果
-            if (event.type === 'result') {
-              resultEvent = event;
-              const compactInfo = compactPreTokens ? `, compact: ${compactPreTokens} → ${event.usage?.input_tokens}` : '';
-              logger.debug(`Result: ${event.num_turns} turns, ${event.duration_ms}ms${compactInfo}`);
-            }
-          } catch {
-            logger.debug('Non-JSON stdout line:', line.slice(0, 100));
-          }
+      // 更新 active process 的 claudeSessionId（用于 detachAll 保存）
+      const updateSessionId = () => {
+        if (lastSessionId && active) {
+          active.claudeSessionId = lastSessionId;
         }
-      });
-
-      child.stderr!.on('data', (chunk: Buffer) => {
-        stderrChunks.push(chunk);
-      });
+      };
 
       child.on('exit', (code, signal) => {
+        clearInterval(pollTimer);
         if (active?.timeoutHandle) clearTimeout(active.timeoutHandle);
         if (active?.killTimer) clearTimeout(active.killTimer);
 
-        // 处理 stdout 中残留的未换行数据
+        // 读取最终数据
+        readNewData();
+
+        // 处理 lineBuf 中残留的未换行数据
         if (lineBuf.trim()) {
           try {
             const event = JSON.parse(lineBuf.trim()) as StreamEvent;
             if (event.session_id) lastSessionId = event.session_id;
             if (onProgress) try { onProgress(event); } catch {}
             if (event.type === 'result') resultEvent = event;
-          } catch (parseError: any) {
-            logger.warn('Failed to parse trailing stream data:', parseError.message);
-          }
+          } catch {}
           lineBuf = '';
         }
 
-        const stderr = Buffer.concat(stderrChunks).toString('utf8');
+        updateSessionId();
+
+        // 读取 stderr（在清理文件前）
+        let stderr = '';
+        try { stderr = readFileSync(stderrFile, 'utf-8'); } catch {}
+
+        // 清理输出文件
+        try { unlinkSync(outputFile); } catch {}
+        try { unlinkSync(stderrFile); } catch {}
 
         if (flags.aborted) {
           reject(new ClaudeExecutionError(
@@ -305,7 +380,6 @@ export class ClaudeExecutor {
             ClaudeErrorType.RECOVERABLE
           ));
         } else if (resultEvent) {
-          // 成功拿到 result 事件
           resolve({
             session_id: lastSessionId,
             result: resultEvent.result || '',
@@ -325,6 +399,7 @@ export class ClaudeExecutor {
       });
 
       child.on('error', (error) => {
+        clearInterval(pollTimer);
         if (active?.timeoutHandle) clearTimeout(active.timeoutHandle);
         reject(new ClaudeExecutionError(
           `启动失败: ${error.message}`,
@@ -376,29 +451,53 @@ export class ClaudeExecutor {
 
   /**
    * 中止指定 lockKey 的运行中进程 + 排空等待队列
+   * 支持前缀匹配（用于按钮的截断 lockKey）
    */
-  abort(lockKey: string): boolean {
+  abort(lockKeyOrPrefix: string): boolean {
     let aborted = false;
 
-    // 1. 先排空队列（reject 所有等待中的请求），防止 releaseLock 时 dequeue
-    const entry = this.locks.get(lockKey);
-    if (entry && entry.queue.length > 0) {
-      const err = new ClaudeExecutionError('任务已被用户停止', ClaudeErrorType.ABORTED);
-      for (const q of entry.queue) q.reject(err);
-      entry.queue = [];
-      aborted = true;
+    // 尝试精确匹配
+    let matchedKeys = [lockKeyOrPrefix];
+
+    // 如果精确匹配失败，尝试前缀匹配
+    if (!this.locks.has(lockKeyOrPrefix) && !this.activeProcesses.has(lockKeyOrPrefix)) {
+      matchedKeys = [];
+      // 在 locks 中查找
+      for (const key of this.locks.keys()) {
+        if (key.startsWith(lockKeyOrPrefix)) {
+          matchedKeys.push(key);
+        }
+      }
+      // 在 activeProcesses 中查找
+      for (const key of this.activeProcesses.keys()) {
+        if (key.startsWith(lockKeyOrPrefix) && !matchedKeys.includes(key)) {
+          matchedKeys.push(key);
+        }
+      }
     }
 
-    // 2. 再杀运行中的进程
-    const active = this.activeProcesses.get(lockKey);
-    if (active) {
-      active.flags.aborted = true;
-      if (active.timeoutHandle) clearTimeout(active.timeoutHandle);
-      active.child.kill('SIGTERM');
-      active.killTimer = setTimeout(() => {
-        if (active.child.exitCode === null) active.child.kill('SIGKILL');
-      }, 3000);
-      aborted = true;
+    // 对所有匹配的 key 执行 abort
+    for (const lockKey of matchedKeys) {
+      // 1. 先排空队列（reject 所有等待中的请求），防止 releaseLock 时 dequeue
+      const entry = this.locks.get(lockKey);
+      if (entry && entry.queue.length > 0) {
+        const err = new ClaudeExecutionError('任务已被用户停止', ClaudeErrorType.ABORTED);
+        for (const q of entry.queue) q.reject(err);
+        entry.queue = [];
+        aborted = true;
+      }
+
+      // 2. 再杀运行中的进程
+      const active = this.activeProcesses.get(lockKey);
+      if (active) {
+        active.flags.aborted = true;
+        if (active.timeoutHandle) clearTimeout(active.timeoutHandle);
+        active.child.kill('SIGTERM');
+        active.killTimer = setTimeout(() => {
+          if (active.child.exitCode === null) active.child.kill('SIGKILL');
+        }, 3000);
+        aborted = true;
+      }
     }
 
     return aborted;
@@ -429,6 +528,175 @@ export class ClaudeExecutor {
 
     // 默认：可恢复（超时/崩溃等）
     return ClaudeErrorType.RECOVERABLE;
+  }
+
+  /**
+   * 优雅关闭：解除所有子进程的关联，让它们继续运行
+   * 在 Bot 收到 SIGTERM 时调用，确保 Claude CLI 不会被一起杀掉
+   */
+  detachAll(): void {
+    const registry: ProcessRegistryEntry[] = [];
+
+    for (const [lockKey, active] of this.activeProcesses.entries()) {
+      logger.info(`Detaching process: PID=${active.child.pid}, lockKey=${lockKey}`);
+
+      // 清除超时定时器
+      if (active.timeoutHandle) clearTimeout(active.timeoutHandle);
+      if (active.killTimer) clearTimeout(active.killTimer);
+
+      // 移除所有事件监听器，让 Node.js 可以正常退出
+      active.child.removeAllListeners();
+
+      // unref 让 Node.js 事件循环不再等待此子进程
+      active.child.unref();
+
+      // 收集注册信息
+      if (active.child.pid && active.outputFile) {
+        registry.push({
+          pid: active.child.pid,
+          outputFile: active.outputFile,
+          stderrFile: active.stderrFile || '',
+          groupId: active.groupId || 0,
+          topicId: active.topicId || 0,
+          lockKey,
+          claudeSessionId: active.claudeSessionId,
+          cwd: active.cwd,
+          startTime: Date.now(),
+        });
+      }
+    }
+
+    // 保存到磁盘
+    if (registry.length > 0) {
+      try {
+        writeFileSync(this.registryFile, JSON.stringify(registry, null, 2));
+        logger.info(`Saved ${registry.length} process(es) to registry for reconnection`);
+      } catch (e: any) {
+        logger.error('Failed to save process registry:', e.message);
+      }
+    }
+
+    const count = this.activeProcesses.size;
+    this.activeProcesses.clear();
+
+    // 清空所有锁队列
+    for (const [, entry] of this.locks.entries()) {
+      for (const q of entry.queue) {
+        q.reject(new ClaudeExecutionError('Bot 正在重启', ClaudeErrorType.RECOVERABLE));
+      }
+      entry.queue = [];
+    }
+    this.locks.clear();
+
+    if (count > 0) {
+      logger.info(`Detached ${count} running Claude process(es), they will continue independently`);
+    }
+  }
+
+  /**
+   * 重连上次 Bot 关闭时仍在运行的 Claude 进程
+   */
+  async reconnectAll(
+    onResult: (info: ReconnectedResult) => Promise<void>
+  ): Promise<void> {
+    let registry: ProcessRegistryEntry[];
+    try {
+      registry = JSON.parse(readFileSync(this.registryFile, 'utf-8'));
+    } catch {
+      return; // 无注册表或解析失败
+    }
+
+    // 清除注册表文件
+    try { unlinkSync(this.registryFile); } catch {}
+
+    logger.info(`Reconnecting ${registry.length} orphaned process(es)...`);
+
+    for (const entry of registry) {
+      const alive = isProcessAlive(entry.pid);
+      const parseResult = this.parseOutputFile(entry.outputFile);
+
+      if (parseResult.resultEvent) {
+        // 进程已完成，发送结果
+        logger.info(`Orphaned process PID=${entry.pid} already completed`);
+        await onResult({
+          groupId: entry.groupId,
+          topicId: entry.topicId,
+          lockKey: entry.lockKey,
+          claudeSessionId: parseResult.sessionId || entry.claudeSessionId,
+          status: 'completed',
+          result: parseResult.resultEvent.result,
+          usage: parseResult.resultEvent.usage,
+          duration_ms: parseResult.resultEvent.duration_ms,
+          total_cost_usd: parseResult.resultEvent.total_cost_usd,
+        });
+        this.cleanupOutputFiles(entry);
+      } else if (alive) {
+        // 进程仍在运行，启动后台监控
+        logger.info(`Orphaned process PID=${entry.pid} still running, monitoring...`);
+        this.monitorOrphanedProcess(entry, onResult);
+      } else {
+        // 进程已死但没有 result → 通知失败
+        logger.warn(`Orphaned process PID=${entry.pid} died without result`);
+        await onResult({
+          groupId: entry.groupId,
+          topicId: entry.topicId,
+          lockKey: entry.lockKey,
+          status: 'failed',
+        });
+        this.cleanupOutputFiles(entry);
+      }
+    }
+  }
+
+  private monitorOrphanedProcess(
+    entry: ProcessRegistryEntry,
+    onResult: (info: ReconnectedResult) => Promise<void>
+  ): void {
+    const timer = setInterval(async () => {
+      const alive = isProcessAlive(entry.pid);
+      const parseResult = this.parseOutputFile(entry.outputFile);
+
+      if (parseResult.resultEvent || !alive) {
+        clearInterval(timer);
+        logger.info(`Orphaned process PID=${entry.pid} ${parseResult.resultEvent ? 'completed' : 'exited'}`);
+        await onResult({
+          groupId: entry.groupId,
+          topicId: entry.topicId,
+          lockKey: entry.lockKey,
+          claudeSessionId: parseResult.sessionId || entry.claudeSessionId,
+          status: parseResult.resultEvent ? 'completed' : 'failed',
+          result: parseResult.resultEvent?.result,
+          usage: parseResult.resultEvent?.usage,
+          duration_ms: parseResult.resultEvent?.duration_ms,
+          total_cost_usd: parseResult.resultEvent?.total_cost_usd,
+        });
+        this.cleanupOutputFiles(entry);
+      }
+    }, 2000);
+  }
+
+  private parseOutputFile(filePath: string): { resultEvent: StreamEvent | null; sessionId: string } {
+    try {
+      const content = readFileSync(filePath, 'utf-8');
+      let resultEvent: StreamEvent | null = null;
+      let sessionId = '';
+      for (const line of content.split('\n')) {
+        if (!line.trim()) continue;
+        try {
+          const event = JSON.parse(line) as StreamEvent;
+          if (event.session_id) sessionId = event.session_id;
+          if (event.type === 'result') resultEvent = event;
+        } catch {}
+      }
+      return { resultEvent, sessionId };
+    } catch {
+      return { resultEvent: null, sessionId: '' };
+    }
+  }
+
+  private cleanupOutputFiles(entry: ProcessRegistryEntry): void {
+    try { unlinkSync(entry.outputFile); } catch {}
+    try { unlinkSync(entry.stderrFile); } catch {}
   }
 
   async verify(): Promise<boolean> {

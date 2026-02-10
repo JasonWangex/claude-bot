@@ -2,22 +2,10 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-SERVICES="claude-web claude-telegram"
+SERVICES="claude-telegram claude-monitor"
 
 if [ ! -f prd.env ]; then
-  echo "Missing prd.env. Creating from template..."
-  cat > prd.env << 'EOF'
-PASSWORD=changeme
-JWT_SECRET=change-me-to-a-random-secret
-PORT=9000
-EOF
-  echo "Created prd.env — please edit it before running again."
-  exit 1
-fi
-
-# 校验默认密码
-if grep -qE '^PASSWORD=changeme$|^JWT_SECRET=change-me-to-a-random-secret$' prd.env; then
-  echo "ERROR: prd.env contains default passwords. Please change PASSWORD and JWT_SECRET."
+  echo "Missing prd.env. Please create it from env.example."
   exit 1
 fi
 
@@ -26,10 +14,10 @@ link_env() {
 }
 
 do_deploy() {
-  echo "==> Building frontend..."
-  npm run build
-
   link_env
+
+  echo "==> Installing skills..."
+  bash scripts/install-skills.sh
 
   echo "==> Reloading systemd..."
   systemctl --user daemon-reload
@@ -90,7 +78,7 @@ do_status() {
 }
 
 do_logs() {
-  journalctl --user -u claude-web -u claude-telegram -f
+  journalctl --user -u claude-telegram -u claude-monitor -f
 }
 
 case "${1:-}" in
@@ -103,12 +91,12 @@ case "${1:-}" in
   *)
     echo "Usage: $0 {deploy|start|stop|restart|status|logs}"
     echo ""
-    echo "  deploy   Build frontend + start/restart services"
+    echo "  deploy   Start/restart services"
     echo "  start    Start services"
     echo "  stop     Stop services"
     echo "  restart  Restart services"
     echo "  status   Show service status"
-    echo "  logs     Follow logs (web + telegram)"
+    echo "  logs     Follow logs (telegram + monitor)"
     exit 1
     ;;
 esac
