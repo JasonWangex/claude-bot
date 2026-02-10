@@ -16,8 +16,6 @@ import { timingSafeEqual } from 'crypto';
 import { updateAuthorizedChatId, getAuthorizedChatId } from '../utils/env.js';
 import { checkAuth } from './auth.js';
 import { logger } from '../utils/logger.js';
-import { CLIStatsReader } from './cli-stats-reader.js';
-import { UsageReader } from './usage-reader.js';
 import {
   normalizeTopicName,
   resolveTopicWorkDir,
@@ -44,19 +42,15 @@ export class CommandHandler {
   private stateManager: StateManager;
   private claudeClient: ClaudeClient;
   private messageHandler: MessageHandler;
-  private cliStatsReader: CLIStatsReader;
-  private usageReader: UsageReader;
   private config: TelegramBotConfig;
 
   // General 话题文本收集状态 (groupId → PendingTextInput)
   private pendingTextInput: Map<number, PendingTextInput> = new Map();
 
-  constructor(stateManager: StateManager, claudeClient: ClaudeClient, messageHandler: MessageHandler, cliStatsReader: CLIStatsReader, config: TelegramBotConfig) {
+  constructor(stateManager: StateManager, claudeClient: ClaudeClient, messageHandler: MessageHandler, config: TelegramBotConfig) {
     this.stateManager = stateManager;
     this.claudeClient = claudeClient;
     this.messageHandler = messageHandler;
-    this.cliStatsReader = cliStatsReader;
-    this.usageReader = new UsageReader();
     this.config = config;
   }
 
@@ -226,7 +220,6 @@ export class CommandHandler {
           `• /topics - 管理 Topic（多层级按钮）\n` +
           `• /newtopic - 快速创建 Topic\n` +
           `• /status - 查看全局状态\n` +
-          `• /usage - Token 使用统计\n` +
           `• /model - 切换全局默认模型\n` +
           `• /help - 查看完整帮助`
         );
@@ -246,7 +239,6 @@ export class CommandHandler {
         `/start - 显示欢迎信息\n` +
         `/help - 显示此帮助\n` +
         `/status - 全局状态概览\n` +
-        `/usage - 查看 Token 使用统计\n` +
         `/model - 切换全局默认模型\n\n` +
         `<b>Topic 内命令</b>\n` +
         `/cd [path] - 切换工作目录\n` +
@@ -302,47 +294,6 @@ export class CommandHandler {
     });
   }
 
-
-  async handleUsage(ctx: Context): Promise<void> {
-    await this.requireAuth(ctx, async () => {
-      const text = (ctx.message as any)?.text || '';
-      const args = text.split(/\s+/).slice(1);
-
-      // 默认显示今天的统计
-      let stats;
-      let title = '今日使用统计';
-
-      if (args.length > 0) {
-        const arg = args[0].toLowerCase();
-        if (arg === 'yesterday' || arg === '昨天') {
-          stats = await this.usageReader.getYesterdayStats();
-          title = '昨日使用统计';
-        } else if (/^\d{4}-\d{2}-\d{2}$/.test(arg)) {
-          // 指定日期 YYYY-MM-DD
-          stats = await this.usageReader.getDailyStats(arg);
-          title = `${arg} 使用统计`;
-        } else {
-          await ctx.reply(
-            '用法: /usage [yesterday|YYYY-MM-DD]\n\n' +
-            '不带参数 - 显示今天的统计\n' +
-            'yesterday - 显示昨天的统计\n' +
-            'YYYY-MM-DD - 显示指定日期的统计'
-          );
-          return;
-        }
-      } else {
-        stats = await this.usageReader.getTodayStats();
-      }
-
-      if (!stats) {
-        await ctx.reply('❌ 暂无该日期的使用数据');
-        return;
-      }
-
-      const report = this.usageReader.formatReport(stats, title);
-      await ctx.reply(report, { parse_mode: 'HTML' });
-    });
-  }
 
   // ========== Topic 内命令 ==========
 

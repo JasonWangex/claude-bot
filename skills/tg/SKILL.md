@@ -2,7 +2,7 @@
 name: tg
 description: >
   Telegram Bot 远程控制技能。通过本地 HTTP API 操作 Telegram Bot 的所有功能：
-  Topic 管理、模型切换、发送消息、查看状态和用量等。
+  Topic 管理、模型切换、发送消息、查看状态等。
   触发条件: "telegram", "tg", "/tg", "bot command", "send telegram",
   "topic 管理", "切换模型", "bot api"。
 version: 2.0.0
@@ -20,8 +20,6 @@ version: 2.0.0
 |------|------|------|
 | GET | `/api/health` | 健康检查 |
 | GET | `/api/status` | 全局状态 — Topic 列表、默认 cwd/model |
-| GET | `/api/usage` | 今日 Token 用量 |
-| GET | `/api/usage/:date` | 指定日期用量（`yesterday` 或 `YYYY-MM-DD`） |
 
 ### 模型
 | 方法 | 路径 | 说明 |
@@ -78,12 +76,6 @@ curl -s $API/api/health | jq
 
 # 查看全局状态
 curl -s $API/api/status | jq
-
-# 查看今日用量
-curl -s $API/api/usage | jq
-
-# 查看昨日用量
-curl -s $API/api/usage/yesterday | jq
 
 # 查看可用模型
 curl -s $API/api/models | jq

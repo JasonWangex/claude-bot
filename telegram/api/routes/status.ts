@@ -1,7 +1,5 @@
 /**
  * GET /api/status         — 全局状态概览
- * GET /api/usage          — 今日 Token 用量
- * GET /api/usage/:date    — 指定日期用量 (yesterday | YYYY-MM-DD)
  */
 
 import type { RouteHandler, TopicSummary } from '../types.js';
@@ -62,50 +60,3 @@ export const getStatus: RouteHandler = async (_req, res, _params, deps) => {
   });
 };
 
-export const getUsage: RouteHandler = async (_req, res, params, deps) => {
-  requireAuth(res);
-
-  const dateParam = params.date;
-  let stats;
-  let dateLabel: string;
-
-  if (!dateParam) {
-    stats = await deps.usageReader.getTodayStats();
-    dateLabel = 'today';
-  } else if (dateParam === 'yesterday') {
-    stats = await deps.usageReader.getYesterdayStats();
-    dateLabel = 'yesterday';
-  } else if (/^\d{4}-\d{2}-\d{2}$/.test(dateParam)) {
-    stats = await deps.usageReader.getDailyStats(dateParam);
-    dateLabel = dateParam;
-  } else {
-    sendJson(res, 400, {
-      ok: false,
-      error: 'Invalid date. Use "yesterday" or "YYYY-MM-DD".',
-    });
-    return;
-  }
-
-  if (!stats) {
-    sendJson(res, 404, { ok: false, error: `No usage data for ${dateLabel}` });
-    return;
-  }
-
-  sendJson(res, 200, {
-    ok: true,
-    data: {
-      date: stats.date,
-      message_count: stats.messageCount,
-      session_count: stats.sessionCount,
-      total_tokens: stats.totalTokens,
-      total_cost: stats.totalCost,
-      models: stats.models,
-      cache_stats: {
-        total_read_tokens: stats.cacheStats.totalReadTokens,
-        total_write_tokens: stats.cacheStats.totalWriteTokens,
-        savings_usd: stats.cacheStats.savingsUSD,
-        hit_rate: stats.cacheStats.hitRate,
-      },
-    },
-  });
-};

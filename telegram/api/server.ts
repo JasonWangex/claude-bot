@@ -14,7 +14,7 @@ import { logger } from '../utils/logger.js';
 
 // Route handlers
 import { getHealth } from './routes/health.js';
-import { getStatus, getUsage } from './routes/status.js';
+import { getStatus } from './routes/status.js';
 import { listTopics, createTopic, getTopic, updateTopic, deleteTopic, archiveTopic, forkTopic } from './routes/topics.js';
 import { sendMessage } from './routes/messages.js';
 import { clearSession, compactSession, rewindSession, stopSession } from './routes/session-ops.js';
@@ -35,8 +35,6 @@ function defineRoutes(): Route[] {
     // 系统
     r('GET',  '/api/health', getHealth),
     r('GET',  '/api/status', getStatus),
-    r('GET',  '/api/usage', getUsage),
-    r('GET',  '/api/usage/:date', getUsage),
 
     // 模型
     r('GET',  '/api/models', getModels),

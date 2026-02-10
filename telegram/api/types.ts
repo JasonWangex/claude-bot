@@ -6,7 +6,6 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import type { StateManager } from '../bot/state.js';
 import type { ClaudeClient } from '../claude/client.js';
 import type { MessageHandler } from '../bot/handlers.js';
-import type { UsageReader } from '../bot/usage-reader.js';
 import type { TelegramBotConfig } from '../types/index.js';
 import type { Telegram } from 'telegraf';
 
@@ -24,7 +23,6 @@ export interface ApiDeps {
   stateManager: StateManager;
   claudeClient: ClaudeClient;
   messageHandler: MessageHandler;
-  usageReader: UsageReader;
   telegram: Telegram;
   config: TelegramBotConfig;
 }
@@ -138,26 +136,3 @@ export interface StatusResponse {
   topics: TopicSummary[];
 }
 
-// ========== 使用量 ==========
-
-export interface UsageResponse {
-  date: string;
-  message_count: number;
-  session_count: number;
-  total_tokens: number;
-  total_cost: number;
-  models: Array<{
-    name: string;
-    input_tokens: number;
-    output_tokens: number;
-    cache_read_tokens: number;
-    cache_write_tokens: number;
-    cost: number;
-  }>;
-  cache_stats: {
-    total_read_tokens: number;
-    total_write_tokens: number;
-    savings_usd: number;
-    hit_rate: number;
-  };
-}

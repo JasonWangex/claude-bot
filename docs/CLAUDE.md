@@ -187,7 +187,7 @@ interface GroupState {
 - `/status` - 查看所有 Topic 会话状态
 - `/setcwd <path>` - 设置新 Topic 默认工作目录
 - `/model` - 设置全局默认模型
-- `/usage [yesterday|YYYY-MM-DD]` - 查看 Token 使用统计
+
 
 *Topic 内命令*:
 - `/cd <path>` - 切换当前 Topic 工作目录
@@ -227,22 +227,6 @@ interface GroupState {
 - 用户主动中断（/stop）
 
 ### 4. Token 使用统计
-
-**功能特性**:
-- 自动追踪每次 API 调用的 token 使用量
-- 按小时统计详细数据
-- 自动计算预估费用（支持多模型定价）
-- `/usage` 命令查询统计（今日/昨日/指定日期）
-- **每天早上 9:00 自动发送昨日使用报告**
-- 数据持久化存储（保留 30 天）
-
-**报告内容**:
-- 总请求数
-- 总 Token 数（输入/输出分开）
-- 预估费用
-- 按小时分解（带可视化进度条）
-
-详细文档：[USAGE_TRACKING.md](./USAGE_TRACKING.md)
 
 **错误分类**:
 - `RECOVERABLE` - 超时/崩溃 → 重试
