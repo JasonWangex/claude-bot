@@ -27,6 +27,20 @@ if (proxyUrl && (proxyUrl.startsWith('http://') || proxyUrl.startsWith('https://
   logger.info('SOCKS proxy detected, will be configured in Telegraf:', proxyUrl);
 }
 
+// 全局异常兜底：防止未捕获异常导致进程静默崩溃
+process.on('unhandledRejection', (reason) => {
+  logger.error('Unhandled rejection:', reason);
+});
+
+let exiting = false;
+process.on('uncaughtException', (error) => {
+  logger.error('Uncaught exception:', error);
+  if (exiting) return;
+  exiting = true;
+  // 致命错误，给日志系统时间 flush，然后退出让进程管理器重启
+  setTimeout(() => process.exit(1), 1000);
+});
+
 async function main() {
   try {
     // 加载配置

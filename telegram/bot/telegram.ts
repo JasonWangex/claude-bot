@@ -15,6 +15,7 @@ import { TelegramBotConfig } from '../types/index.js';
 import { checkAuth } from './auth.js';
 import { logger } from '../utils/logger.js';
 import { getAuthorizedChatId } from '../utils/env.js';
+import { escapeHtml } from './message-utils.js';
 import { ApiServer } from '../api/server.js';
 
 export class TelegramBot {
@@ -62,6 +63,7 @@ export class TelegramBot {
     );
     this.messageQueue = new MessageQueue(this.bot.telegram);
     this.messageHandler = new MessageHandler(this.stateManager, this.claudeClient, this.callbackRegistry, this.messageQueue);
+    this.messageHandler.setErrorReporter((chatId, topicId, source, error) => this.sendErrorToGeneral(chatId, topicId, source, error));
     this.commandHandler = new CommandHandler(this.stateManager, this.claudeClient, this.messageHandler, this.messageQueue, this.config);
     this.messageHandler.setCommandHandler(this.commandHandler);
 
@@ -133,6 +135,7 @@ export class TelegramBot {
     this.bot.command('plan', (ctx) => this.commandHandler.handlePlan(ctx));
     this.bot.command('stop', (ctx) => this.commandHandler.handleStop(ctx));
     this.bot.command('info', (ctx) => this.commandHandler.handleInfo(ctx));
+    this.bot.command('attach', (ctx) => this.commandHandler.handleAttach(ctx));
     this.bot.command('qdev', (ctx) => this.commandHandler.handleQdev(ctx));
     // General + Topic 通用命令
     this.bot.command('model', (ctx) => this.commandHandler.handleModel(ctx));
@@ -370,6 +373,19 @@ export class TelegramBot {
     this.bot.on('text', (ctx) => {
       this.messageHandler.handleText(ctx).catch((err) => {
         logger.error('Text handler error:', err);
+        const topicId = (ctx.message as any)?.message_thread_id as number | undefined;
+        // 回复用户，让用户知道出错了（而不是完全没反应）
+        ctx.reply(
+          `❌ 处理消息时发生内部错误，请查看 General Topic 了解详情`,
+          { message_thread_id: topicId, disable_notification: false }
+        ).catch(() => {});
+        // 同时发送到 General Topic，附带上下文信息
+        this.sendErrorToGeneral(
+          ctx.chat?.id,
+          topicId,
+          'Text handler',
+          err
+        );
       });
     });
 
@@ -448,6 +464,33 @@ export class TelegramBot {
       } catch (err: any) {
         logger.error('Failed to send reconnected result:', err.message);
       }
+    });
+  }
+
+  /**
+   * 发送错误信息到 General Topic（thread_id 不传 = General）
+   * 作为全局错误输出通道，让用户能在 General 看到所有异常
+   */
+  private sendErrorToGeneral(
+    chatId: number | undefined,
+    topicId: number | undefined,
+    source: string,
+    error: any
+  ): void {
+    const authorizedChatId = chatId || getAuthorizedChatId();
+    if (!authorizedChatId) return;
+
+    const topicInfo = topicId ? `Topic #${topicId}` : 'General';
+    const errMsg = (error?.message || String(error)).slice(0, 500);
+    const text = `⚠️ <b>Error</b> [${escapeHtml(source)}]\n` +
+      `来源: ${escapeHtml(topicInfo)}\n` +
+      `<pre>${escapeHtml(errMsg)}</pre>`;
+
+    this.bot.telegram.sendMessage(authorizedChatId, text, {
+      parse_mode: 'HTML',
+      disable_notification: true,
+    }).catch((e: any) => {
+      logger.debug('sendErrorToGeneral failed:', e.message);
     });
   }
 

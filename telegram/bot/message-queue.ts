@@ -357,6 +357,14 @@ export class MessageQueue {
       }
       await new Promise(r => setTimeout(r, 50));
     }
+
+    // 防御性清理：确保所有 topic buffer 定时器已清除
+    for (const [, buffer] of this.topicBuffers) {
+      if (buffer.timer) {
+        clearTimeout(buffer.timer);
+        buffer.timer = null;
+      }
+    }
   }
 
   // --- 消费者 ---

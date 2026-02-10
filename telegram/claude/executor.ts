@@ -291,6 +291,7 @@ export class ClaudeExecutor {
             try {
               event = JSON.parse(line) as StreamEvent;
             } catch {
+              logger.warn('JSONL parse failed, skipping line:', line.slice(0, 200));
               continue;
             }
 
@@ -307,7 +308,7 @@ export class ClaudeExecutor {
 
             if (onProgress) {
               try { onProgress(event); } catch (e) {
-                logger.debug('Progress callback error:', e);
+                logger.warn('Progress callback error:', e);
               }
             }
 
@@ -319,7 +320,7 @@ export class ClaudeExecutor {
             }
           }
         } catch (e) {
-          logger.debug('tailOutputFile readNewData error:', e);
+          logger.warn('tailOutputFile readNewData error:', e);
         }
       };
 
@@ -381,7 +382,9 @@ export class ClaudeExecutor {
             if (event.session_id) lastSessionId = event.session_id;
             if (onProgress) try { onProgress(event); } catch {}
             if (event.type === 'result') resultEvent = event;
-          } catch {}
+          } catch {
+            logger.warn('JSONL parse failed for trailing buffer:', lineBuf.trim().slice(0, 200));
+          }
           lineBuf = '';
         }
 
@@ -438,6 +441,7 @@ export class ClaudeExecutor {
         clearInterval(pollTimer);
         if (stallTimer) clearInterval(stallTimer);
         if (active?.timeoutHandle) clearTimeout(active.timeoutHandle);
+        if (active?.killTimer) clearTimeout(active.killTimer);
         reject(new ClaudeExecutionError(
           `启动失败: ${error.message}`,
           this.classifyError(error.message)
