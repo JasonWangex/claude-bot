@@ -110,6 +110,16 @@ export class CommandHandler {
         this.stateManager.setSessionName(groupId, topicId, topicCreated.name);
         session.name = topicCreated.name;
       }
+
+      // 同步 icon 信息（从 reply_to_message 的 forum_topic_created 中获取）
+      if (topicCreated && session.iconColor == null && session.iconCustomEmojiId == null) {
+        const iconColor = topicCreated.icon_color;
+        const iconEmojiId = topicCreated.icon_custom_emoji_id || undefined;
+        if (iconColor != null || iconEmojiId != null) {
+          this.stateManager.setSessionIcon(groupId, topicId, iconColor, iconEmojiId);
+        }
+      }
+
       await handler(session, topicId);
     });
   }
@@ -192,6 +202,16 @@ export class CommandHandler {
           this.stateManager.setSessionName(groupId, topicId, topicCreated.name);
           session.name = topicCreated.name;
         }
+
+        // 同步 icon 信息
+        if (topicCreated && session.iconColor == null && session.iconCustomEmojiId == null) {
+          const iconColor = topicCreated.icon_color;
+          const iconEmojiId = topicCreated.icon_custom_emoji_id || undefined;
+          if (iconColor != null || iconEmojiId != null) {
+            this.stateManager.setSessionIcon(groupId, topicId, iconColor, iconEmojiId);
+          }
+        }
+
         await ctx.reply(
           `👋 Claude Code 已就绪\n\n` +
           `工作目录: ${session.cwd}\n\n` +

@@ -329,12 +329,19 @@ export class TelegramBot {
       if (!ctx.chat) return;
       const topicId = ctx.message?.message_thread_id;
       const topicData = ctx.message?.forum_topic_created;
-      if (topicId && topicData?.name) {
-        const session = this.stateManager.getSession(ctx.chat.id, topicId);
-        if (session && session.name !== topicData.name) {
-          this.stateManager.setSessionName(ctx.chat.id, topicId, topicData.name);
-          logger.info(`Topic name synced: ${session.name} → ${topicData.name}`);
-        }
+      if (!topicId || !topicData) return;
+      const session = this.stateManager.getSession(ctx.chat.id, topicId);
+      if (!session) return;
+      if (topicData.name && session.name !== topicData.name) {
+        this.stateManager.setSessionName(ctx.chat.id, topicId, topicData.name);
+        logger.info(`Topic name synced: ${session.name} → ${topicData.name}`);
+      }
+      // 同步 icon 信息（用户手动创建的 topic 可能带有自定义 icon）
+      const newColor = topicData.icon_color;
+      const newEmojiId = topicData.icon_custom_emoji_id || undefined;
+      if (session.iconColor !== newColor || session.iconCustomEmojiId !== newEmojiId) {
+        this.stateManager.setSessionIcon(ctx.chat.id, topicId, newColor, newEmojiId);
+        logger.info(`Topic icon synced for ${topicId}: color=${newColor}, emoji=${newEmojiId}`);
       }
     });
 
@@ -342,11 +349,19 @@ export class TelegramBot {
       if (!ctx.chat) return;
       const topicId = ctx.message?.message_thread_id;
       const topicData = ctx.message?.forum_topic_edited;
-      if (topicId && topicData?.name) {
-        const session = this.stateManager.getSession(ctx.chat.id, topicId);
-        if (session && session.name !== topicData.name) {
-          this.stateManager.setSessionName(ctx.chat.id, topicId, topicData.name);
-          logger.info(`Topic name synced: ${session.name} → ${topicData.name}`);
+      if (!topicId || !topicData) return;
+      const session = this.stateManager.getSession(ctx.chat.id, topicId);
+      if (!session) return;
+      if (topicData.name && session.name !== topicData.name) {
+        this.stateManager.setSessionName(ctx.chat.id, topicId, topicData.name);
+        logger.info(`Topic name synced: ${session.name} → ${topicData.name}`);
+      }
+      // 同步 icon：icon_custom_emoji_id 存在时（含空字符串表示移除）更新
+      if ('icon_custom_emoji_id' in topicData) {
+        const newEmojiId = topicData.icon_custom_emoji_id || undefined;
+        if (session.iconCustomEmojiId !== newEmojiId) {
+          this.stateManager.setSessionIcon(ctx.chat.id, topicId, session.iconColor, newEmojiId);
+          logger.info(`Topic icon synced: ${session.iconCustomEmojiId} → ${newEmojiId}`);
         }
       }
     });
