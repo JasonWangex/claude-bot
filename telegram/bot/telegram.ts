@@ -58,7 +58,8 @@ export class TelegramBot {
     this.claudeClient = new ClaudeClient(
       config.claudeCliPath,
       config.commandTimeout,
-      config.maxTurns
+      config.maxTurns,
+      config.stallTimeout
     );
     this.messageQueue = new MessageQueue(this.bot.telegram);
     this.messageHandler = new MessageHandler(this.stateManager, this.claudeClient, this.callbackRegistry, this.messageQueue);
@@ -440,8 +441,10 @@ export class TelegramBot {
 
   private async stop(signal: string): Promise<void> {
     logger.info(`Received ${signal}, stopping bot...`);
-    // 停止消息队列消费者
+    // 停止消息队列定时 flush（但不丢弃已有操作）
     this.messageQueue.stop();
+    // 排空已入队的消息和进行中的异步操作
+    await this.messageQueue.drain(10000);
     // 关闭 API 服务器
     if (this.apiServer) {
       await this.apiServer.stop();

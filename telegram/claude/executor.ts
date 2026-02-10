@@ -42,14 +42,16 @@ function isProcessAlive(pid: number): boolean {
 export class ClaudeExecutor {
   private claudeCliPath: string;
   private commandTimeout: number;
+  private stallTimeout: number;
   private locks: Map<string, LockEntry> = new Map();
   private activeProcesses: Map<string, ActiveProcess> = new Map();
   private processDir: string;
   private registryFile: string;
 
-  constructor(claudeCliPath: string = 'claude', commandTimeout: number = 300000) {
+  constructor(claudeCliPath: string = 'claude', commandTimeout: number = 300000, stallTimeout: number = 60000) {
     this.claudeCliPath = claudeCliPath;
     this.commandTimeout = commandTimeout;
+    this.stallTimeout = stallTimeout;
     const thisDir = dirname(fileURLToPath(import.meta.url));
     this.processDir = join(thisDir, '../../data/processes');
     this.registryFile = join(thisDir, '../../data/active-processes.json');
@@ -142,7 +144,7 @@ export class ClaudeExecutor {
 
       logger.debug(`Process spawned: PID=${child.pid}, outputFile=${outputFile}`);
 
-      const flags = { killed: false, aborted: false };
+      const flags = { killed: false, aborted: false, stalled: false };
       this.activeProcesses.set(lockKey, {
         child, flags, timeoutHandle: null, killTimer: null,
         outputFile, stderrFile,
@@ -208,7 +210,7 @@ export class ClaudeExecutor {
       closeSync(outputFd);
       closeSync(stderrFd);
 
-      const flags = { killed: false, aborted: false };
+      const flags = { killed: false, aborted: false, stalled: false };
       this.activeProcesses.set(key, { child, flags, timeoutHandle: null, killTimer: null, outputFile, stderrFile });
 
       // 发送 /compact slash command
@@ -242,7 +244,7 @@ export class ClaudeExecutor {
     stderrFile: string,
     child: ChildProcess,
     lockKey: string,
-    flags: { killed: boolean; aborted: boolean },
+    flags: { killed: boolean; aborted: boolean; stalled: boolean },
     onProgress?: ProgressCallback
   ): Promise<ClaudeResponse> {
     return new Promise((resolve, reject) => {
@@ -251,6 +253,7 @@ export class ClaudeExecutor {
       let resultEvent: StreamEvent | null = null;
       let lastSessionId = '';
       let compactPreTokens: number | null = null;
+      let lastOutputTime = Date.now();
 
       const readNewData = () => {
         try {
@@ -270,6 +273,7 @@ export class ClaudeExecutor {
             closeSync(fd);
           }
           offset = fileSize;
+          lastOutputTime = Date.now();
 
           lineBuf += buf.toString('utf8');
 
@@ -314,8 +318,24 @@ export class ClaudeExecutor {
       // 每 300ms 轮询一次文件
       const pollTimer = setInterval(readNewData, 300);
 
-      // 超时处理
       const active = this.activeProcesses.get(lockKey);
+
+      // Stall detection: 连续 stallTimeout 毫秒无输出则终止进程
+      const stallTimer = this.stallTimeout > 0 ? setInterval(() => {
+        if (flags.killed || flags.aborted) return;
+        if (Date.now() - lastOutputTime > this.stallTimeout) {
+          logger.warn(`Process stalled: no output for ${this.stallTimeout / 1000}s, killing`);
+          flags.killed = true;
+          flags.stalled = true;
+          child.kill('SIGTERM');
+          const killT = setTimeout(() => {
+            if (child.exitCode === null) child.kill('SIGKILL');
+          }, 5000);
+          if (active) active.killTimer = killT;
+        }
+      }, 10000) : null;
+
+      // 超时处理
       if (this.commandTimeout > 0) {
         const timeoutHandle = setTimeout(() => {
           logger.warn(`Process timeout after ${this.commandTimeout}ms`);
@@ -338,6 +358,7 @@ export class ClaudeExecutor {
 
       child.on('exit', (code, signal) => {
         clearInterval(pollTimer);
+        if (stallTimer) clearInterval(stallTimer);
         if (active?.timeoutHandle) clearTimeout(active.timeoutHandle);
         if (active?.killTimer) clearTimeout(active.killTimer);
 
@@ -371,10 +392,10 @@ export class ClaudeExecutor {
             ClaudeErrorType.ABORTED
           ));
         } else if (flags.killed) {
-          reject(new ClaudeExecutionError(
-            `超时 (${this.commandTimeout / 1000}s)`,
-            ClaudeErrorType.RECOVERABLE
-          ));
+          const reason = flags.stalled
+            ? `进程无响应 (${this.stallTimeout / 1000}s 无输出)`
+            : `超时 (${this.commandTimeout / 1000}s)`;
+          reject(new ClaudeExecutionError(reason, ClaudeErrorType.RECOVERABLE));
         } else if (signal) {
           reject(new ClaudeExecutionError(
             `进程被信号终止: ${signal}`,
@@ -408,6 +429,7 @@ export class ClaudeExecutor {
 
       child.on('error', (error) => {
         clearInterval(pollTimer);
+        if (stallTimer) clearInterval(stallTimer);
         if (active?.timeoutHandle) clearTimeout(active.timeoutHandle);
         reject(new ClaudeExecutionError(
           `启动失败: ${error.message}`,
