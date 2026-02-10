@@ -154,6 +154,19 @@ export class StateManager {
     return result;
   }
 
+  /**
+   * 查找持有指定 claudeSessionId 的 session（同 group 内）
+   * 用于 /attach 命令防止两个 topic 持有同一个 session
+   */
+  findSessionHolder(groupId: number, claudeSessionId: string): { topicId: number; name: string } | null {
+    for (const session of this.sessions.values()) {
+      if (session.groupId === groupId && session.claudeSessionId === claudeSessionId) {
+        return { topicId: session.topicId, name: session.name };
+      }
+    }
+    return null;
+  }
+
   // ========== Session 操作 ==========
 
   updateSessionMessage(groupId: number, topicId: number, text: string, role: 'user' | 'assistant'): void {

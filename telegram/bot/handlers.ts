@@ -39,12 +39,17 @@ export class MessageHandler {
   private callbackRegistry: CallbackRegistry;
   private mq: MessageQueue;
   private commandHandler?: CommandHandler;
+  private errorReporter?: (chatId: number | undefined, topicId: number | undefined, source: string, error: any) => void;
 
   constructor(stateManager: StateManager, claudeClient: ClaudeClient, callbackRegistry: CallbackRegistry, mq: MessageQueue) {
     this.stateManager = stateManager;
     this.claudeClient = claudeClient;
     this.callbackRegistry = callbackRegistry;
     this.mq = mq;
+  }
+
+  setErrorReporter(reporter: (chatId: number | undefined, topicId: number | undefined, source: string, error: any) => void): void {
+    this.errorReporter = reporter;
   }
 
   setCommandHandler(handler: CommandHandler): void {
@@ -516,7 +521,7 @@ export class MessageHandler {
             if (!textPlaceholderMsgId || now - lastTextFlushTime >= TEXT_FLUSH_INTERVAL) {
               // 首次或已超过节流间隔 → 通过 sendChain 串行 flush
               sendChain = sendChain.then(() => flushTextBuffer()).catch(e => {
-                logger.debug('Flush text failed:', e);
+                logger.warn('Flush text failed:', e);
               });
               mq.trackAsync(() => sendChain);
             }
@@ -702,6 +707,9 @@ export class MessageHandler {
       }
 
     } catch (error: any) {
+      // 在任何清理操作前先捕获 sessionId（后续 clear 可能清空它）
+      const errorSessionId = session.claudeSessionId;
+
       // 最终 flush text 占位消息
       await flushTextBuffer().catch(() => {});
       // 等待未完成的 recreateProgress 等异步操作，确保 allProgressMsgIds 完整
@@ -749,6 +757,12 @@ export class MessageHandler {
       }
 
       mq.edit(chatId, progressMsgId, `❌ 发生错误:\n${error.message}\n\n${hint}`);
+
+      // 发送错误到 General Topic，提供全局可见性
+      if (this.errorReporter) {
+        const sessionInfo = errorSessionId ? ` session=${errorSessionId.slice(0, 8)}` : '';
+        this.errorReporter(chatId, session.topicId, `${session.name}${sessionInfo}`, error);
+      }
     }
 
     break;

@@ -272,7 +272,8 @@ export class CommandHandler {
         `/plan &lt;msg&gt; - Plan 模式（只规划不执行）\n` +
         `/stop - 停止当前任务\n` +
         `/model - 切换当前 Topic 模型\n` +
-        `/info - 查看当前 Topic 详情\n\n` +
+        `/info - 查看当前 Topic 详情\n` +
+        `/attach [session_id] - 链接到指定 Claude Session\n\n` +
         `<b>使用方法</b>\n` +
         `• /topics 统一管理所有 Topic（每个 Topic = 独立会话）\n` +
         `• 在 Topic 中直接发消息即可对话\n` +
@@ -465,6 +466,88 @@ export class CommandHandler {
         `消息记录: ${session.messageHistory.length} 条`,
         { parse_mode: 'HTML' }
       );
+    });
+  }
+
+  async handleAttach(ctx: Context): Promise<void> {
+    await this.requireTopic(ctx, async (session, topicId) => {
+      const groupId = ctx.chat!.id;
+      const text = (ctx.message as any)?.text || '';
+      const targetSessionId = text.replace(/^\/attach(?:@\w+)?\s*/, '').trim();
+
+      try {
+
+      if (!targetSessionId) {
+        // 无参数：显示当前 session 信息，方便用户复制
+        const currentId = session.claudeSessionId;
+        if (currentId) {
+          await ctx.reply(
+            `🔗 当前 Claude Session:\n<code>${escapeHtml(currentId)}</code>\n\n` +
+            `用法: /attach &lt;session_id&gt;\n` +
+            `将当前 Topic 链接到指定的 Claude Session。`,
+            { parse_mode: 'HTML' }
+          );
+        } else {
+          await ctx.reply(
+            `ℹ️ 当前 Topic 没有活跃的 Claude Session。\n\n` +
+            `用法: /attach &lt;session_id&gt;\n` +
+            `将当前 Topic 链接到指定的 Claude Session。`,
+            { parse_mode: 'HTML' }
+          );
+        }
+        return;
+      }
+
+      // 检查是否有其他 topic 持有该 session
+      const holder = this.stateManager.findSessionHolder(groupId, targetSessionId);
+      if (holder && holder.topicId === topicId) {
+        await ctx.reply(`ℹ️ 当前 Topic 已经链接到此 Session。`);
+        return;
+      }
+
+      // 如果其他 topic 持有该 session，检查是否有运行中进程
+      if (holder) {
+        const holderLockKey = StateManager.topicLockKey(groupId, holder.topicId);
+        if (this.claudeClient.isRunning(holderLockKey)) {
+          await ctx.reply(
+            `❌ Topic「${escapeHtml(holder.name)}」正在使用此 Session 执行任务，请先 /stop 该 Topic 或等待完成。`,
+            { parse_mode: 'HTML' }
+          );
+          return;
+        }
+        this.stateManager.clearSessionClaudeId(groupId, holder.topicId);
+        // 通知被断开的 topic
+        this.mq.send(groupId, holder.topicId,
+          `⚠️ Claude Session 已被 Topic「${escapeHtml(session.name)}」通过 /attach 接管。\n下次对话将开启新会话。`,
+          { parseMode: 'HTML', priority: 'high' }
+        ).catch(() => {});
+      }
+
+      // 当前 topic 如果也有运行中进程，拒绝切换
+      const currentLockKey = StateManager.topicLockKey(groupId, topicId);
+      if (this.claudeClient.isRunning(currentLockKey)) {
+        await ctx.reply(`❌ 当前 Topic 正在执行任务，请先 /stop 或等待完成。`);
+        return;
+      }
+
+      // 保存当前 session 的旧 ID，便于用户切回
+      const prevSessionId = session.claudeSessionId;
+
+      // 链接新 session
+      this.stateManager.setSessionClaudeId(groupId, topicId, targetSessionId);
+
+      let msg = `✅ 已链接到 Claude Session: <code>${escapeHtml(targetSessionId.slice(0, 8))}...</code>`;
+      if (holder) {
+        msg += `\n(已从 Topic「${escapeHtml(holder.name)}」断开)`;
+      }
+      if (prevSessionId && prevSessionId !== targetSessionId) {
+        msg += `\n\n之前的 Session:\n<code>/attach ${escapeHtml(prevSessionId)}</code>`;
+      }
+      await ctx.reply(msg, { parse_mode: 'HTML' });
+
+      } catch (error: any) {
+        await ctx.reply(`❌ attach 失败: ${error.message}`).catch(() => {});
+      }
     });
   }
 
