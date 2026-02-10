@@ -15,7 +15,7 @@ import { markdownToHtml } from './message-utils.js';
 import { StreamEvent, AskUserQuestionInput, ExitPlanModeInput, ClaudeExecutionError, ClaudeErrorType, Session, FileChange } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 import { checkAuth } from './auth.js';
-import { escapeHtml, buildDiffMessage } from './message-utils.js';
+import { escapeHtml, buildChangesHtml } from './message-utils.js';
 import type { CommandHandler } from './commands.js';
 
 // 工具名称映射
@@ -391,12 +391,6 @@ export class MessageHandler {
           }
           if (change) {
             fileChanges.push(change);
-            // 实时发送 diff 消息
-            const { text: diffText, entities } = buildDiffMessage(change);
-            mq.trackAsync(async () => {
-              await mq.send(chatId, session.topicId, diffText, { entities, silent: true });
-              await recreateProgress();
-            }).catch(e => logger.debug('Send diff failed:', e));
           }
         }
       }
@@ -526,6 +520,11 @@ export class MessageHandler {
 
         // 无 ctx 时无法显示 Inline Keyboard，跳过交互
         if (!ctx) {
+          if (fileChanges.length > 0) {
+            const html = buildChangesHtml(fileChanges);
+            await mq.sendDocument(chatId, session.topicId, html, 'changes.html',
+              `📄 ${fileChanges.length} 个文件变更`, { silent: true });
+          }
           await mq.drain();
           break;
         }
@@ -621,6 +620,13 @@ export class MessageHandler {
       if (pctHtml) parts.push(pctHtml);
       const summary = parts.length > 0 ? ` (${parts.join(', ')})` : '';
 
+      // 发送 changes.html（有文件变更时）
+      if (fileChanges.length > 0) {
+        const html = buildChangesHtml(fileChanges);
+        await mq.sendDocument(chatId, session.topicId, html, 'changes.html',
+          `📄 ${fileChanges.length} 个文件变更`, { silent: true });
+      }
+
       if (mode === 'plan') {
         // Plan mode: 标记等待确认
         this.stateManager.setSessionPlanMode(session.groupId, session.topicId, true);
@@ -631,8 +637,7 @@ export class MessageHandler {
           { silent: false, priority: 'high' }
         );
       } else {
-        const fileInfo = fileChanges.length > 0 ? `, ${fileChanges.length} 文件变更` : '';
-        await mq.send(chatId, session.topicId, `✅ 完成${summary}${fileInfo}`, { silent: false, priority: 'high' });
+        await mq.send(chatId, session.topicId, `✅ 完成${summary}`, { silent: false, priority: 'high' });
       }
 
     } catch (error: any) {
@@ -644,6 +649,15 @@ export class MessageHandler {
       // 清理 recreateProgress 产生的残留进度消息（保留当前 progressMsgId 用于显示错误）
       for (const msgId of allProgressMsgIds) {
         if (msgId !== progressMsgId) mq.delete(chatId, msgId);
+      }
+
+      // 错误/中止时也发送已收集的文件变更
+      if (fileChanges.length > 0) {
+        try {
+          const html = buildChangesHtml(fileChanges);
+          await mq.sendDocument(chatId, session.topicId, html, 'changes.html',
+            `📄 ${fileChanges.length} 个文件变更`, { silent: true });
+        } catch {}
       }
 
       // ABORTED: 用户主动停止，不显示错误
