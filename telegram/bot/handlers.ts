@@ -168,6 +168,22 @@ export class MessageHandler {
   }
 
   /**
+   * 公开方法：通过 groupId/topicId 发送消息，走完整流式进度路径
+   * 适用于 qdev 等无 ctx 的场景
+   */
+  async sendChatByIds(
+    groupId: number,
+    topicId: number,
+    text: string,
+  ): Promise<void> {
+    const session = this.stateManager.getOrCreateSession(groupId, topicId, {
+      name: `topic-${topicId}`,
+      cwd: this.stateManager.getGroupDefaultCwd(groupId),
+    });
+    return this.sendChatInternal(groupId, session, text);
+  }
+
+  /**
    * 核心对话发送逻辑
    */
   private async sendChat(
@@ -176,9 +192,18 @@ export class MessageHandler {
     text: string,
     mode?: 'plan'
   ): Promise<void> {
+    return this.sendChatInternal(ctx.chat!.id, session, text, mode, ctx);
+  }
+
+  private async sendChatInternal(
+    chatId: number,
+    session: Session,
+    text: string,
+    mode?: 'plan',
+    ctx?: Context,
+  ): Promise<void> {
     const MAX_INTERACTIVE_ROUNDS = 5;
     for (let round = 0; round < MAX_INTERACTIVE_ROUNDS; round++) {
-    const chatId = ctx.chat!.id;
 
     logger.info(`[${session.name}] Message:`, text.substring(0, 100));
 
@@ -413,6 +438,12 @@ export class MessageHandler {
         }
         if (!planSent && (sentTextCount === 0 || (response.result.trim() && response.result.trim() !== lastSentText))) {
           await mq.sendLong(chatId, session.topicId, response.result);
+        }
+
+        // 无 ctx 时无法显示 Inline Keyboard，跳过交互
+        if (!ctx) {
+          await mq.drain();
+          break;
         }
 
         // 显示 Inline Keyboard 等待用户输入

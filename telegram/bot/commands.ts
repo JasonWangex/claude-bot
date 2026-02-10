@@ -2110,18 +2110,9 @@ export class CommandHandler {
 
       await ctx.reply(`🚀 正在后台执行 qdev: ${description}`);
 
-      // Fire-and-forget: 不 await，避免 Telegraf 90s 超时
-      this.claudeClient.chat(prompt, {
-        cwd: session.cwd,
-        lockKey: tempLockKey,
-        groupId: chatId,
-        topicId,
-      }).then(async (response) => {
-        await ctx.telegram.sendMessage(chatId, `✅ qdev 完成:\n${response.result.slice(0, 4000)}`, {
-          message_thread_id: topicId,
-          disable_notification: false,
-        });
-      }).catch(async (error: any) => {
+      // Fire-and-forget: 走完整流式进度路径（onProgress + 完成摘要）
+      this.messageHandler.sendChatByIds(chatId, topicId, prompt)
+      .catch(async (error: any) => {
         logger.error('qdev error:', error.message);
         await ctx.telegram.sendMessage(chatId, `❌ qdev 失败: ${error.message}`, {
           message_thread_id: topicId,
