@@ -24,7 +24,7 @@ import {
   ensureProjectDir,
   resolveCustomPath
 } from '../utils/topic-path.js';
-import { isGitRepo, getRepoName, createWorktree, mergeBranch, removeWorktree, deleteBranch } from '../utils/git-utils.js';
+import { isGitRepo, getRepoName, createWorktree, mergeBranch, removeWorktree, deleteBranch, abortMerge } from '../utils/git-utils.js';
 
 export const MODEL_OPTIONS = [
   { id: 'claude-sonnet-4-5-20250929', label: 'Sonnet 4.5' },
@@ -1588,6 +1588,23 @@ export class CommandHandler {
       return;
     }
 
+    // 检查是否有孙 topic
+    const children = this.stateManager.getChildSessions(groupId, topicId);
+    if (children.length > 0) {
+      await ctx.answerCbQuery('❌ 此 Topic 还有子 Topic');
+      await ctx.editMessageText(
+        `❌ 无法合并：<b>${escapeHtml(session.name)}</b> 还有 ${children.length} 个子 Topic\n\n` +
+        `请先合并或删除子 Topic。`,
+        {
+          parse_mode: 'HTML',
+          ...Markup.inlineKeyboard([
+            [Markup.button.callback('⬅️ 返回', `topics:backto:${topicId}`)],
+          ]),
+        },
+      );
+      return;
+    }
+
     const name = session.name;
     const branchName = session.worktreeBranch;
     const worktreeDir = session.cwd;
@@ -1626,11 +1643,17 @@ export class CommandHandler {
     } catch (error: any) {
       logger.error('Failed to merge topic:', error);
 
-      let errorMsg = error.message || String(error);
-      if (errorMsg.includes('CONFLICT') || errorMsg.includes('conflict')) {
+      // execFile error 包含 stdout/stderr 属性，合并冲突信息在 stdout 中
+      const fullOutput = `${error.stdout || ''} ${error.stderr || ''} ${error.message || ''}`;
+      let errorMsg: string;
+      if (fullOutput.includes('CONFLICT') || fullOutput.includes('Automatic merge failed')) {
+        // 冲突时自动回滚，防止父仓库留在脏状态
+        await abortMerge(parent.cwd).catch(() => {});
         errorMsg = '合并冲突，请手动解决后再试';
-      } else if (errorMsg.includes('uncommitted') || errorMsg.includes('modified')) {
+      } else if (fullOutput.includes('uncommitted') || fullOutput.includes('modified')) {
         errorMsg = '存在未提交的修改，请先提交或清理';
+      } else {
+        errorMsg = error.message || String(error);
       }
 
       await ctx.editMessageText(

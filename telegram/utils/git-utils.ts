@@ -42,3 +42,7 @@ export async function removeWorktree(cwd: string, worktreePath: string): Promise
 export async function deleteBranch(cwd: string, branchName: string): Promise<void> {
   await execFileAsync('git', ['branch', '-d', branchName], { cwd });
 }
+
+export async function abortMerge(cwd: string): Promise<void> {
+  await execFileAsync('git', ['merge', '--abort'], { cwd });
+}
