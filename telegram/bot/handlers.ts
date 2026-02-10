@@ -520,7 +520,7 @@ export class MessageHandler {
             } catch {}
           }
         }
-        if (!planSent && (sentTextCount === 0 || (response.result.trim() && response.result.trim() !== textFlushedContent.trim()))) {
+        if (!planSent && sentTextCount === 0 && response.result.trim()) {
           await mq.sendLong(chatId, session.topicId, response.result, { priority: 'high' });
         }
 
@@ -586,8 +586,11 @@ export class MessageHandler {
         mq.delete(chatId, msgId);
       }
 
-      // 如果流式过程中没有发送过文本，或最终 result 与最后发送的文本不同，补发 result
-      if (sentTextCount === 0 || (response.result.trim() && response.result.trim() !== textFlushedContent.trim())) {
+      // 流式过程中完全没有发送过文本时，补发完整 result
+      // 注意：sentTextCount > 0 时不补发，因为 textFlushedContent 已包含所有流式文本
+      // （response.result 只含最后一个 turn 的文本，与多 turn 累积的 textFlushedContent 不同，
+      //  之前的不等比较会导致最后一段文本被重复发送）
+      if (sentTextCount === 0 && response.result.trim()) {
         await mq.sendLong(chatId, session.topicId, response.result);
       }
 
