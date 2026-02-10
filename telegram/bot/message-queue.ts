@@ -20,6 +20,7 @@ interface SendOp {
   originalText?: string;  // HTML 回退用：保存原始纯文本
   options?: {
     parseMode?: 'HTML' | 'Markdown';
+    entities?: any[];     // Telegram MessageEntity[]（与 parseMode 互斥）
     replyMarkup?: any;
     silent?: boolean;  // false = 发出通知；默认 true（静默）
   };
@@ -83,6 +84,7 @@ export class MessageQueue {
    */
   send(chatId: number, topicId: number | undefined, text: string, options?: {
     parseMode?: 'HTML' | 'Markdown';
+    entities?: any[];
     replyMarkup?: any;
     silent?: boolean;
   }): Promise<number> {
@@ -240,10 +242,14 @@ export class MessageQueue {
 
   private async executeSend(op: SendOp): Promise<void> {
     const disableNotification = op.options?.silent !== false;  // 默认静默
+    // entities 与 parse_mode 互斥
+    const useEntities = op.options?.entities && op.options.entities.length > 0;
     for (let attempt = 0; attempt <= this.MAX_RETRY; attempt++) {
       try {
         const msg = await this.telegram.sendMessage(op.chatId, op.text, {
-          parse_mode: op.options?.parseMode,
+          ...(useEntities
+            ? { entities: op.options!.entities }
+            : { parse_mode: op.options?.parseMode }),
           reply_markup: op.options?.replyMarkup,
           message_thread_id: op.topicId,
           disable_notification: disableNotification,
@@ -255,10 +261,11 @@ export class MessageQueue {
           await this.backoff429(error);
           continue;
         }
-        // HTML 解析失败 → 用原始纯文本重发（同一次执行，不重新入队）
-        if (this.is400(error) && op.options?.parseMode === 'HTML' && op.originalText) {
+        // entities 或 HTML 解析失败 → 用纯文本重发
+        if (this.is400(error) && (useEntities || (op.options?.parseMode === 'HTML' && op.originalText))) {
           try {
-            const msg = await this.telegram.sendMessage(op.chatId, op.originalText, {
+            const fallbackText = op.originalText || op.text;
+            const msg = await this.telegram.sendMessage(op.chatId, fallbackText, {
               reply_markup: op.options?.replyMarkup,
               message_thread_id: op.topicId,
               disable_notification: disableNotification,
