@@ -12,6 +12,7 @@ interface ChatResult {
   usage?: { input_tokens: number; output_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number };
   duration_ms?: number;
   total_cost_usd?: number;
+  contextWindow?: number;
 }
 
 export class ClaudeClient {
@@ -129,6 +130,7 @@ export class ClaudeClient {
       usage: response.usage,
       duration_ms: response.duration_ms,
       total_cost_usd: response.total_cost_usd,
+      contextWindow: response.contextWindow,
     };
   }
 

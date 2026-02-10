@@ -90,6 +90,15 @@ export interface StreamEvent {
     cache_read_input_tokens?: number;
     cache_creation_input_tokens?: number;
   };
+  modelUsage?: Record<string, {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadInputTokens?: number;
+    cacheCreationInputTokens?: number;
+    contextWindow: number;
+    maxOutputTokens: number;
+    costUSD?: number;
+  }>;
 }
 
 // 错误分类
@@ -121,6 +130,7 @@ export interface ClaudeResponse {
     cache_read_input_tokens?: number;
     cache_creation_input_tokens?: number;
   };
+  contextWindow?: number;       // 模型的 context window 大小（从 result.modelUsage 获取）
 }
 
 // 进度回调
