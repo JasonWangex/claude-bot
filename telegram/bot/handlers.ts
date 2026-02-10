@@ -201,6 +201,7 @@ export class MessageHandler {
     let sentTextCount = 0;
     let lastSentText = '';
     let compactPreTokens: number | null = null;
+    let lastAssistantUsage: { input_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } | null = null;
 
     // 交互式工具拦截：CLI 会自动拒绝 AskUserQuestion/ExitPlanMode，
     // 我们在流中检测到后记录问题数据，抑制后续误导性文本，chat() 结束后显示键盘
@@ -254,6 +255,7 @@ export class MessageHandler {
         fileChanges.length = 0;
         toolUseCount = 0;
         compactPreTokens = null;
+        lastAssistantUsage = null;
         interactiveState.pending = null;
         return;
       }
@@ -295,6 +297,17 @@ export class MessageHandler {
         }
       }
 
+      if (event.type === 'assistant') {
+        // 追踪最后一次 assistant 事件的 usage（反映当前 context 快照）
+        if ((event.message as any)?.usage) {
+          const u = (event.message as any).usage;
+          lastAssistantUsage = {
+            input_tokens: u.input_tokens || 0,
+            cache_read_input_tokens: u.cache_read_input_tokens,
+            cache_creation_input_tokens: u.cache_creation_input_tokens,
+          };
+        }
+      }
       if (event.type === 'assistant' && event.message?.content) {
         for (const block of event.message.content) {
           if (block.type === 'tool_use' && block.name) {
@@ -472,13 +485,20 @@ export class MessageHandler {
       if (fileChanges.length > 0) parts.push(`${fileChanges.length} 个文件变更`);
       if (compactPreTokens) parts.push(`压缩: ${Math.round(compactPreTokens / 1000)}K tokens`);
       if (response.duration_ms) parts.push(`${(response.duration_ms / 1000).toFixed(1)}s`);
-      if (response.usage) {
-        const { input_tokens, output_tokens, cache_read_input_tokens = 0, cache_creation_input_tokens = 0 } = response.usage;
-        const totalInput = input_tokens + cache_read_input_tokens + cache_creation_input_tokens;
-        const total = totalInput + output_tokens;
-        const CONTEXT_WINDOW = 200000;
-        const usedPct = Math.round((totalInput / CONTEXT_WINDOW) * 100);
-        parts.push(`${Math.round(total / 1000)}K tokens (${usedPct}%)`);
+      // Context window 百分比：优先用最后一次 assistant 事件的 usage（当前 context 快照）
+      // 回退到 result.usage（会话累计值，可能超过 100%）
+      const contextWindowSize = response.contextWindow || 200000;
+      const snapshotUsage = lastAssistantUsage || (response.usage ? {
+        input_tokens: response.usage.input_tokens,
+        cache_read_input_tokens: response.usage.cache_read_input_tokens,
+        cache_creation_input_tokens: response.usage.cache_creation_input_tokens,
+      } : null);
+      if (snapshotUsage) {
+        const totalInput = snapshotUsage.input_tokens
+          + (snapshotUsage.cache_read_input_tokens || 0)
+          + (snapshotUsage.cache_creation_input_tokens || 0);
+        const usedPct = Math.round((totalInput / contextWindowSize) * 100);
+        parts.push(`${Math.round(totalInput / 1000)}K context (${usedPct}%)`);
       }
       const summary = parts.length > 0 ? ` (${parts.join(', ')})` : '';
 

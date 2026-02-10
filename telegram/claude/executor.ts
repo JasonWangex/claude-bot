@@ -381,12 +381,19 @@ export class ClaudeExecutor {
             ClaudeErrorType.RECOVERABLE
           ));
         } else if (resultEvent) {
+          // 从 modelUsage 中提取 contextWindow
+          let contextWindow: number | undefined;
+          if (resultEvent.modelUsage) {
+            const firstModel = Object.values(resultEvent.modelUsage)[0];
+            if (firstModel) contextWindow = firstModel.contextWindow;
+          }
           resolve({
             session_id: lastSessionId,
             result: resultEvent.result || '',
             usage: resultEvent.usage,
             duration_ms: resultEvent.duration_ms,
             total_cost_usd: resultEvent.total_cost_usd,
+            contextWindow,
           });
         } else if (code !== 0) {
           const errorMsg = `退出码 ${code}\n${stderr}`;
