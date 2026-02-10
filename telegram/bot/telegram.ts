@@ -9,6 +9,7 @@ import { StateManager } from './state.js';
 import { CallbackRegistry } from './callback-registry.js';
 import { CommandHandler, MODEL_OPTIONS } from './commands.js';
 import { MessageHandler } from './handlers.js';
+import { MessageQueue } from './message-queue.js';
 import { ClaudeClient } from '../claude/client.js';
 import { TelegramBotConfig } from '../types/index.js';
 import { checkAuth } from './auth.js';
@@ -25,6 +26,7 @@ export class TelegramBot {
   private callbackRegistry: CallbackRegistry;
   private commandHandler: CommandHandler;
   private messageHandler: MessageHandler;
+  private messageQueue: MessageQueue;
   private claudeClient: ClaudeClient;
   private cliStatsReader: CLIStatsReader;
   private apiServer: ApiServer | null = null;
@@ -65,7 +67,8 @@ export class TelegramBot {
       config.commandTimeout,
       config.maxTurns
     );
-    this.messageHandler = new MessageHandler(this.stateManager, this.claudeClient, this.callbackRegistry);
+    this.messageQueue = new MessageQueue(this.bot.telegram);
+    this.messageHandler = new MessageHandler(this.stateManager, this.claudeClient, this.callbackRegistry, this.messageQueue);
     this.commandHandler = new CommandHandler(this.stateManager, this.claudeClient, this.messageHandler, this.cliStatsReader, this.config);
     this.messageHandler.setCommandHandler(this.commandHandler);
 
@@ -375,6 +378,9 @@ export class TelegramBot {
       await this.apiServer.start();
     }
 
+    // 启动消息队列消费者
+    this.messageQueue.start();
+
     logger.info('Starting long polling...');
     await this.bot.launch({ dropPendingUpdates: true });
     logger.info('Telegram Bot started');
@@ -477,6 +483,8 @@ export class TelegramBot {
       clearTimeout(this.dailyReportTimer);
       this.dailyReportTimer = null;
     }
+    // 停止消息队列消费者
+    this.messageQueue.stop();
     // 关闭 API 服务器
     if (this.apiServer) {
       await this.apiServer.stop();

@@ -5,17 +5,16 @@
  */
 
 import { Context } from 'telegraf';
-import { writeFileSync, unlinkSync, readFileSync } from 'fs';
-import { tmpdir } from 'os';
-import { join } from 'path';
+import { readFileSync } from 'fs';
 import { Markup } from 'telegraf';
 import { StateManager } from './state.js';
 import { CallbackRegistry } from './callback-registry.js';
 import { ClaudeClient } from '../claude/client.js';
-import { StreamEvent, FileToolResult, StructuredPatch, AskUserQuestionInput, ExitPlanModeInput, ClaudeExecutionError, ClaudeErrorType, Session } from '../types/index.js';
+import { MessageQueue } from './message-queue.js';
+import { StreamEvent, StructuredPatch, AskUserQuestionInput, ExitPlanModeInput, ClaudeExecutionError, ClaudeErrorType, Session } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 import { checkAuth } from './auth.js';
-import { sendLongMessage, escapeHtml } from './message-utils.js';
+import { escapeHtml } from './message-utils.js';
 import type { CommandHandler } from './commands.js';
 
 // 工具名称映射
@@ -44,12 +43,14 @@ export class MessageHandler {
   private stateManager: StateManager;
   private claudeClient: ClaudeClient;
   private callbackRegistry: CallbackRegistry;
+  private mq: MessageQueue;
   private commandHandler?: CommandHandler;
 
-  constructor(stateManager: StateManager, claudeClient: ClaudeClient, callbackRegistry: CallbackRegistry) {
+  constructor(stateManager: StateManager, claudeClient: ClaudeClient, callbackRegistry: CallbackRegistry, mq: MessageQueue) {
     this.stateManager = stateManager;
     this.claudeClient = claudeClient;
     this.callbackRegistry = callbackRegistry;
+    this.mq = mq;
   }
 
   setCommandHandler(handler: CommandHandler): void {
@@ -148,24 +149,18 @@ export class MessageHandler {
     this.stateManager.setSessionPlanMode(session.groupId, session.topicId, false);
 
     if (!session.claudeSessionId) {
-      await ctx.reply('❌ 没有活跃的会话上下文，请重新发送 /plan 指令。');
+      await this.mq.send(chatId, session.topicId, '❌ 没有活跃的会话上下文，请重新发送 /plan 指令。');
       return;
     }
 
     // 1. Compact 上下文
-    const compactMsg = await ctx.reply(`🗜️ 正在压缩上下文后执行方案...`);
+    const compactMsgId = await this.mq.send(chatId, session.topicId, `🗜️ 正在压缩上下文后执行方案...`);
     try {
       const lockKey = StateManager.topicLockKey(session.groupId, session.topicId);
       await this.claudeClient.compact(session.claudeSessionId, session.cwd, lockKey);
-      await ctx.telegram.editMessageText(
-        chatId, compactMsg.message_id, undefined,
-        `✅ 上下文已压缩，开始执行方案...`
-      ).catch(() => {});
+      this.mq.edit(chatId, compactMsgId, `✅ 上下文已压缩，开始执行方案...`);
     } catch (error: any) {
-      await ctx.telegram.editMessageText(
-        chatId, compactMsg.message_id, undefined,
-        `⚠️ 压缩失败 (${error.message})，直接执行方案...`
-      ).catch(() => {});
+      this.mq.edit(chatId, compactMsgId, `⚠️ 压缩失败 (${error.message})，直接执行方案...`);
     }
 
     // 2. 以正常模式发送执行指令
@@ -197,8 +192,7 @@ export class MessageHandler {
       Markup.button.callback('⏹ 停止', `stop:${lockKey.slice(0, 20)}`)
     ]]);
     // 发送初始进度消息（附带停止按钮）
-    const progressMsg = await ctx.reply(`⏳${modeLabel} 思考中...`, stopKeyboard);
-    let progressMsgId = progressMsg.message_id;
+    let progressMsgId = await this.mq.send(chatId, session.topicId, `⏳${modeLabel} 思考中...`, { replyMarkup: stopKeyboard.reply_markup });
 
     // 进度状态
     let lastProgressText = `⏳${modeLabel} 思考中...`;
@@ -216,22 +210,13 @@ export class MessageHandler {
     // 收集文件变更
     const fileChanges: FileChange[] = [];
 
-    // 发送文本的 Promise 链，严格串行化防止并发乱序
-    let sendChain: Promise<void> = Promise.resolve();
-    let sendChainLength = 0;
-
-    const queueSend = (task: () => Promise<void>) => {
-      sendChainLength++;
-      sendChain = sendChain.then(task).catch((e) => {
-        logger.debug('Send queue task failed:', e);
-      });
-    };
+    const mq = this.mq;
+    const replyMarkup = stopKeyboard.reply_markup;
 
     // 重建进度消息到底部，确保进度始终可见
     const recreateProgress = async () => {
-      await ctx.telegram.deleteMessage(chatId, progressMsgId).catch(() => {});
-      const newMsg = await ctx.telegram.sendMessage(chatId, lastProgressText, { reply_markup: stopKeyboard.reply_markup, message_thread_id: session.topicId });
-      progressMsgId = newMsg.message_id;
+      mq.delete(chatId, progressMsgId);
+      progressMsgId = await mq.send(chatId, session.topicId, lastProgressText, { replyMarkup });
     };
 
     // 进度回调
@@ -241,25 +226,25 @@ export class MessageHandler {
       if (event.type === 'system' && subtype === 'queued') {
         const pos = (event as any).queue_position || '?';
         const newText = `⏳ 排队中 (第 ${pos} 位)，前一个任务仍在执行...`;
-        ctx.telegram.editMessageText(chatId, progressMsgId, undefined, newText, { reply_markup: stopKeyboard.reply_markup }).catch(() => {});
+        mq.edit(chatId, progressMsgId, newText, { replyMarkup });
         return;
       }
       if (event.type === 'system' && subtype === 'lock_acquired') {
         const newText = `⏳ 思考中...`;
         lastProgressText = newText;
-        ctx.telegram.editMessageText(chatId, progressMsgId, undefined, newText, { reply_markup: stopKeyboard.reply_markup }).catch(() => {});
+        mq.edit(chatId, progressMsgId, newText, { replyMarkup });
         return;
       }
       // 重试/会话重置通知
       if (event.type === 'system' && subtype === 'session_reset') {
         const newText = `⚠️ 会话上下文过长，已自动重置...`;
-        ctx.telegram.editMessageText(chatId, progressMsgId, undefined, newText, { reply_markup: stopKeyboard.reply_markup }).catch(() => {});
+        mq.edit(chatId, progressMsgId, newText, { replyMarkup });
         this.stateManager.clearSessionClaudeId(session.groupId, session.topicId);
         return;
       }
       if (event.type === 'system' && subtype === 'retrying') {
         const newText = `🔄 执行出错，正在重试...`;
-        ctx.telegram.editMessageText(chatId, progressMsgId, undefined, newText, { reply_markup: stopKeyboard.reply_markup }).catch(() => {});
+        mq.edit(chatId, progressMsgId, newText, { replyMarkup });
         return;
       }
       if (event.type === 'system' && subtype === 'reset_state') {
@@ -276,7 +261,7 @@ export class MessageHandler {
       // compact 进度
       if (event.status === 'compacting') {
         const newText = `🗜️ 正在压缩上下文...`;
-        ctx.telegram.editMessageText(chatId, progressMsgId, undefined, newText, { reply_markup: stopKeyboard.reply_markup }).catch(() => {});
+        mq.edit(chatId, progressMsgId, newText, { replyMarkup });
         return;
       }
       if (event.compact_metadata) {
@@ -284,7 +269,7 @@ export class MessageHandler {
       }
       if (event.subtype === 'compact_boundary') {
         const newText = `⏳ 上下文已压缩，继续思考...`;
-        ctx.telegram.editMessageText(chatId, progressMsgId, undefined, newText, { reply_markup: stopKeyboard.reply_markup }).catch(() => {});
+        mq.edit(chatId, progressMsgId, newText, { replyMarkup });
         return;
       }
 
@@ -344,8 +329,7 @@ export class MessageHandler {
             if (newText !== lastProgressText && now - lastEditTime >= 1000) {
               lastProgressText = newText;
               lastEditTime = now;
-              ctx.telegram.editMessageText(chatId, progressMsgId, undefined, newText, { reply_markup: stopKeyboard.reply_markup })
-                .catch(() => {});
+              mq.edit(chatId, progressMsgId, newText, { replyMarkup });
             }
           } else if (block.type === 'text' && block.text) {
             // 抑制 pending interactive 后的文本（模型对 auto-denial 的误导回复）
@@ -357,9 +341,14 @@ export class MessageHandler {
             sentTextCount++;
             lastSentText = textContent;
 
-            queueSend(async () => {
-              await sendLongMessage(ctx, textContent);
+            // 通过消息队列发送，sendLong 自动处理长消息
+            // trackAsync 让 drain 能感知这个悬空 Promise
+            mq.trackAsync(async () => {
+              await mq.sendLong(chatId, session.topicId, textContent);
               await recreateProgress();
+            }).catch((e) => {
+              sentTextCount--;  // 回退计数，确保最终 result 能补发
+              logger.debug('Send text failed:', e);
             });
           }
         }
@@ -389,11 +378,11 @@ export class MessageHandler {
       if (interactiveState.pending) {
         const pi = interactiveState.pending;
 
-        // 先排空已有的发送队列
-        await Promise.race([sendChain, new Promise<void>(r => setTimeout(r, 10000))]);
+        // 先排空消息队列
+        await mq.drain(10000);
 
         // 删除进度消息
-        await ctx.telegram.deleteMessage(chatId, progressMsgId).catch(() => {});
+        mq.delete(chatId, progressMsgId);
 
         // 补发内容：ExitPlanMode 时优先发送 plan 文件完整内容
         let planSent = false;
@@ -403,14 +392,14 @@ export class MessageHandler {
             try {
               const planContent = readFileSync(planFile.filePath, 'utf-8').trim();
               if (planContent) {
-                await sendLongMessage(ctx, planContent);
+                await mq.sendLong(chatId, session.topicId, planContent);
                 planSent = true;
               }
             } catch {}
           }
         }
         if (!planSent && (sentTextCount === 0 || (response.result.trim() && response.result.trim() !== lastSentText))) {
-          await sendLongMessage(ctx, response.result);
+          await mq.sendLong(chatId, session.topicId, response.result);
         }
 
         // 显示 Inline Keyboard 等待用户输入
@@ -427,19 +416,13 @@ export class MessageHandler {
           if (answer === 'compact_execute') {
             // 压缩上下文后再执行
             const updatedSession = this.stateManager.getSession(session.groupId, session.topicId)!;
-            const compactMsg = await ctx.reply(`🗜️ 正在压缩上下文...`);
+            const compactMsgId = await mq.send(chatId, session.topicId, `🗜️ 正在压缩上下文...`);
             try {
               const compactLockKey = response.sessionId || updatedSession.id;
               await this.claudeClient.compact(response.sessionId, updatedSession.cwd, compactLockKey);
-              await ctx.telegram.editMessageText(
-                chatId, compactMsg.message_id, undefined,
-                `✅ 上下文已压缩，开始执行方案...`
-              ).catch(() => {});
+              mq.edit(chatId, compactMsgId, `✅ 上下文已压缩，开始执行方案...`);
             } catch (error: any) {
-              await ctx.telegram.editMessageText(
-                chatId, compactMsg.message_id, undefined,
-                `⚠️ 压缩失败 (${error.message})，直接执行方案...`
-              ).catch(() => {});
+              mq.edit(chatId, compactMsgId, `⚠️ 压缩失败 (${error.message})，直接执行方案...`);
             }
             followUpText = '请按照方案执行实现';
           } else if (answer === 'approve') {
@@ -465,25 +448,21 @@ export class MessageHandler {
       // 正常流程（无交互式工具）
       // ==========================================
 
-      // 等发送队列排空（带超时保护）
-      const DRAIN_TIMEOUT = 30000;
-      await Promise.race([
-        sendChain,
-        new Promise<void>(r => setTimeout(r, DRAIN_TIMEOUT)),
-      ]);
+      // 等消息队列排空
+      await mq.drain();
 
       // 删除进度消息
-      await ctx.telegram.deleteMessage(chatId, progressMsgId).catch(() => {});
+      mq.delete(chatId, progressMsgId);
 
       // 如果流式过程中没有发送过文本，或最终 result 与最后发送的文本不同，补发 result
       if (sentTextCount === 0 || (response.result.trim() && response.result.trim() !== lastSentText)) {
-        await sendLongMessage(ctx, response.result);
+        await mq.sendLong(chatId, session.topicId, response.result);
       }
 
       // 有文件变更时，生成可视化 HTML diff 附件发送
       if (fileChanges.length > 0) {
         const htmlContent = this.buildHtmlDiffReport(fileChanges);
-        await this.sendFileAttachment(ctx, htmlContent, 'changes.html',
+        await mq.sendDocument(chatId, session.topicId, htmlContent, 'changes.html',
           `📝 ${fileChanges.length} 个文件变更`);
       }
 
@@ -506,23 +485,20 @@ export class MessageHandler {
       if (mode === 'plan') {
         // Plan mode: 标记等待确认
         this.stateManager.setSessionPlanMode(session.groupId, session.topicId, true);
-        await ctx.reply(
+        await mq.send(chatId, session.topicId,
           `📋 方案已生成${summary}\n\n` +
           `回复 "ok" 或 "确认" 将自动压缩上下文并执行实现。\n` +
           `回复其他内容继续讨论方案。`
         );
       } else {
-        await ctx.reply(`✅ 完成${summary}`);
+        await mq.send(chatId, session.topicId, `✅ 完成${summary}`);
       }
 
     } catch (error: any) {
       // ABORTED: 用户主动停止，不显示错误
       if (error instanceof ClaudeExecutionError && error.errorType === ClaudeErrorType.ABORTED) {
         logger.info(`[${session.name}] Task aborted by user`);
-        await ctx.telegram.editMessageText(
-          chatId, progressMsgId, undefined,
-          `⏹ 已停止`
-        ).catch(() => {});
+        mq.edit(chatId, progressMsgId, `⏹ 已停止`);
         return;
       }
 
@@ -539,10 +515,7 @@ export class MessageHandler {
         }
       }
 
-      await ctx.telegram.editMessageText(
-        chatId, progressMsgId, undefined,
-        `❌ 发生错误:\n${error.message}\n\n${hint}`
-      ).catch(() => {});
+      mq.edit(chatId, progressMsgId, `❌ 发生错误:\n${error.message}\n\n${hint}`);
     }
 
     break;
@@ -923,16 +896,9 @@ document.querySelectorAll('.code code[class*="language-"]').forEach(el => {
   }
 
   private async sendFileAttachment(ctx: Context, content: string, filename: string, caption: string): Promise<void> {
-    const tmpFile = join(tmpdir(), `claude-${Date.now()}-${filename}`);
-    try {
-      writeFileSync(tmpFile, content, 'utf-8');
-      await ctx.replyWithDocument(
-        { source: tmpFile, filename },
-        { caption }
-      );
-    } finally {
-      try { unlinkSync(tmpFile); } catch {}
-    }
+    const chatId = ctx.chat!.id;
+    const topicId = (ctx.message as any)?.message_thread_id as number | undefined;
+    await this.mq.sendDocument(chatId, topicId, content, filename, caption);
   }
 
 }
