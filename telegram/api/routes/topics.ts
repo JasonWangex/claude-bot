@@ -116,6 +116,7 @@ export const createTopic: RouteHandler = async (req, res, _params, deps) => {
 
     const newTopicId = forumTopic.message_thread_id;
     deps.stateManager.getOrCreateSession(groupId, newTopicId, { name: topicName, cwd });
+    deps.stateManager.setSessionIcon(groupId, newTopicId, forumTopic.icon_color);
 
     sendJson(res, 201, {
       ok: true,
@@ -328,15 +329,23 @@ export const forkTopic: RouteHandler = async (req, res, params, deps) => {
     await createWorktree(session.cwd, worktreeDir, branchName);
 
     const newTopicName = `${session.name}/${branchName}`;
-    const forumTopic = await deps.telegram.createForumTopic(groupId, newTopicName, {
-      icon_color: 0x6FB9F0,
-    });
+    const rootSession = deps.stateManager.getRootSession(groupId, topicId);
+    const iconOpts: Record<string, any> = {};
+    if (rootSession?.iconCustomEmojiId) {
+      iconOpts.icon_custom_emoji_id = rootSession.iconCustomEmojiId;
+    } else if (rootSession?.iconColor != null) {
+      iconOpts.icon_color = rootSession.iconColor;
+    } else {
+      iconOpts.icon_color = 0x6FB9F0;
+    }
+    const forumTopic = await deps.telegram.createForumTopic(groupId, newTopicName, iconOpts);
 
     const newTopicId = forumTopic.message_thread_id;
     deps.stateManager.getOrCreateSession(groupId, newTopicId, {
       name: newTopicName,
       cwd: worktreeDir,
     });
+    deps.stateManager.setSessionIcon(groupId, newTopicId, forumTopic.icon_color, forumTopic.icon_custom_emoji_id);
     deps.stateManager.setSessionForkInfo(groupId, newTopicId, topicId, branchName);
 
     sendJson(res, 201, {

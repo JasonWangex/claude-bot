@@ -418,6 +418,31 @@ export class StateManager {
   }
 
   /**
+   * 设置 Session 的 icon 信息
+   */
+  setSessionIcon(groupId: number, topicId: number, iconColor?: number, iconCustomEmojiId?: string): void {
+    const session = this.getSession(groupId, topicId);
+    if (!session) return;
+    session.iconColor = iconColor;
+    session.iconCustomEmojiId = iconCustomEmojiId;
+    this.scheduleSave();
+  }
+
+  /**
+   * 沿 parentTopicId 链向上查找 root Session
+   */
+  getRootSession(groupId: number, topicId: number): Session | undefined {
+    let session = this.getSession(groupId, topicId);
+    if (!session) return undefined;
+    while (session.parentTopicId != null) {
+      const parent = this.getSession(groupId, session.parentTopicId);
+      if (!parent) break;
+      session = parent;
+    }
+    return session;
+  }
+
+  /**
    * 清除 Session 的 parentTopicId（提升为顶层 Topic）
    */
   clearSessionParent(groupId: number, topicId: number): void {
