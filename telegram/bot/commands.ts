@@ -7,8 +7,9 @@ import { Markup } from 'telegraf';
 import { StateManager } from './state.js';
 import { MessageHandler } from './handlers.js';
 import { ClaudeClient } from '../claude/client.js';
-import { escapeHtml } from './message-utils.js';
+import { escapeHtml, sendLongMessageDirect } from './message-utils.js';
 import { StreamEvent, TelegramBotConfig } from '../types/index.js';
+import { spawn } from 'child_process';
 import { stat, mkdir, readFile } from 'fs/promises';
 import { resolve, join } from 'path';
 import { homedir } from 'os';
@@ -2039,7 +2040,66 @@ export class CommandHandler {
   }
 
   /**
-   * /qdev - 快速创建开发分支和任务（临时 Claude 进程）
+   * 启动独立的 claude -p 非交互进程执行 qdev，用完即弃
+   * 不占用 topic session/lock，不写入 messageHistory，进程结束自动销毁
+   */
+  private spawnQdevProcess(
+    prompt: string,
+    cwd: string,
+    telegram: Context['telegram'],
+    chatId: number,
+    topicId: number,
+  ): void {
+    const child = spawn('claude', [
+      '-p', prompt,
+      '--output-format', 'json',
+      '--dangerously-skip-permissions',
+      '--allowedTools', 'Bash',
+      '--max-turns', '15',
+      '--no-session-persistence',
+    ], {
+      cwd,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+    child.stdout!.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
+    child.stderr!.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+
+    child.on('exit', async (code: number | null) => {
+      try {
+        if (code === 0) {
+          // --output-format json → { result: "..." }
+          let result: string;
+          try {
+            result = JSON.parse(stdout).result || stdout;
+          } catch {
+            result = stdout.trim();
+          }
+          if (result) {
+            await sendLongMessageDirect(telegram, chatId, topicId, result);
+          }
+        } else {
+          const errMsg = stderr.trim() || `退出码 ${code}`;
+          await telegram.sendMessage(chatId, `❌ qdev 失败: ${errMsg}`, {
+            message_thread_id: topicId,
+          });
+        }
+      } catch (e: any) {
+        logger.error('qdev result delivery failed:', e.message);
+      }
+    });
+
+    child.on('error', (err: Error) => {
+      telegram.sendMessage(chatId, `❌ qdev 启动失败: ${err.message}`, {
+        message_thread_id: topicId,
+      }).catch(() => {});
+    });
+  }
+
+  /**
+   * /qdev - 快速创建开发分支和任务（独立非交互 Claude 进程）
    */
   async handleQdev(ctx: Context): Promise<void> {
     await this.requireTopic(ctx, async (session, topicId) => {
@@ -2067,19 +2127,10 @@ export class CommandHandler {
       const prompt = (bodyMatch ? bodyMatch[1] : skillContent)
         .replace('{{SKILL_ARGS}}', description);
 
-      const tempLockKey = `qdev-${Date.now()}`;
-
       await ctx.reply(`🚀 正在后台执行 qdev: ${description}`);
 
-      // Fire-and-forget: 走完整流式进度路径（onProgress + 完成摘要）
-      this.messageHandler.sendChatByIds(chatId, topicId, prompt)
-      .catch(async (error: any) => {
-        logger.error('qdev error:', error.message);
-        await ctx.telegram.sendMessage(chatId, `❌ qdev 失败: ${error.message}`, {
-          message_thread_id: topicId,
-          disable_notification: false,
-        }).catch(() => {});
-      });
+      // Fire-and-forget: 独立 claude -p 进程，不占用当前 topic 的 session/lock
+      this.spawnQdevProcess(prompt, session.cwd, ctx.telegram, chatId, topicId);
     });
   }
 }
