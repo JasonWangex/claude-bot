@@ -94,7 +94,7 @@ export async function sendLongMessage(ctx: Context, text: string): Promise<void>
       writeFileSync(tmpFile, text, 'utf-8');
       await ctx.replyWithDocument(
         { source: tmpFile, filename: 'response.md' },
-        { caption: text.slice(0, 1000) + (text.length > 1000 ? '...' : '') }
+        { caption: text.slice(0, 1000) + (text.length > 1000 ? '...' : ''), disable_notification: true }
       );
     } finally {
       try { unlinkSync(tmpFile); } catch {}
@@ -104,10 +104,10 @@ export async function sendLongMessage(ctx: Context, text: string): Promise<void>
 
   const html = markdownToHtml(text);
   try {
-    await ctx.reply(html, { parse_mode: 'HTML' });
+    await ctx.reply(html, { parse_mode: 'HTML', disable_notification: true });
   } catch {
     logger.debug('HTML parsing failed, using plain text');
-    await ctx.reply(text, { parse_mode: undefined });
+    await ctx.reply(text, { parse_mode: undefined, disable_notification: true });
   }
 }
 
@@ -128,6 +128,7 @@ export async function sendLongMessageDirect(
       await telegram.sendDocument(chatId, { source: tmpFile, filename: 'response.md' }, {
         caption: text.slice(0, 1000) + (text.length > 1000 ? '...' : ''),
         message_thread_id: topicId,
+        disable_notification: true,
       });
     } finally {
       try { unlinkSync(tmpFile); } catch {}
@@ -137,9 +138,9 @@ export async function sendLongMessageDirect(
 
   const html = markdownToHtml(text);
   try {
-    await telegram.sendMessage(chatId, html, { parse_mode: 'HTML', message_thread_id: topicId });
+    await telegram.sendMessage(chatId, html, { parse_mode: 'HTML', message_thread_id: topicId, disable_notification: true });
   } catch {
     logger.debug('HTML parsing failed, using plain text');
-    await telegram.sendMessage(chatId, text, { message_thread_id: topicId });
+    await telegram.sendMessage(chatId, text, { message_thread_id: topicId, disable_notification: true });
   }
 }

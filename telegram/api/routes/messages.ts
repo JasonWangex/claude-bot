@@ -34,6 +34,7 @@ export const sendMessage: RouteHandler = async (req, res, params, deps) => {
     // 1. 发送用户消息到 Telegram Topic（可见）
     await deps.telegram.sendMessage(groupId, body.text, {
       message_thread_id: topicId,
+      disable_notification: true,
     });
   } catch (error: any) {
     sendJson(res, 500, { ok: false, error: `Failed to send message: ${error.message}` });

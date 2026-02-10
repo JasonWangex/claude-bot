@@ -95,6 +95,29 @@ export class TelegramBot {
   }
 
   private registerHandlers(): void {
+    // 全局中间件：所有 ctx.reply / ctx.replyWithDocument 默认静默发送
+    this.bot.use((ctx, next) => {
+      const origReply = ctx.reply.bind(ctx);
+      ctx.reply = (text: string, extra?: any) => {
+        const opts = extra ?? {};
+        if (opts.disable_notification === undefined) {
+          opts.disable_notification = true;
+        }
+        return origReply(text, opts);
+      };
+
+      const origReplyDoc = ctx.replyWithDocument.bind(ctx);
+      ctx.replyWithDocument = (doc: any, extra?: any) => {
+        const opts = extra ?? {};
+        if (opts.disable_notification === undefined) {
+          opts.disable_notification = true;
+        }
+        return origReplyDoc(doc, opts);
+      };
+
+      return next();
+    });
+
     // General 话题命令
     this.bot.command('login', (ctx) => this.commandHandler.handleLogin(ctx));
     this.bot.command('start', (ctx) => this.commandHandler.handleStart(ctx));
@@ -434,7 +457,7 @@ export class TelegramBot {
 
       const report = this.usageReader.formatReport(yesterday, '📊 昨日使用报告');
 
-      await this.bot.telegram.sendMessage(authorizedChatId, report, { parse_mode: 'HTML' });
+      await this.bot.telegram.sendMessage(authorizedChatId, report, { parse_mode: 'HTML', disable_notification: true });
       logger.info('Daily report sent successfully');
     } catch (error: any) {
       logger.error('Failed to send daily report:', error.message);
@@ -464,10 +487,12 @@ export class TelegramBot {
           }
           await this.bot.telegram.sendMessage(authorizedChatId, `✅ 完成 (${parts.join(', ')})`, {
             message_thread_id: info.topicId,
+            disable_notification: false,
           });
         } else if (info.status === 'failed') {
           await this.bot.telegram.sendMessage(authorizedChatId, '⚠️ Bot 重启期间任务未能完成', {
             message_thread_id: info.topicId,
+            disable_notification: false,
           });
         }
         // 'running' 状态由 monitorOrphanedProcess 继续处理

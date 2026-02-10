@@ -488,10 +488,11 @@ export class MessageHandler {
         await mq.send(chatId, session.topicId,
           `📋 方案已生成${summary}\n\n` +
           `回复 "ok" 或 "确认" 将自动压缩上下文并执行实现。\n` +
-          `回复其他内容继续讨论方案。`
+          `回复其他内容继续讨论方案。`,
+          { silent: false }
         );
       } else {
-        await mq.send(chatId, session.topicId, `✅ 完成${summary}`);
+        await mq.send(chatId, session.topicId, `✅ 完成${summary}`, { silent: false });
       }
 
     } catch (error: any) {
@@ -837,9 +838,9 @@ document.querySelectorAll('.code code[class*="language-"]').forEach(el => {
 
     let msg;
     try {
-      msg = await ctx.reply(questionText, { parse_mode: 'HTML', ...keyboard });
+      msg = await ctx.reply(questionText, { parse_mode: 'HTML', disable_notification: false, ...keyboard });
     } catch {
-      msg = await ctx.reply(questionText, keyboard);
+      msg = await ctx.reply(questionText, { disable_notification: false, ...keyboard });
     }
 
     // 注册到 CallbackRegistry 并等待用户响应
@@ -880,9 +881,9 @@ document.querySelectorAll('.code code[class*="language-"]').forEach(el => {
 
     let msg;
     try {
-      msg = await ctx.reply(text, { parse_mode: 'HTML', ...keyboard });
+      msg = await ctx.reply(text, { parse_mode: 'HTML', disable_notification: false, ...keyboard });
     } catch {
-      msg = await ctx.reply(text, keyboard);
+      msg = await ctx.reply(text, { disable_notification: false, ...keyboard });
     }
 
     const promise = this.callbackRegistry.register(toolUseId, chatId, topicId, msg.message_id, 'ExitPlanMode');

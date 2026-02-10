@@ -657,6 +657,7 @@ export class CommandHandler {
           {
             message_thread_id: newTopicId,
             parse_mode: 'HTML',
+            disable_notification: true,
           }
         );
 
@@ -1938,7 +1939,7 @@ export class CommandHandler {
         `工作目录: <code>${escapeHtml(cwd)}</code>\n` +
         `${dirResult.created ? '📁 目录已自动创建\n' : ''}\n` +
         `直接发送消息即可开始对话。`,
-        { message_thread_id: newTopicId, parse_mode: 'HTML' }
+        { message_thread_id: newTopicId, parse_mode: 'HTML', disable_notification: true }
       );
 
       // 编辑提示消息为确认
@@ -2054,7 +2055,7 @@ export class CommandHandler {
         `工作目录: <code>${escapeHtml(worktreeDir)}</code>\n` +
         `父 Topic: <b>${escapeHtml(session.name)}</b>\n\n` +
         `直接发送消息即可开始对话。`,
-        { message_thread_id: newTopicId, parse_mode: 'HTML' }
+        { message_thread_id: newTopicId, parse_mode: 'HTML', disable_notification: true }
       );
 
       // 编辑提示消息
@@ -2118,11 +2119,13 @@ export class CommandHandler {
       }).then(async (response) => {
         await ctx.telegram.sendMessage(chatId, `✅ qdev 完成:\n${response.result.slice(0, 4000)}`, {
           message_thread_id: topicId,
+          disable_notification: false,
         });
       }).catch(async (error: any) => {
         logger.error('qdev error:', error.message);
         await ctx.telegram.sendMessage(chatId, `❌ qdev 失败: ${error.message}`, {
           message_thread_id: topicId,
+          disable_notification: false,
         }).catch(() => {});
       });
     });

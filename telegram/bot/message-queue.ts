@@ -21,6 +21,7 @@ interface SendOp {
   options?: {
     parseMode?: 'HTML' | 'Markdown';
     replyMarkup?: any;
+    silent?: boolean;  // false = 发出通知；默认 true（静默）
   };
   resolve: (messageId: number) => void;
   reject: (error: Error) => void;
@@ -33,6 +34,7 @@ interface SendDocumentOp {
   content: string;
   filename: string;
   caption?: string;
+  silent?: boolean;  // false = 发出通知；默认 true（静默）
   resolve: (messageId: number) => void;
   reject: (error: Error) => void;
 }
@@ -82,6 +84,7 @@ export class MessageQueue {
   send(chatId: number, topicId: number | undefined, text: string, options?: {
     parseMode?: 'HTML' | 'Markdown';
     replyMarkup?: any;
+    silent?: boolean;
   }): Promise<number> {
     return new Promise((resolve, reject) => {
       this.queue.push({ type: 'send', chatId, topicId, text, options, resolve, reject });
@@ -91,9 +94,9 @@ export class MessageQueue {
   /**
    * 发送文档附件，返回 messageId
    */
-  sendDocument(chatId: number, topicId: number | undefined, content: string, filename: string, caption?: string): Promise<number> {
+  sendDocument(chatId: number, topicId: number | undefined, content: string, filename: string, caption?: string, options?: { silent?: boolean }): Promise<number> {
     return new Promise((resolve, reject) => {
-      this.queue.push({ type: 'sendDocument', chatId, topicId, content, filename, caption, resolve, reject });
+      this.queue.push({ type: 'sendDocument', chatId, topicId, content, filename, caption, silent: options?.silent, resolve, reject });
     });
   }
 
@@ -103,10 +106,11 @@ export class MessageQueue {
    */
   sendLong(chatId: number, topicId: number | undefined, text: string, options?: {
     replyMarkup?: any;
+    silent?: boolean;
   }): Promise<number> {
     if (text.length > 4000) {
       const caption = text.slice(0, 1000);
-      return this.sendDocument(chatId, topicId, text, 'response.md', caption);
+      return this.sendDocument(chatId, topicId, text, 'response.md', caption, { silent: options?.silent });
     }
 
     const html = markdownToHtml(text);
@@ -115,7 +119,7 @@ export class MessageQueue {
         type: 'send', chatId, topicId,
         text: html,
         originalText: text,  // 保存原始文本用于 HTML 回退
-        options: { parseMode: 'HTML', replyMarkup: options?.replyMarkup },
+        options: { parseMode: 'HTML', replyMarkup: options?.replyMarkup, silent: options?.silent },
         resolve, reject,
       });
     });
@@ -235,12 +239,14 @@ export class MessageQueue {
   }
 
   private async executeSend(op: SendOp): Promise<void> {
+    const disableNotification = op.options?.silent !== false;  // 默认静默
     for (let attempt = 0; attempt <= this.MAX_RETRY; attempt++) {
       try {
         const msg = await this.telegram.sendMessage(op.chatId, op.text, {
           parse_mode: op.options?.parseMode,
           reply_markup: op.options?.replyMarkup,
           message_thread_id: op.topicId,
+          disable_notification: disableNotification,
         });
         op.resolve(msg.message_id);
         return;
@@ -255,6 +261,7 @@ export class MessageQueue {
             const msg = await this.telegram.sendMessage(op.chatId, op.originalText, {
               reply_markup: op.options?.replyMarkup,
               message_thread_id: op.topicId,
+              disable_notification: disableNotification,
             });
             op.resolve(msg.message_id);
             return;
@@ -272,6 +279,7 @@ export class MessageQueue {
   }
 
   private async executeSendDocument(op: SendDocumentOp): Promise<void> {
+    const disableNotification = op.silent !== false;  // 默认静默
     const tmpFile = join(tmpdir(), `claude-mq-${Date.now()}-${op.filename}`);
     try {
       writeFileSync(tmpFile, op.content, 'utf-8');
@@ -282,6 +290,7 @@ export class MessageQueue {
             {
               caption: op.caption,
               message_thread_id: op.topicId,
+              disable_notification: disableNotification,
             },
           );
           op.resolve(msg.message_id);
