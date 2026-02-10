@@ -1999,7 +1999,7 @@ export class CommandHandler {
       const repoName = await getRepoName(session.cwd);
 
       // 创建 worktree 目录
-      const worktreeDir = resolve(this.config.worktreesDir, `${repoName}_${branchName}`);
+      const worktreeDir = resolve(this.config.worktreesDir, `${repoName}_${branchName.replace(/\//g, '_')}`);
       await mkdir(this.config.worktreesDir, { recursive: true });
 
       // 创建 worktree
