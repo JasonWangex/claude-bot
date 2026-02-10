@@ -121,25 +121,25 @@ export function buildChangesHtml(changes: FileChange[]): string {
       const lines = c.content.split('\n');
       diffRows = lines.map((line, j) => {
         const ln = j + 1;
-        return `<tr class="add"><td class="ln empty"></td><td class="ln">${ln}</td><td class="code">+${e(line)}</td></tr>`;
+        return `<tr class="add"><td class="ln">${ln}</td><td class="code">+${e(line)}</td></tr>`;
       }).join('\n');
     } else if (c.patches?.length) {
       for (const p of c.patches) {
         // hunk header
-        diffRows += `<tr class="hunk"><td colspan="3">@@ -${p.oldStart},${p.oldLines} +${p.newStart},${p.newLines} @@</td></tr>\n`;
+        diffRows += `<tr class="hunk"><td colspan="2">@@ -${p.oldStart},${p.oldLines} +${p.newStart},${p.newLines} @@</td></tr>\n`;
         let oldLn = p.oldStart;
         let newLn = p.newStart;
         for (const line of p.lines) {
           const prefix = line[0];
           const content = line.slice(1);
           if (prefix === '+') {
-            diffRows += `<tr class="add"><td class="ln empty"></td><td class="ln">${newLn}</td><td class="code">+${e(content)}</td></tr>\n`;
+            diffRows += `<tr class="add"><td class="ln">${newLn}</td><td class="code">+${e(content)}</td></tr>\n`;
             newLn++;
           } else if (prefix === '-') {
-            diffRows += `<tr class="del"><td class="ln">${oldLn}</td><td class="ln empty"></td><td class="code">-${e(content)}</td></tr>\n`;
+            diffRows += `<tr class="del"><td class="ln">${oldLn}</td><td class="code">-${e(content)}</td></tr>\n`;
             oldLn++;
           } else {
-            diffRows += `<tr class="ctx"><td class="ln">${oldLn}</td><td class="ln">${newLn}</td><td class="code"> ${e(content)}</td></tr>\n`;
+            diffRows += `<tr class="ctx"><td class="ln">${newLn}</td><td class="code"> ${e(content)}</td></tr>\n`;
             oldLn++;
             newLn++;
           }
@@ -203,7 +203,6 @@ body { background: var(--bg); color: var(--fg); font-family: -apple-system, Blin
 .diff { width: 100%; border-collapse: collapse; font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace; font-size: 12px; table-layout: fixed; }
 .diff td { padding: 1px 10px; vertical-align: top; }
 .diff .ln { width: 50px; min-width: 50px; text-align: right; color: var(--ln-fg); user-select: none; }
-.diff .ln.empty { background: transparent; }
 .diff .code { white-space: pre-wrap; word-break: break-all; }
 .diff tr.add { background: var(--add-bg); }
 .diff tr.add .code { color: var(--add-fg); }

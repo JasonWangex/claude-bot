@@ -87,6 +87,7 @@ export class MessageQueue {
   private processing = false;
   private pendingAsyncOps = 0;  // 追踪 sendLong+recreateProgress 等悬空 Promise
   private telegram: Telegram;
+  private last429NotifyTime = 0;  // 429 通知防抖时间戳
 
   // Per-topic 缓冲区
   private topicBuffers = new Map<string, TopicBuffer>();
@@ -96,8 +97,9 @@ export class MessageQueue {
   private readonly MIN_OP_INTERVAL = 35;   // 操作间最小间隔 35ms
   private readonly MAX_RETRY = 2;          // 429 重试次数
   private readonly TOPIC_BUFFER_WINDOW = 15000;  // 15s 缓冲窗口
+  private readonly RATE_LIMIT_NOTIFY_COOLDOWN = 60000;  // 429 通知冷却 60s
   private readonly MERGE_SEPARATOR = '\n\n───\n\n';
-  private readonly MAX_MERGE_LENGTH = 4000;      // 单条合并消息上限
+  private readonly MAX_MERGE_LENGTH = 2000;      // 单条合并消息上限
 
   constructor(telegram: Telegram) {
     this.telegram = telegram;
@@ -441,7 +443,7 @@ export class MessageQueue {
         return;
       } catch (error: any) {
         if (this.is429(error) && attempt < this.MAX_RETRY) {
-          await this.backoff429(error);
+          await this.backoff429(error, op.chatId);
           continue;
         }
         // entities 或 HTML 解析失败 → 用纯文本重发
@@ -487,7 +489,7 @@ export class MessageQueue {
           return;
         } catch (error: any) {
           if (this.is429(error) && attempt < this.MAX_RETRY) {
-            await this.backoff429(error);
+            await this.backoff429(error, op.chatId);
             continue;
           }
           logger.error('MessageQueue sendDocument failed:', error.message);
@@ -512,7 +514,7 @@ export class MessageQueue {
         return;
       } catch (error: any) {
         if (this.is429(error) && attempt < this.MAX_RETRY) {
-          await this.backoff429(error);
+          await this.backoff429(error, op.chatId);
           continue;
         }
         // 400: message not modified / message not found → 静默
@@ -537,7 +539,7 @@ export class MessageQueue {
         return;
       } catch (error: any) {
         if (this.is429(error) && attempt < this.MAX_RETRY) {
-          await this.backoff429(error);
+          await this.backoff429(error, op.chatId);
           continue;
         }
         // 静默处理
@@ -563,10 +565,22 @@ export class MessageQueue {
     return error?.response?.error_code === 403 || error?.code === 403;
   }
 
-  private async backoff429(error: any): Promise<void> {
+  private async backoff429(error: any, chatId?: number): Promise<void> {
     const retryAfter = error?.response?.parameters?.retry_after || 1;
     const delayMs = retryAfter * 1000;
     logger.warn(`MessageQueue 429 rate limited, backing off ${retryAfter}s`);
+
+    // 向 General topic 发送防抖通知
+    const now = Date.now();
+    if (chatId && now - this.last429NotifyTime > this.RATE_LIMIT_NOTIFY_COOLDOWN) {
+      this.last429NotifyTime = now;
+      this.telegram.sendMessage(
+        chatId,
+        `⚠️ Telegram API rate limited, backing off ${retryAfter}s`,
+        { disable_notification: true },
+      ).catch(() => {});  // 通知本身失败不影响主流程
+    }
+
     await this.sleep(delayMs);
   }
 
