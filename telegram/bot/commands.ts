@@ -460,7 +460,7 @@ export class CommandHandler {
         `Topic: <code>${escapeHtml(session.name)}</code>\n` +
         `工作目录: <code>${escapeHtml(session.cwd)}</code>\n` +
         `模型: ${escapeHtml(modelLabel)}\n` +
-        `Claude 上下文: ${session.claudeSessionId ? `<code>${escapeHtml(session.claudeSessionId.slice(0, 8))}...</code>` : '(新会话)'}\n` +
+        `Claude 上下文: ${session.claudeSessionId ? `<code>${escapeHtml(session.claudeSessionId)}</code>` : '(新会话)'}\n` +
         `创建时间: ${created}\n` +
         `最近活动: ${lastMsgTime}\n` +
         `消息记录: ${session.messageHistory.length} 条`,
