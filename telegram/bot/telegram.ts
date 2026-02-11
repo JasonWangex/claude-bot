@@ -66,7 +66,7 @@ export class TelegramBot {
     this.messageQueue = new MessageQueue(this.bot.telegram);
     this.messageHandler = new MessageHandler(this.stateManager, this.claudeClient, this.callbackRegistry, this.messageQueue);
     this.messageHandler.setErrorReporter((chatId, topicId, source, error) => this.sendErrorToGeneral(chatId, topicId, source, error));
-    this.commandHandler = new CommandHandler(this.stateManager, this.claudeClient, this.messageHandler, this.messageQueue, this.config);
+    this.commandHandler = new CommandHandler(this.stateManager, this.claudeClient, this.messageHandler, this.messageQueue, this.config, this.bot.telegram);
     this.messageHandler.setCommandHandler(this.commandHandler);
 
     // Goal Orchestrator（自动调度引擎）

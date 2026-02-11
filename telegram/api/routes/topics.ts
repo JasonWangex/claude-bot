@@ -20,9 +20,7 @@ import {
   ensureProjectDir,
   resolveCustomPath,
 } from '../../utils/topic-path.js';
-import { isGitRepo, getRepoName, createWorktree } from '../../utils/git-utils.js';
-import { resolve } from 'path';
-import { mkdir } from 'fs/promises';
+import { forkTopicCore } from '../../utils/fork-topic.js';
 
 function sessionToSummary(s: Session, children: TopicSummary[]): TopicSummary {
   return {
@@ -316,45 +314,20 @@ export const forkTopic: RouteHandler = async (req, res, params, deps) => {
     return;
   }
 
-  const gitRepo = await isGitRepo(session.cwd);
-  if (!gitRepo) {
-    sendJson(res, 400, { ok: false, error: `${session.cwd} is not a git repository` });
-    return;
-  }
-
   try {
-    const repoName = await getRepoName(session.cwd);
-    const worktreeDir = resolve(deps.config.worktreesDir, `${repoName}_${branchName}`);
-    await mkdir(deps.config.worktreesDir, { recursive: true });
-    await createWorktree(session.cwd, worktreeDir, branchName);
-
-    const newTopicName = `${session.name}/${branchName}`;
-    const rootSession = deps.stateManager.getRootSession(groupId, topicId);
-    const iconOpts: Record<string, any> = {};
-    if (rootSession?.iconCustomEmojiId) {
-      iconOpts.icon_custom_emoji_id = rootSession.iconCustomEmojiId;
-    } else if (rootSession?.iconColor != null) {
-      iconOpts.icon_color = rootSession.iconColor;
-    } else {
-      iconOpts.icon_color = 0x6FB9F0;
-    }
-    const forumTopic = await deps.telegram.createForumTopic(groupId, newTopicName, iconOpts);
-
-    const newTopicId = forumTopic.message_thread_id;
-    deps.stateManager.getOrCreateSession(groupId, newTopicId, {
-      name: newTopicName,
-      cwd: worktreeDir,
+    const result = await forkTopicCore(groupId, topicId, branchName, {
+      stateManager: deps.stateManager,
+      telegram: deps.telegram,
+      worktreesDir: deps.config.worktreesDir,
     });
-    deps.stateManager.setSessionIcon(groupId, newTopicId, forumTopic.icon_color, forumTopic.icon_custom_emoji_id);
-    deps.stateManager.setSessionForkInfo(groupId, newTopicId, topicId, branchName);
 
     sendJson(res, 201, {
       ok: true,
       data: {
-        topic_id: newTopicId,
-        name: newTopicName,
-        branch: branchName,
-        cwd: worktreeDir,
+        topic_id: result.topicId,
+        name: result.topicName,
+        branch: result.branchName,
+        cwd: result.cwd,
         parent_topic_id: topicId,
       },
     });

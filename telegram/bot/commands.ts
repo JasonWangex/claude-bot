@@ -2,7 +2,7 @@
  * Telegram Bot 命令处理器（Group + Forum Topics 模式）
  */
 
-import { Context } from 'telegraf';
+import { Context, Telegram } from 'telegraf';
 import { Markup } from 'telegraf';
 import { StateManager } from './state.js';
 import { MessageHandler } from './handlers.js';
@@ -25,6 +25,7 @@ import {
   ensureProjectDir,
   resolveCustomPath
 } from '../utils/topic-path.js';
+import { forkTopicCore } from '../utils/fork-topic.js';
 
 export const MODEL_OPTIONS = [
   { id: 'claude-sonnet-4-5-20250929', label: 'Sonnet 4.5' },
@@ -45,16 +46,18 @@ export class CommandHandler {
   private messageHandler: MessageHandler;
   private mq: MessageQueue;
   private config: TelegramBotConfig;
+  private telegram: Telegram;
 
   // General 话题文本收集状态 (groupId → PendingTextInput)
   private pendingTextInput: Map<number, PendingTextInput> = new Map();
 
-  constructor(stateManager: StateManager, claudeClient: ClaudeClient, messageHandler: MessageHandler, mq: MessageQueue, config: TelegramBotConfig) {
+  constructor(stateManager: StateManager, claudeClient: ClaudeClient, messageHandler: MessageHandler, mq: MessageQueue, config: TelegramBotConfig, telegram: Telegram) {
     this.stateManager = stateManager;
     this.claudeClient = claudeClient;
     this.messageHandler = messageHandler;
     this.mq = mq;
     this.config = config;
+    this.telegram = telegram;
   }
 
   private getAccessToken(): string {
@@ -1856,7 +1859,28 @@ export class CommandHandler {
   }
 
   /**
-   * /qdev - 快速创建开发分支和任务（独立非交互 Claude 进程）
+   * 用 claude -p 生成分支名（极简调用，1 turn，15s 超时）
+   */
+  private async generateBranchName(description: string): Promise<string> {
+    const execFileAsync = promisify(execFileCb);
+    const prompt = `Translate the following task description into a git branch name in <type>/<kebab-case> format. Type must be one of: feat, fix, refactor, perf, chore, docs, test. Output ONLY the branch name, nothing else.\n\nTask: ${description}`;
+    try {
+      const { stdout } = await execFileAsync('claude', [
+        '-p', prompt,
+        '--output-format', 'text',
+        '--max-turns', '1',
+        '--model', 'claude-sonnet-4-5-20250929',
+      ], { timeout: 15000 });
+      const name = stdout.trim();
+      if (/^[\w]+\/[\w][\w-]*$/.test(name)) {
+        return name;
+      }
+    } catch { /* fall through */ }
+    return `dev/task-${Date.now().toString(36)}`;
+  }
+
+  /**
+   * /qdev - 快速创建开发分支和任务（原生实现）
    */
   async handleQdev(ctx: Context): Promise<void> {
     await this.requireTopic(ctx, async (session, topicId) => {
@@ -1869,25 +1893,50 @@ export class CommandHandler {
       }
 
       const chatId = ctx.chat!.id;
+      const progressMsg = await ctx.reply('🚀 正在创建开发任务...');
+      const editProgress = (text: string) =>
+        ctx.telegram.editMessageText(chatId, progressMsg.message_id, undefined, text).catch(() => {});
 
-      const skillPath = join(homedir(), '.claude/skills/qdev/SKILL.md');
-      let skillContent: string;
       try {
-        skillContent = await readFile(skillPath, 'utf-8');
-      } catch {
-        await ctx.reply('❌ 未找到 qdev skill 文件: ~/.claude/skills/qdev/SKILL.md');
-        return;
+        // 1. 生成分支名
+        await editProgress('🚀 正在生成分支名...');
+        const branchName = await this.generateBranchName(description);
+
+        // 2. 获取 root topic
+        await editProgress(`🚀 分支: ${branchName}\n正在创建 worktree 和 topic...`);
+        const rootSession = this.stateManager.getRootSession(chatId, topicId);
+        const parentTopicId = rootSession?.topicId ?? topicId;
+
+        // 3. Fork: 创建 worktree + topic + session
+        const forkResult = await forkTopicCore(chatId, parentTopicId, branchName, {
+          stateManager: this.stateManager,
+          telegram: this.telegram,
+          worktreesDir: this.config.worktreesDir,
+        });
+
+        // 4. 发送任务描述到新 topic
+        await editProgress(`🚀 分支: ${branchName}\n正在发送任务到新 topic...`);
+        await this.telegram.sendMessage(chatId, description, {
+          message_thread_id: forkResult.topicId,
+          disable_notification: true,
+        });
+
+        // 5. 触发 Claude 处理（fire-and-forget）
+        this.messageHandler.handleBackgroundChat(chatId, forkResult.topicId, description).catch((err) => {
+          logger.error('qdev background chat failed:', err.message);
+        });
+
+        // 6. 更新进度消息为最终结果
+        await editProgress(
+          `✅ 开发任务已创建\n\n` +
+          `分支: ${branchName}\n` +
+          `Topic: ${forkResult.topicName}\n` +
+          `工作目录: ${forkResult.cwd}\n\n` +
+          `Claude 正在新 topic 中处理任务...`
+        );
+      } catch (error: any) {
+        await editProgress(`❌ qdev 失败: ${error.message}`);
       }
-
-      // 提取 frontmatter 之后的内容
-      const bodyMatch = skillContent.match(/^---[\s\S]*?---\s*([\s\S]*)$/);
-      const prompt = (bodyMatch ? bodyMatch[1] : skillContent)
-        .replace('{{SKILL_ARGS}}', description);
-
-      await ctx.reply(`🚀 正在后台执行 qdev: ${description}`);
-
-      // Fire-and-forget: 独立 claude -p 进程，不占用当前 topic 的 session/lock
-      this.spawnSkillProcess('qdev', prompt, session.cwd, chatId, topicId, { maxTurns: 30 });
     });
   }
 
