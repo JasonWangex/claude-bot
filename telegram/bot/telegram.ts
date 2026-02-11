@@ -273,22 +273,6 @@ export class TelegramBot {
       if (!ctx.chat || !checkAuth(ctx)) { ctx.answerCbQuery('❌ 未授权').catch(() => {}); return; }
       this.commandHandler.handleTopicsCreateCallback(ctx).catch(e => logger.error('topics:create error:', e));
     });
-    this.bot.action(/^topics:rename:(\d+)$/, (ctx) => {
-      if (!ctx.chat || !checkAuth(ctx)) { ctx.answerCbQuery('❌ 未授权').catch(() => {}); return; }
-      this.commandHandler.handleTopicsRenameCallback(ctx).catch(e => logger.error('topics:rename error:', e));
-    });
-    this.bot.action(/^topics:fork:(\d+)$/, (ctx) => {
-      if (!ctx.chat || !checkAuth(ctx)) { ctx.answerCbQuery('❌ 未授权').catch(() => {}); return; }
-      this.commandHandler.handleTopicsForkCallback(ctx).catch(e => logger.error('topics:fork error:', e));
-    });
-    this.bot.action(/^topics:merge:(\d+)$/, (ctx) => {
-      if (!ctx.chat || !checkAuth(ctx)) { ctx.answerCbQuery('❌ 未授权').catch(() => {}); return; }
-      this.commandHandler.handleTopicsMergeCallback(ctx).catch(e => logger.error('topics:merge error:', e));
-    });
-    this.bot.action(/^topics:confirmmerge:(\d+)$/, (ctx) => {
-      if (!ctx.chat || !checkAuth(ctx)) { ctx.answerCbQuery('❌ 未授权').catch(() => {}); return; }
-      this.commandHandler.handleTopicsConfirmMergeCallback(ctx).catch(e => logger.error('topics:confirmmerge error:', e));
-    });
     this.bot.action(/^topics:delete:(\d+)$/, (ctx) => {
       if (!ctx.chat || !checkAuth(ctx)) { ctx.answerCbQuery('❌ 未授权').catch(() => {}); return; }
       this.commandHandler.handleTopicsDeleteCallback(ctx).catch(e => logger.error('topics:delete error:', e));

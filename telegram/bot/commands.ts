@@ -11,7 +11,7 @@ import { escapeHtml } from './message-utils.js';
 import { MessageQueue } from './message-queue.js';
 import { StreamEvent, TelegramBotConfig } from '../types/index.js';
 import { spawn } from 'child_process';
-import { stat, mkdir, readFile } from 'fs/promises';
+import { stat, readFile } from 'fs/promises';
 import { resolve, join } from 'path';
 import { homedir } from 'os';
 import { timingSafeEqual } from 'crypto';
@@ -24,7 +24,6 @@ import {
   ensureProjectDir,
   resolveCustomPath
 } from '../utils/topic-path.js';
-import { isGitRepo, getRepoName, createWorktree, mergeBranch, removeWorktree, deleteBranch, abortMerge } from '../utils/git-utils.js';
 
 export const MODEL_OPTIONS = [
   { id: 'claude-sonnet-4-5-20250929', label: 'Sonnet 4.5' },
@@ -34,10 +33,9 @@ export const MODEL_OPTIONS = [
 
 // General 话题中等待文本输入的状态
 interface PendingTextInput {
-  type: 'create' | 'rename' | 'fork';
+  type: 'create';
   chatId: number;
   messageId: number;  // 提示消息 ID，完成后编辑
-  topicId?: number;   // rename/fork 操作的目标 topicId
 }
 
 export class CommandHandler {
@@ -926,7 +924,7 @@ export class CommandHandler {
         `Topic 编号: <code>${session.topicId}</code>\n` +
         `群组编号: <code>${session.groupId}</code>\n\n` +
         `工作目录: <code>${escapeHtml(session.cwd)}</code>\n` +
-        `Claude 会话: <code>${session.claudeSessionId || '无'}</code>\n` +
+        `Claude 会话: <code>${escapeHtml(session.claudeSessionId || '无')}</code>\n` +
         `模型: ${this.getModelLabel(session.model)}\n` +
         `Plan Mode: ${session.planMode ? '✅' : '❌'}\n\n` +
         `创建时间: ${createdDate}\n` +
@@ -1091,7 +1089,7 @@ export class CommandHandler {
     await ctx.reply(
       `📊 <b>${escapeHtml(session.name)}</b>\n\n` +
       `工作目录: <code>${escapeHtml(session.cwd)}</code>\n` +
-      `Claude 会话: <code>${session.claudeSessionId ? session.claudeSessionId.slice(0, 8) + '...' : '无'}</code>\n` +
+      `Claude 会话: <code>${escapeHtml(session.claudeSessionId || '无')}</code>\n` +
       `模型: ${this.getModelLabel(session.model)}\n` +
       `创建: ${createdDate}\n` +
       `最后活动: ${lastMsgDate}\n` +
@@ -1414,7 +1412,7 @@ export class CommandHandler {
     const text =
       `📊 <b>${escapeHtml(session.name)}</b>\n\n` +
       `工作目录: <code>${escapeHtml(session.cwd)}</code>\n` +
-      `Claude 会话: <code>${session.claudeSessionId ? session.claudeSessionId.slice(0, 8) + '...' : '无'}</code>\n` +
+      `Claude 会话: <code>${escapeHtml(session.claudeSessionId || '无')}</code>\n` +
       `模型: ${modelLabel}\n` +
       `创建: ${createdDate}\n` +
       `最后活动: ${lastMsgDate}\n` +
@@ -1423,27 +1421,13 @@ export class CommandHandler {
 
     const buttons: any[][] = [
       [
-        Markup.button.callback('✏️ 重命名', `topics:rename:${topicId}`),
-        Markup.button.callback('🔀 Fork', `topics:fork:${topicId}`),
-      ],
-    ];
-
-    // 子 topic 显示 Merge 按钮
-    if (session.parentTopicId && session.worktreeBranch) {
-      buttons.push([
-        Markup.button.callback('🔀 Merge', `topics:merge:${topicId}`),
-      ]);
-    }
-
-    buttons.push(
-      [
         Markup.button.callback('🗄️ 归档', `topics:archive:${topicId}`),
         Markup.button.callback('🗑️ 删除', `topics:delete:${topicId}`),
       ],
       [
         Markup.button.callback('⬅️ 返回列表', 'topics:back'),
       ],
-    );
+    ];
 
     await ctx.editMessageText(text, {
       parse_mode: 'HTML',
@@ -1490,246 +1474,6 @@ export class CommandHandler {
       chatId: groupId,
       messageId,
     });
-  }
-
-  /**
-   * topics:rename:<topicId> — 启动重命名流程
-   */
-  async handleTopicsRenameCallback(ctx: any): Promise<void> {
-    const topicId = parseInt(ctx.match[1], 10);
-    const groupId = ctx.chat!.id;
-
-    const session = this.stateManager.getSession(groupId, topicId);
-    if (!session) {
-      await ctx.answerCbQuery('❌ Topic 不存在');
-      return;
-    }
-
-    await ctx.answerCbQuery();
-
-    const text =
-      `✏️ 重命名 <b>${escapeHtml(session.name)}</b>\n\n` +
-      `请输入新名称（下一条消息）:`;
-    const keyboard = Markup.inlineKeyboard([
-      [Markup.button.callback('⬅️ 取消', `topics:backto:${topicId}`)],
-    ]);
-    await ctx.editMessageText(text, { parse_mode: 'HTML', ...keyboard });
-
-    const messageId = ctx.callbackQuery?.message?.message_id;
-    this.pendingTextInput.set(groupId, {
-      type: 'rename',
-      chatId: groupId,
-      messageId,
-      topicId,
-    });
-  }
-
-  /**
-   * topics:fork:<topicId> — 启动 Fork 流程
-   */
-  async handleTopicsForkCallback(ctx: any): Promise<void> {
-    const topicId = parseInt(ctx.match[1], 10);
-    const groupId = ctx.chat!.id;
-
-    const session = this.stateManager.getSession(groupId, topicId);
-    if (!session) {
-      await ctx.answerCbQuery('❌ Topic 不存在');
-      return;
-    }
-
-    // 检查是否为 git 仓库
-    const gitRepo = await isGitRepo(session.cwd);
-    if (!gitRepo) {
-      await ctx.answerCbQuery('❌ 不是 Git 仓库');
-      await ctx.editMessageText(
-        `❌ Fork 失败\n\n` +
-        `<code>${escapeHtml(session.cwd)}</code> 不是 Git 仓库。\n` +
-        `Fork 功能需要目标目录为 Git 仓库。`,
-        {
-          parse_mode: 'HTML',
-          ...Markup.inlineKeyboard([
-            [Markup.button.callback('⬅️ 返回', `topics:backto:${topicId}`)],
-          ]),
-        }
-      );
-      return;
-    }
-
-    await ctx.answerCbQuery();
-
-    const text =
-      `🔀 Fork <b>${escapeHtml(session.name)}</b>\n\n` +
-      `工作目录: <code>${escapeHtml(session.cwd)}</code>\n\n` +
-      `请输入新分支名称（下一条消息）:`;
-    const keyboard = Markup.inlineKeyboard([
-      [Markup.button.callback('⬅️ 取消', `topics:backto:${topicId}`)],
-    ]);
-    await ctx.editMessageText(text, { parse_mode: 'HTML', ...keyboard });
-
-    const messageId = ctx.callbackQuery?.message?.message_id;
-    this.pendingTextInput.set(groupId, {
-      type: 'fork',
-      chatId: groupId,
-      messageId,
-      topicId,
-    });
-  }
-
-  /**
-   * topics:merge:<topicId> — Merge 确认视图
-   */
-  async handleTopicsMergeCallback(ctx: any): Promise<void> {
-    const topicId = parseInt(ctx.match[1], 10);
-    const groupId = ctx.chat!.id;
-
-    const session = this.stateManager.getSession(groupId, topicId);
-    if (!session) {
-      await ctx.answerCbQuery('❌ Topic 不存在');
-      return;
-    }
-
-    if (!session.parentTopicId || !session.worktreeBranch) {
-      await ctx.answerCbQuery('❌ 不是子 Topic');
-      return;
-    }
-
-    const parent = this.stateManager.getSession(groupId, session.parentTopicId);
-    if (!parent) {
-      await ctx.answerCbQuery('❌ 父 Topic 不存在');
-      return;
-    }
-
-    await ctx.answerCbQuery();
-
-    const text =
-      `🔀 <b>合并分支</b>\n\n` +
-      `当前 Topic: <b>${escapeHtml(session.name)}</b>\n` +
-      `分支: <code>${escapeHtml(session.worktreeBranch)}</code>\n` +
-      `工作目录: <code>${escapeHtml(session.cwd)}</code>\n\n` +
-      `⬇️ 合并到\n\n` +
-      `目标 Topic: <b>${escapeHtml(parent.name)}</b>\n` +
-      `目标目录: <code>${escapeHtml(parent.cwd)}</code>\n\n` +
-      `<b>操作流程:</b>\n` +
-      `1. 将分支 <code>${escapeHtml(session.worktreeBranch)}</code> 合并到父分支\n` +
-      `2. 删除 worktree 和分支\n` +
-      `3. 删除此 Topic\n\n` +
-      `⚠️ 如有未提交的修改或合并冲突，操作将失败。`;
-
-    await ctx.editMessageText(text, {
-      parse_mode: 'HTML',
-      ...Markup.inlineKeyboard([
-        [
-          Markup.button.callback('✅ 确认 Merge', `topics:confirmmerge:${topicId}`),
-          Markup.button.callback('❌ 取消', `topics:backto:${topicId}`),
-        ],
-      ]),
-    });
-  }
-
-  /**
-   * topics:confirmmerge:<topicId> — 执行 Merge
-   */
-  async handleTopicsConfirmMergeCallback(ctx: any): Promise<void> {
-    const topicId = parseInt(ctx.match[1], 10);
-    const groupId = ctx.chat!.id;
-
-    const session = this.stateManager.getSession(groupId, topicId);
-    if (!session) {
-      await ctx.answerCbQuery('❌ Topic 不存在');
-      return;
-    }
-
-    if (!session.parentTopicId || !session.worktreeBranch) {
-      await ctx.answerCbQuery('❌ 不是子 Topic');
-      return;
-    }
-
-    const parent = this.stateManager.getSession(groupId, session.parentTopicId);
-    if (!parent) {
-      await ctx.answerCbQuery('❌ 父 Topic 不存在');
-      return;
-    }
-
-    // 检查是否有孙 topic
-    const children = this.stateManager.getChildSessions(groupId, topicId);
-    if (children.length > 0) {
-      await ctx.answerCbQuery('❌ 此 Topic 还有子 Topic');
-      await ctx.editMessageText(
-        `❌ 无法合并：<b>${escapeHtml(session.name)}</b> 还有 ${children.length} 个子 Topic\n\n` +
-        `请先合并或删除子 Topic。`,
-        {
-          parse_mode: 'HTML',
-          ...Markup.inlineKeyboard([
-            [Markup.button.callback('⬅️ 返回', `topics:backto:${topicId}`)],
-          ]),
-        },
-      );
-      return;
-    }
-
-    const name = session.name;
-    const branchName = session.worktreeBranch;
-    const worktreeDir = session.cwd;
-
-    try {
-      await ctx.answerCbQuery('🔄 正在合并...');
-      await ctx.editMessageText(
-        `🔀 正在合并分支 <code>${escapeHtml(branchName)}</code>...`,
-        { parse_mode: 'HTML' },
-      );
-
-      // 1. 在父仓库中合并分支
-      await mergeBranch(parent.cwd, branchName);
-
-      // 2. 删除 worktree
-      await removeWorktree(parent.cwd, worktreeDir);
-
-      // 3. 删除分支
-      await deleteBranch(parent.cwd, branchName);
-
-      // 4. 删除 Session + Telegram Topic
-      this.stateManager.deleteSession(groupId, topicId);
-      await ctx.telegram.deleteForumTopic(groupId, topicId).catch(() => {});
-
-      await ctx.editMessageText(
-        `✅ <b>Merge 成功</b>\n\n` +
-        `已将 <code>${escapeHtml(branchName)}</code> 合并到 <b>${escapeHtml(parent.name)}</b>\n` +
-        `Topic <b>${escapeHtml(name)}</b> 已删除`,
-        {
-          parse_mode: 'HTML',
-          ...Markup.inlineKeyboard([
-            [Markup.button.callback('⬅️ 返回列表', 'topics:back')],
-          ]),
-        },
-      );
-    } catch (error: any) {
-      logger.error('Failed to merge topic:', error);
-
-      // execFile error 包含 stdout/stderr 属性，合并冲突信息在 stdout 中
-      const fullOutput = `${error.stdout || ''} ${error.stderr || ''} ${error.message || ''}`;
-      let errorMsg: string;
-      if (fullOutput.includes('CONFLICT') || fullOutput.includes('Automatic merge failed')) {
-        // 冲突时自动回滚，防止父仓库留在脏状态
-        await abortMerge(parent.cwd).catch(() => {});
-        errorMsg = '合并冲突，请手动解决后再试';
-      } else if (fullOutput.includes('uncommitted') || fullOutput.includes('modified')) {
-        errorMsg = '存在未提交的修改，请先提交或清理';
-      } else {
-        errorMsg = error.message || String(error);
-      }
-
-      await ctx.editMessageText(
-        `❌ <b>Merge 失败</b>\n\n` +
-        `错误: ${escapeHtml(errorMsg)}\n\n` +
-        `Topic <b>${escapeHtml(name)}</b> 未被删除`,
-        {
-          parse_mode: 'HTML',
-          ...Markup.inlineKeyboard([
-            [Markup.button.callback('⬅️ 返回', `topics:backto:${topicId}`)],
-          ]),
-        },
-      );
-    }
   }
 
   /**
@@ -1927,7 +1671,7 @@ export class CommandHandler {
   }
 
   /**
-   * 处理 General 话题中的文本输入（创建/重命名/fork）
+   * 处理 General 话题中的文本输入（创建 Topic）
    * 由 handlers.ts 调用
    * @returns true 表示已处理，false 表示没有 pending 操作
    */
@@ -1938,13 +1682,7 @@ export class CommandHandler {
     // 清除 pending 状态
     this.pendingTextInput.delete(groupId);
 
-    if (pending.type === 'create') {
-      await this.executeTopicCreate(ctx, groupId, text, pending.messageId);
-    } else if (pending.type === 'rename') {
-      await this.executeTopicRename(ctx, groupId, pending.topicId!, text, pending.messageId);
-    } else if (pending.type === 'fork') {
-      await this.executeTopicFork(ctx, groupId, pending.topicId!, text, pending.messageId);
-    }
+    await this.executeTopicCreate(ctx, groupId, text, pending.messageId);
 
     return true;
   }
@@ -2016,132 +1754,6 @@ export class CommandHandler {
       logger.error('Failed to create topic:', error);
       await ctx.telegram.editMessageText(groupId, promptMessageId, undefined,
         `❌ 创建失败: ${error.message}`).catch(() => {});
-    }
-  }
-
-  /**
-   * 执行 Topic 重命名
-   */
-  private async executeTopicRename(ctx: Context, groupId: number, topicId: number, newName: string, promptMessageId: number): Promise<void> {
-    newName = newName.trim();
-    if (!newName || newName.length > 128) {
-      await ctx.telegram.editMessageText(groupId, promptMessageId, undefined,
-        '❌ 名称无效（1-128 字符）');
-      return;
-    }
-
-    const session = this.stateManager.getSession(groupId, topicId);
-    if (!session) {
-      await ctx.telegram.editMessageText(groupId, promptMessageId, undefined,
-        '❌ Topic 不存在');
-      return;
-    }
-
-    try {
-      await ctx.telegram.editForumTopic(groupId, topicId, { name: newName });
-      const oldName = session.name;
-      this.stateManager.setSessionName(groupId, topicId, newName);
-
-      await ctx.telegram.editMessageText(groupId, promptMessageId, undefined,
-        `✅ 已重命名: ${escapeHtml(oldName)} → <b>${escapeHtml(newName)}</b>`,
-        {
-          parse_mode: 'HTML',
-          ...Markup.inlineKeyboard([
-            [Markup.button.callback('⬅️ 返回列表', 'topics:back')],
-          ]),
-        }
-      );
-    } catch (error: any) {
-      logger.error('Failed to rename topic:', error);
-      await ctx.telegram.editMessageText(groupId, promptMessageId, undefined,
-        `❌ 重命名失败: ${error.message}`).catch(() => {});
-    }
-  }
-
-  /**
-   * 执行 Topic Fork（git worktree）
-   */
-  private async executeTopicFork(ctx: Context, groupId: number, topicId: number, branchName: string, promptMessageId: number): Promise<void> {
-    branchName = branchName.trim();
-    if (!branchName || /\s/.test(branchName) || branchName.startsWith('-') || !/^[\w.\-/]+$/.test(branchName)) {
-      await ctx.telegram.editMessageText(groupId, promptMessageId, undefined,
-        '❌ 分支名无效（仅允许字母、数字、下划线、点、横杠、斜杠，且不能以 - 开头）');
-      return;
-    }
-
-    const session = this.stateManager.getSession(groupId, topicId);
-    if (!session) {
-      await ctx.telegram.editMessageText(groupId, promptMessageId, undefined,
-        '❌ Topic 不存在');
-      return;
-    }
-
-    try {
-      // 更新提示消息
-      await ctx.telegram.editMessageText(groupId, promptMessageId, undefined,
-        `🔀 正在创建 worktree...`).catch(() => {});
-
-      // 获取仓库名
-      const repoName = await getRepoName(session.cwd);
-
-      // 创建 worktree 目录
-      const worktreeDir = resolve(this.config.worktreesDir, `${repoName}_${branchName.replace(/\//g, '_')}`);
-      await mkdir(this.config.worktreesDir, { recursive: true });
-
-      // 创建 worktree
-      await createWorktree(session.cwd, worktreeDir, branchName);
-
-      // 创建新 Forum Topic（复用 root topic 的图标）
-      const newTopicName = `${session.name}/${branchName}`;
-      const rootSession = this.stateManager.getRootSession(groupId, topicId);
-      const iconOpts: Record<string, any> = {};
-      if (rootSession?.iconCustomEmojiId) {
-        iconOpts.icon_custom_emoji_id = rootSession.iconCustomEmojiId;
-      } else if (rootSession?.iconColor != null) {
-        iconOpts.icon_color = rootSession.iconColor;
-      } else {
-        iconOpts.icon_color = 0x6FB9F0;
-      }
-      const forumTopic = await ctx.telegram.createForumTopic(groupId, newTopicName, iconOpts);
-
-      const newTopicId = forumTopic.message_thread_id;
-
-      // 创建 Session 并设置父子关系
-      this.stateManager.getOrCreateSession(groupId, newTopicId, {
-        name: newTopicName,
-        cwd: worktreeDir,
-      });
-      this.stateManager.setSessionIcon(groupId, newTopicId, forumTopic.icon_color, forumTopic.icon_custom_emoji_id);
-      this.stateManager.setSessionForkInfo(groupId, newTopicId, topicId, branchName);
-
-      // 在新 Topic 中发送欢迎
-      await ctx.telegram.sendMessage(
-        groupId,
-        `✅ Fork 已创建\n\n` +
-        `名称: <code>${escapeHtml(newTopicName)}</code>\n` +
-        `分支: <code>${escapeHtml(branchName)}</code>\n` +
-        `工作目录: <code>${escapeHtml(worktreeDir)}</code>\n` +
-        `父 Topic: <b>${escapeHtml(session.name)}</b>\n\n` +
-        `直接发送消息即可开始对话。`,
-        { message_thread_id: newTopicId, parse_mode: 'HTML', disable_notification: true }
-      );
-
-      // 编辑提示消息
-      await ctx.telegram.editMessageText(groupId, promptMessageId, undefined,
-        `✅ Fork 成功: <b>${escapeHtml(newTopicName)}</b>\n` +
-        `分支: <code>${escapeHtml(branchName)}</code>\n` +
-        `工作目录: <code>${escapeHtml(worktreeDir)}</code>`,
-        {
-          parse_mode: 'HTML',
-          ...Markup.inlineKeyboard([
-            [Markup.button.callback('⬅️ 返回列表', 'topics:back')],
-          ]),
-        }
-      );
-    } catch (error: any) {
-      logger.error('Failed to fork topic:', error);
-      await ctx.telegram.editMessageText(groupId, promptMessageId, undefined,
-        `❌ Fork 失败: ${error.message}`).catch(() => {});
     }
   }
 

@@ -16,11 +16,6 @@ export async function isGitRepo(cwd: string): Promise<boolean> {
   }
 }
 
-export async function getCurrentBranch(cwd: string): Promise<string> {
-  const { stdout } = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd });
-  return stdout.trim();
-}
-
 export async function getRepoName(cwd: string): Promise<string> {
   const { stdout } = await execFileAsync('git', ['rev-parse', '--show-toplevel'], { cwd });
   const topLevel = stdout.trim();
@@ -31,10 +26,6 @@ export async function createWorktree(cwd: string, targetDir: string, branchName:
   await execFileAsync('git', ['worktree', 'add', targetDir, '-b', branchName], { cwd });
 }
 
-export async function mergeBranch(cwd: string, branchName: string): Promise<void> {
-  await execFileAsync('git', ['merge', branchName, '--no-edit'], { cwd });
-}
-
 export async function removeWorktree(cwd: string, worktreePath: string): Promise<void> {
   await execFileAsync('git', ['worktree', 'remove', worktreePath], { cwd });
 }
@@ -43,6 +34,3 @@ export async function deleteBranch(cwd: string, branchName: string): Promise<voi
   await execFileAsync('git', ['branch', '-d', branchName], { cwd });
 }
 
-export async function abortMerge(cwd: string): Promise<void> {
-  await execFileAsync('git', ['merge', '--abort'], { cwd });
-}
