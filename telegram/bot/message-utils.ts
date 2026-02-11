@@ -8,7 +8,7 @@ import type { FileChange } from '../types/index.js';
  * HTML 转义
  */
 export function escapeHtml(text: string): string {
-  return text
+  return (text ?? '')
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
