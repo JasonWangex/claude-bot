@@ -2,8 +2,8 @@
 name: merge
 description: >
   合并 worktree 分支到主分支并清理。检查未提交代码、合并分支、删除 worktree、
-  删除 Telegram topic。遵循安全规则：只有在工作目录干净且分支已完全合并后才删除。
-version: 1.1.0
+  删除 Telegram topic。合并成功后自动写入 Notion Dev Log。
+version: 1.2.0
 ---
 
 # Merge & Cleanup - 分支合并与清理
@@ -16,7 +16,7 @@ version: 1.1.0
 - 工作目录: {{TARGET_CWD}}
 - Main worktree: {{MAIN_CWD}}
 
-## 执行方式
+## 第一步：执行合并与清理
 
 **重要：用一个 bash 脚本完成全部操作，不要分步执行。** 运行以下脚本：
 
@@ -38,27 +38,37 @@ if [ -n "$STATUS" ]; then
 fi
 echo "工作目录干净"
 
-echo "=== Step 2: 合并到 main ==="
+echo "=== Step 2: 收集分支信息（合并前） ==="
 cd "$MAIN_CWD"
+COMMIT_COUNT=$(git log main.."$TARGET_BRANCH" --oneline | wc -l | tr -d ' ')
+COMMIT_MESSAGES=$(git log main.."$TARGET_BRANCH" --pretty=format:"- %s")
+DIFF_STAT=$(git diff --shortstat main..."$TARGET_BRANCH")
+echo "DEVLOG_COMMIT_COUNT=$COMMIT_COUNT"
+echo "DEVLOG_COMMIT_MESSAGES<<EOF"
+echo "$COMMIT_MESSAGES"
+echo "EOF"
+echo "DEVLOG_DIFF_STAT=$DIFF_STAT"
+
+echo "=== Step 3: 合并到 main ==="
 git merge "$TARGET_BRANCH" --no-edit || { echo "FAIL: 合并冲突"; git merge --abort; exit 1; }
 echo "合并成功"
 
-echo "=== Step 3: 验证合并 ==="
+echo "=== Step 4: 验证合并 ==="
 if ! git branch --merged main | grep -q "$TARGET_BRANCH"; then
   echo "FAIL: 分支未完全合并到 main"
   exit 1
 fi
 echo "分支已完全合并"
 
-echo "=== Step 4: 删除 worktree ==="
+echo "=== Step 5: 删除 worktree ==="
 git worktree remove "$TARGET_CWD" || { echo "FAIL: 删除 worktree 失败"; exit 1; }
 echo "Worktree 已删除"
 
-echo "=== Step 5: 删除分支 ==="
+echo "=== Step 6: 删除分支 ==="
 git branch -d "$TARGET_BRANCH" || { echo "FAIL: 删除分支失败（可能未完全合并）"; exit 1; }
 echo "分支已删除"
 
-echo "=== Step 6: 删除 Telegram Topic ==="
+echo "=== Step 7: 删除 Telegram Topic ==="
 RESP=$(curl -s -X DELETE "http://127.0.0.1:3456/api/topics/$TOPIC_ID")
 echo "API 响应: $RESP"
 
@@ -71,10 +81,14 @@ echo "- 分支: 已删除"
 echo "- Telegram Topic: 已删除"
 ```
 
+## 第二步：写入 Dev Log
+
+**脚本成功后，必须执行此步骤。** 使用 `/devlog` skill 将合并记录写入 Notion。脚本输出中的 `DEVLOG_` 开头的信息会被 devlog skill 自动识别使用。
+
 ## 安全规则
 
 - 使用 `git branch -d`（安全删除），禁止 `-D`
 - 合并冲突时中止并报告，不强制合并
 - 合并在 main worktree 中执行，不在被删除的 worktree 中操作
 
-**立即运行上面的脚本，不要拆分成多个命令。如果脚本失败，报告具体的 FAIL 原因。**
+**立即运行上面的脚本，不要拆分成多个命令。如果脚本失败，报告具体的 FAIL 原因，不执行第二步。**
