@@ -200,9 +200,9 @@ body { background: var(--bg); color: var(--fg); font-family: -apple-system, Blin
 .file-stat { white-space: nowrap; }
 .add-count { color: var(--add-fg); margin-right: 6px; }
 .del-count { color: var(--del-fg); }
-.diff { width: 100%; border-collapse: collapse; font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace; font-size: 12px; table-layout: fixed; }
+.diff { width: 100%; border-collapse: collapse; font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace; font-size: 12px; }
 .diff td { padding: 1px 10px; vertical-align: top; }
-.diff .ln { width: 50px; min-width: 50px; text-align: right; color: var(--ln-fg); user-select: none; }
+.diff .ln { width: 1px; white-space: nowrap; text-align: right; color: var(--ln-fg); user-select: none; }
 .diff .code { white-space: pre-wrap; word-break: break-all; }
 .diff tr.add { background: var(--add-bg); }
 .diff tr.add .code { color: var(--add-fg); }
