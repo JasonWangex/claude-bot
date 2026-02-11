@@ -271,7 +271,8 @@ export class CommandHandler {
         `/stop - 停止当前任务\n` +
         `/model - 切换当前 Topic 模型\n` +
         `/info - 查看当前 Topic 详情\n` +
-        `/attach [session_id] - 链接到指定 Claude Session\n\n` +
+        `/attach [session_id] - 链接到指定 Claude Session\n` +
+        `/merge &lt;topic或分支名&gt; - 合并 worktree 分支到 main 并清理\n\n` +
         `<b>使用方法</b>\n` +
         `• /topics 统一管理所有 Topic（每个 Topic = 独立会话）\n` +
         `• 在 Topic 中直接发消息即可对话\n` +
@@ -1758,21 +1759,23 @@ export class CommandHandler {
   }
 
   /**
-   * 启动独立的 claude -p 非交互进程执行 qdev，用完即弃
+   * 启动独立的 claude -p 非交互进程，用完即弃
    * 不占用 topic session/lock，不写入 messageHistory，进程结束自动销毁
    */
-  private spawnQdevProcess(
+  private spawnSkillProcess(
+    skillName: string,
     prompt: string,
     cwd: string,
     chatId: number,
     topicId: number,
+    options?: { maxTurns?: number },
   ): void {
     const child = spawn('claude', [
       '-p', prompt,
       '--output-format', 'json',
       '--dangerously-skip-permissions',
       '--allowedTools', 'Bash',
-      '--max-turns', '15',
+      '--max-turns', String(options?.maxTurns ?? 15),
       '--no-session-persistence',
     ], {
       cwd,
@@ -1799,15 +1802,15 @@ export class CommandHandler {
           }
         } else {
           const errMsg = stderr.trim() || `退出码 ${code}`;
-          await this.mq.send(chatId, topicId, `❌ qdev 失败: ${errMsg}`);
+          await this.mq.send(chatId, topicId, `❌ ${skillName} 失败: ${errMsg}`);
         }
       } catch (e: any) {
-        logger.error('qdev result delivery failed:', e.message);
+        logger.error(`${skillName} result delivery failed:`, e.message);
       }
     });
 
     child.on('error', (err: Error) => {
-      this.mq.send(chatId, topicId, `❌ qdev 启动失败: ${err.message}`).catch(() => {});
+      this.mq.send(chatId, topicId, `❌ ${skillName} 启动失败: ${err.message}`).catch(() => {});
     });
   }
 
@@ -1843,7 +1846,74 @@ export class CommandHandler {
       await ctx.reply(`🚀 正在后台执行 qdev: ${description}`);
 
       // Fire-and-forget: 独立 claude -p 进程，不占用当前 topic 的 session/lock
-      this.spawnQdevProcess(prompt, session.cwd, chatId, topicId);
+      this.spawnSkillProcess('qdev', prompt, session.cwd, chatId, topicId);
+    });
+  }
+
+  /**
+   * /merge - 合并 worktree 分支到 main 并清理资源（独立非交互 Claude 进程）
+   */
+  async handleMerge(ctx: Context): Promise<void> {
+    await this.requireAuth(ctx, async () => {
+      const text = (ctx.message as any)?.text || '';
+      const args = text.replace(/^\/merge\s*/, '').trim();
+
+      if (!args) {
+        await ctx.reply(
+          '用法: /merge <topic名称或分支名>\n\n' +
+          '例如:\n' +
+          '  /merge fix/stats-negative-value\n' +
+          '  /merge ClaudeBot/refactor/simplify-topic-buttons'
+        );
+        return;
+      }
+
+      const groupId = ctx.chat!.id;
+      const chatId = groupId;
+      const currentTopicId = this.getTopicId(ctx);
+
+      // 查找匹配的 session
+      const allSessions = this.stateManager.getAllSessions(groupId);
+      let targetSession = allSessions.find(s => s.worktreeBranch === args)
+        || allSessions.find(s => s.name === args)
+        || allSessions.find(s => s.name.toLowerCase().includes(args.toLowerCase()));
+
+      if (!targetSession) {
+        await ctx.reply(`❌ 未找到匹配的 Topic: "${args}"`);
+        return;
+      }
+
+      if (!targetSession.worktreeBranch) {
+        await ctx.reply(`❌ Topic "${targetSession.name}" 不是 worktree 分支，无法执行合并`);
+        return;
+      }
+
+      // 加载 skill
+      const skillPath = join(homedir(), '.claude/skills/merge/SKILL.md');
+      let skillContent: string;
+      try {
+        skillContent = await readFile(skillPath, 'utf-8');
+      } catch {
+        await ctx.reply('❌ 未找到 merge skill 文件: ~/.claude/skills/merge/SKILL.md');
+        return;
+      }
+
+      // 提取 frontmatter 之后的内容，替换模板变量
+      const bodyMatch = skillContent.match(/^---[\s\S]*?---\s*([\s\S]*)$/);
+      const prompt = (bodyMatch ? bodyMatch[1] : skillContent)
+        .replaceAll('{{TARGET_TOPIC_ID}}', String(targetSession.topicId))
+        .replaceAll('{{TARGET_BRANCH}}', targetSession.worktreeBranch)
+        .replaceAll('{{TARGET_CWD}}', targetSession.cwd);
+
+      await ctx.reply(
+        `🔄 正在后台执行合并清理: ${targetSession.name}\n` +
+        `分支: ${targetSession.worktreeBranch}\n` +
+        `工作目录: ${targetSession.cwd}`
+      );
+
+      // Fire-and-forget: 独立 claude -p 进程
+      const replyTopicId = currentTopicId || targetSession.topicId;
+      this.spawnSkillProcess('merge', prompt, targetSession.cwd, chatId, replyTopicId, { maxTurns: 20 });
     });
   }
 }
