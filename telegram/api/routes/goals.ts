@@ -10,6 +10,7 @@
  * POST /api/goals/:goalId/tasks/:taskId/retry  — 重试失败任务
  */
 
+import { stat } from 'fs/promises';
 import type { RouteHandler } from '../types.js';
 import { sendJson, requireAuth, readJsonBody } from '../middleware.js';
 import { logger } from '../../utils/logger.js';
@@ -33,6 +34,18 @@ export const startDrive: RouteHandler = async (req, res, params, deps) => {
       ok: false,
       error: 'Required: goalName, goalTopicId, baseCwd, tasks',
     });
+    return;
+  }
+
+  // 预验证 baseCwd 存在
+  try {
+    const s = await stat(body.baseCwd);
+    if (!s.isDirectory()) {
+      sendJson(res, 400, { ok: false, error: `baseCwd is not a directory: ${body.baseCwd}` });
+      return;
+    }
+  } catch {
+    sendJson(res, 400, { ok: false, error: `baseCwd does not exist: ${body.baseCwd}` });
     return;
   }
 

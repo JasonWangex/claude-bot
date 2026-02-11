@@ -6,9 +6,13 @@
  */
 
 import { readFileSync, writeFileSync, mkdirSync, readdirSync } from 'fs';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { join } from 'path';
 import type { GoalDriveState, GoalTask, GoalTaskType } from '../types/index.js';
 import { logger } from '../utils/logger.js';
+
+const execFileAsync = promisify(execFile);
 
 const GOALS_DIR = join(process.cwd(), 'data', 'goals');
 
@@ -90,13 +94,65 @@ export function parseTasks(raw: Array<{
   }));
 }
 
-/** 将 Goal name 转为合法的 git 分支名 */
-export function goalNameToBranch(name: string): string {
-  const sanitized = name
+/** 用 sanitize 提取 ASCII 部分并清理 */
+function sanitizeToAscii(text: string): string {
+  return text
     .toLowerCase()
-    .replace(/[^a-z0-9\u4e00-\u9fff-]/g, '-')
+    .replace(/[^a-z0-9-]/g, '-')
     .replace(/-+/g, '-')
-    .replace(/^-|-$/g, '')
-    .slice(0, 40);
-  return `goal/${sanitized || 'unnamed'}`;
+    .replace(/^-|-$/g, '');
+}
+
+/** 检测是否含非 ASCII 字符 */
+function hasNonAscii(text: string): boolean {
+  return /[^\x00-\x7F]/.test(text);
+}
+
+/** 用 hash 生成短后缀（fallback） */
+function shortHash(text: string): string {
+  let hash = 0;
+  for (let i = 0; i < text.length; i++) {
+    hash = ((hash << 5) - hash + text.charCodeAt(i)) | 0;
+  }
+  return Math.abs(hash).toString(36).slice(0, 6);
+}
+
+/**
+ * 将名称转为合法的 git 分支名
+ *
+ * 含非 ASCII（中文等）时用 claude haiku 翻译为英文短名，
+ * 翻译失败则 fallback 到 hash。
+ */
+export async function translateToBranchName(name: string): Promise<string> {
+  if (!hasNonAscii(name)) {
+    return sanitizeToAscii(name).slice(0, 40);
+  }
+
+  try {
+    const { stdout } = await execFileAsync('claude', [
+      '-p',
+      `将以下名称转为简短的 git 分支名（纯英文小写+连字符，不超过30字符，只输出分支名，不要任何其他内容）: ${name}`,
+      '--model', 'haiku',
+      '--output-format', 'text',
+    ], { timeout: 15000 });
+
+    const result = sanitizeToAscii(stdout.trim());
+    if (result.length >= 3) {
+      logger.debug(`[GoalState] Translated branch name: "${name}" → "${result}"`);
+      return result.slice(0, 40);
+    }
+  } catch (err: any) {
+    logger.warn(`[GoalState] Failed to translate branch name "${name}": ${err.message}`);
+  }
+
+  // Fallback: ASCII 部分 + hash
+  const ascii = sanitizeToAscii(name);
+  const prefix = ascii.length >= 3 ? ascii.slice(0, 30) : '';
+  return `${prefix ? prefix + '-' : ''}${shortHash(name)}`;
+}
+
+/** 将 Goal name 转为合法的 git 分支名 */
+export async function goalNameToBranch(name: string): Promise<string> {
+  const branchName = await translateToBranchName(name);
+  return `goal/${branchName || 'unnamed'}`;
 }
