@@ -85,6 +85,19 @@ echo "- Telegram Topic: 已删除"
 
 **脚本成功后，必须执行此步骤。** 使用 `/devlog` skill 将合并记录写入 Notion。脚本输出中的 `DEVLOG_` 开头的信息会被 devlog skill 自动识别使用。
 
+## 第三步：标记关联 Idea 为 Done
+
+**devlog 写入成功后，执行此步骤。**
+
+用 `mcp__claude_ai_Notion__notion-search` 在 Goals database 中搜索：
+
+- data_source_url: `collection://d8cfb7d5-bf11-4ce3-bed4-37fabdec77e0`
+- 筛选 **Status = Processing** 且 **Project = 当前项目**
+
+如果找到匹配的记录（根据分支名或任务描述判断关联性），用 `mcp__claude_ai_Notion__notion-update-page` 将其 Status 更新为 `Done`。
+
+如果没找到 Processing 状态的 Idea，跳过此步骤（不影响 merge 流程）。
+
 ## 安全规则
 
 - 使用 `git branch -d`（安全删除），禁止 `-D`
