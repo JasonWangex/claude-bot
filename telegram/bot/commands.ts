@@ -449,25 +449,64 @@ export class CommandHandler {
   }
 
   async handleInfo(ctx: Context): Promise<void> {
-    await this.requireTopic(ctx, async (session) => {
-      const created = new Date(session.createdAt).toLocaleString('zh-CN');
-      const lastMsgTime = session.lastMessageAt
-        ? new Date(session.lastMessageAt).toLocaleString('zh-CN')
-        : '无';
-      const modelLabel = this.getModelLabel(session.model);
+    await this.requireAuth(ctx, async () => {
+      const topicId = this.getTopicId(ctx);
 
-      await ctx.reply(
-        `📄 会话详情\n\n` +
-        `Topic: <code>${escapeHtml(session.name)}</code>\n` +
-        `工作目录: <code>${escapeHtml(session.cwd)}</code>\n` +
-        `模型: ${escapeHtml(modelLabel)}\n` +
-        `Claude 上下文: ${session.claudeSessionId ? `<code>${escapeHtml(session.claudeSessionId)}</code>` : '(新会话)'}\n` +
-        `创建时间: ${created}\n` +
-        `最近活动: ${lastMsgTime}\n` +
-        `消息记录: ${session.messageHistory.length} 条`,
-        { parse_mode: 'HTML' }
-      );
+      if (topicId) {
+        // Topic 内：显示会话详情
+        const groupId = ctx.chat!.id;
+        const session = this.stateManager.getOrCreateSession(groupId, topicId, {
+          name: `topic-${topicId}`,
+          cwd: this.stateManager.getGroupDefaultCwd(groupId),
+        });
+        const created = new Date(session.createdAt).toLocaleString('zh-CN');
+        const lastMsgTime = session.lastMessageAt
+          ? new Date(session.lastMessageAt).toLocaleString('zh-CN')
+          : '无';
+        const modelLabel = this.getModelLabel(session.model);
+
+        await ctx.reply(
+          `📄 会话详情\n\n` +
+          `Topic: <code>${escapeHtml(session.name)}</code>\n` +
+          `工作目录: <code>${escapeHtml(session.cwd)}</code>\n` +
+          `模型: ${escapeHtml(modelLabel)}\n` +
+          `Claude 上下文: ${session.claudeSessionId ? `<code>${escapeHtml(session.claudeSessionId)}</code>` : '(新会话)'}\n` +
+          `创建时间: ${created}\n` +
+          `最近活动: ${lastMsgTime}\n` +
+          `消息记录: ${session.messageHistory.length} 条`,
+          { parse_mode: 'HTML' }
+        );
+      } else {
+        // General：显示服务状态和版本信息
+        const deployTime = process.env.DEPLOY_TIME;
+        const uptime = process.uptime();
+        const uptimeStr = this.formatUptime(uptime);
+
+        const lines: string[] = [
+          `ℹ️ 服务信息\n`,
+          `部署时间: ${deployTime ? `<code>${escapeHtml(deployTime)}</code>` : '未知'}`,
+          `运行时长: ${uptimeStr}`,
+          `Node.js: ${process.version}`,
+          `PID: ${process.pid}`,
+        ];
+
+        const memUsage = process.memoryUsage();
+        lines.push(`内存: ${Math.round(memUsage.rss / 1024 / 1024)} MB`);
+
+        await ctx.reply(lines.join('\n'), { parse_mode: 'HTML' });
+      }
     });
+  }
+
+  private formatUptime(seconds: number): string {
+    const d = Math.floor(seconds / 86400);
+    const h = Math.floor((seconds % 86400) / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const parts: string[] = [];
+    if (d > 0) parts.push(`${d} 天`);
+    if (h > 0) parts.push(`${h} 小时`);
+    parts.push(`${m} 分钟`);
+    return parts.join(' ');
   }
 
   async handleAttach(ctx: Context): Promise<void> {

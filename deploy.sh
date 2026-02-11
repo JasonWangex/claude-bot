@@ -23,8 +23,20 @@ install_cron() {
   fi
 }
 
+stamp_deploy_time() {
+  local ts
+  ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  if grep -q '^DEPLOY_TIME=' prd.env 2>/dev/null; then
+    sed -i "s/^DEPLOY_TIME=.*/DEPLOY_TIME=${ts}/" prd.env
+  else
+    echo "DEPLOY_TIME=${ts}" >> prd.env
+  fi
+  echo "  DEPLOY_TIME=${ts}"
+}
+
 do_deploy() {
   link_env
+  stamp_deploy_time
 
   echo "==> Installing skills..."
   bash scripts/install-skills.sh
@@ -77,6 +89,7 @@ do_stop() {
 
 do_restart() {
   link_env
+  stamp_deploy_time
   for svc in $SERVICES; do
     systemctl --user restart "$svc"
     echo "$svc restarted"
