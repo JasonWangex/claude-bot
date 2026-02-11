@@ -419,6 +419,9 @@ export class TelegramBot {
     // 从磁盘恢复会话状态
     await this.stateManager.load();
 
+    // 启动消息队列消费者（必须在 restoreRunningDrives 之前，否则 notify 会死锁）
+    this.messageQueue.start();
+
     // 重连上次部署时正在运行的 Claude 进程
     await this.reconnectOrphanedProcesses();
 
@@ -429,9 +432,6 @@ export class TelegramBot {
     if (this.apiServer) {
       await this.apiServer.start();
     }
-
-    // 启动消息队列消费者
-    this.messageQueue.start();
 
     logger.info('Starting long polling...');
     await this.bot.launch({ dropPendingUpdates: true });
