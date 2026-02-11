@@ -13,11 +13,24 @@ link_env() {
   ln -sf prd.env .env
 }
 
+install_cron() {
+  local cron_line="0 9 * * * $(pwd)/scripts/daily-review.sh"
+  if crontab -l 2>/dev/null | grep -qF "daily-review.sh"; then
+    echo "  daily-review cron: already installed"
+  else
+    (crontab -l 2>/dev/null; echo "$cron_line") | crontab -
+    echo "  daily-review cron: installed (09:00 daily)"
+  fi
+}
+
 do_deploy() {
   link_env
 
   echo "==> Installing skills..."
   bash scripts/install-skills.sh
+
+  echo "==> Installing cron jobs..."
+  install_cron
 
   echo "==> Reloading systemd..."
   systemctl --user daemon-reload
