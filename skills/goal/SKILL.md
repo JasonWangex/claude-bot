@@ -1,8 +1,8 @@
 ---
 name: goal
 description: >
-  管理开发目标。无参数列出 Active/Paused Goals；有参数时搜索匹配的 Goal
-  进入继续模式，没找到则进入创建模式。支持子任务拆解、进度跟踪、方向变更。
+  管理开发目标。无参数列出 Active/Paused Goals；`drive all` 批量启动所有 Active Goals 的自动推进；
+  有参数时搜索匹配的 Goal 进入继续模式，没找到则进入创建模式。支持子任务拆解、进度跟踪、方向变更。
 version: 1.0.0
 ---
 
@@ -17,7 +17,8 @@ version: 1.0.0
 根据 `{{SKILL_ARGS}}` 决定模式：
 
 - **为空** → 列表模式
-- **不为空** → 搜索 → 找到则继续模式，没找到则创建模式
+- **`drive all`** → 批量推进模式
+- **不为空（其他）** → 搜索 → 找到则继续模式，没找到则创建模式
 
 ---
 
@@ -46,6 +47,63 @@ data_source_url: `collection://d8cfb7d5-bf11-4ce3-bed4-37fabdec77e0`
 ```
 
 如果没有任何 Active/Paused Goal，提示用户可以用 `/goal <描述>` 创建新目标或用 `/idea` 记录想法。
+
+---
+
+## 批量推进模式（drive all）
+
+当 `{{SKILL_ARGS}}` 为 `drive all` 时，批量检测并启动所有 Active Goals 的自动推进。
+
+### 流程
+
+1. **查询所有 Active Goals**
+
+   用 `mcp__claude_ai_Notion__notion-search` 搜索 Goals database 中 Status=Active 的 Goal。
+
+   data_source_url: `collection://d8cfb7d5-bf11-4ce3-bed4-37fabdec77e0`
+
+2. **逐个处理每个 Active Goal**
+
+   对每个 Active Goal：
+
+   a. 用 `mcp__claude_ai_Notion__notion-fetch` 获取完整页面内容
+
+   b. 检查是否有**未完成的 `[代码]` 或 `[调研]` 子任务**（即 `- [ ]` 且类型为代码或调研）
+
+   c. 如果没有可自动执行的子任务（全部完成或全是手动任务）→ 跳过，记为"无可执行任务"
+
+   d. 如果有 → 按继续模式中的解析规则，将子任务解析为结构化 JSON
+
+   e. 调用 Drive API 启动：
+      ```
+      POST http://127.0.0.1:3456/api/goals/<page-id>/drive
+      {
+        "goalName": "<Goal Name>",
+        "goalTopicId": <当前 topic 的 message_thread_id>,
+        "baseCwd": "<当前工作目录>",
+        "tasks": [解析出的子任务数组],
+        "maxConcurrent": 3
+      }
+      ```
+
+   f. 如果 API 返回"已在运行中" → 跳过，记为"已在运行"
+
+   g. 如果 API 返回错误 → 记为失败
+
+3. **汇总输出**
+
+```
+🚀 批量推进 Active Goals
+
+✅ <Goal 1> — 已启动 (N 个子任务)
+⏭ <Goal 2> — 已在运行中
+⏭ <Goal 3> — 无可自动执行的子任务
+❌ <Goal 4> — 启动失败: <error>
+
+📊 共 M 个 Active Goals: X 启动, Y 跳过, Z 失败
+```
+
+处理完成后**不进入交互模式**，直接结束。用户如需操作单个 Goal，可用 `/goal <name>`。
 
 ---
 
