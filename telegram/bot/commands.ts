@@ -1848,8 +1848,7 @@ export class CommandHandler {
       await ctx.reply(`🚀 正在后台执行 qdev: ${description}`);
 
       // Fire-and-forget: 独立 claude -p 进程，不占用当前 topic 的 session/lock
-      // qdev 只需：1 turn 生成分支名 + 1 turn 跑脚本 + 1 turn 输出确认 = 3 turns
-      this.spawnSkillProcess('qdev', prompt, session.cwd, chatId, topicId, { maxTurns: 5 });
+      this.spawnSkillProcess('qdev', prompt, session.cwd, chatId, topicId, { maxTurns: 30 });
     });
   }
 
