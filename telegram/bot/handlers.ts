@@ -66,7 +66,14 @@ export class MessageHandler {
     const text = (ctx.message as any)?.text;
 
     if (!text) return;
-    if (text.startsWith('/')) return;
+
+    // // 前缀 → Claude skill 命令：去掉一个 /，发送给 Claude 会话
+    let chatText = text;
+    if (text.startsWith('//')) {
+      chatText = text.slice(1);
+    } else if (text.startsWith('/')) {
+      return;
+    }
 
     // 鉴权
     if (!checkAuth(ctx)) return;
@@ -121,10 +128,10 @@ export class MessageHandler {
         await this.executePlanApproval(ctx, session);
         return;
       }
-      return this.sendChat(ctx, session, text, 'plan');
+      return this.sendChat(ctx, session, chatText, 'plan');
     }
 
-    return this.sendChat(ctx, session, text);
+    return this.sendChat(ctx, session, chatText);
   }
 
   /**
