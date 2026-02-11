@@ -10,8 +10,7 @@ import { ClaudeClient } from '../claude/client.js';
 import { escapeHtml } from './message-utils.js';
 import { MessageQueue } from './message-queue.js';
 import { StreamEvent, TelegramBotConfig } from '../types/index.js';
-import { spawn, execFile as execFileCb } from 'child_process';
-import { promisify } from 'util';
+import { spawn } from 'child_process';
 import { stat, readFile } from 'fs/promises';
 import { resolve, join } from 'path';
 import { homedir } from 'os';
@@ -1963,8 +1962,8 @@ export class CommandHandler {
       // 预计算 main worktree 路径
       let mainCwd: string;
       try {
-        const execFileAsync = promisify(execFileCb);
-        const { stdout } = await execFileAsync('git', ['worktree', 'list'], { cwd: targetSession.cwd });
+        const { execGit } = await import('../orchestrator/git-ops.js');
+        const stdout = await execGit(['worktree', 'list'], targetSession.cwd, 'merge: list worktrees');
         const mainLine = stdout.split('\n').find(line => /\[(main|master)\]/.test(line));
         if (!mainLine) {
           await ctx.reply('❌ 未找到 main/master 分支的 worktree');

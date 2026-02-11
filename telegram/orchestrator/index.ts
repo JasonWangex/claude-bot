@@ -15,12 +15,10 @@ import type { MessageQueue } from '../bot/message-queue.js';
 import type { TelegramBotConfig, GoalDriveState, GoalTask } from '../types/index.js';
 import type { Telegram } from 'telegraf';
 import { resolve } from 'path';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
+import { stat } from 'fs/promises';
 import { getAuthorizedChatId } from '../utils/env.js';
-
-const execFileAsync = promisify(execFile);
-import { loadState, saveState, loadAllRunningStates, parseTasks, goalNameToBranch } from './goal-state.js';
+import { execGit, resolveMainWorktree } from './git-ops.js';
+import { loadState, saveState, loadAllRunningStates, parseTasks, goalNameToBranch, translateToBranchName } from './goal-state.js';
 import { getNextBatch, isGoalComplete, isGoalStuck, getProgressSummary } from './task-scheduler.js';
 import {
   createGoalBranch,
@@ -69,7 +67,7 @@ export class GoalOrchestrator {
 
   /** 启动 Goal 自动推进 */
   async startDrive(params: StartDriveParams): Promise<GoalDriveState> {
-    const { goalId, goalName, goalTopicId, baseCwd, tasks: rawTasks, maxConcurrent = 3 } = params;
+    const { goalId, goalName, goalTopicId, baseCwd: inputCwd, tasks: rawTasks, maxConcurrent = 3 } = params;
 
     // 检查是否已经在运行
     const existing = this.activeDrives.get(goalId) || loadState(goalId);
@@ -78,7 +76,19 @@ export class GoalOrchestrator {
       return existing;
     }
 
-    const goalBranch = goalNameToBranch(goalName);
+    // 规范化 baseCwd: 确保指向 main worktree 根目录（防止指向可能被删除的 worktree）
+    let baseCwd: string;
+    try {
+      baseCwd = await resolveMainWorktree(inputCwd);
+      if (baseCwd !== inputCwd) {
+        logger.info(`[Orchestrator] Normalized baseCwd: ${inputCwd} → ${baseCwd}`);
+      }
+    } catch (err: any) {
+      await this.notify(goalTopicId, `❌ 工作目录无效: ${inputCwd}\n错误: ${err.message}`);
+      throw err;
+    }
+
+    const goalBranch = await goalNameToBranch(goalName);
 
     // 创建 goal 分支和 worktree
     let goalWorktreeDir: string;
@@ -212,6 +222,21 @@ export class GoalOrchestrator {
   async restoreRunningDrives(): Promise<void> {
     const states = loadAllRunningStates();
     for (const state of states) {
+      // 验证 baseCwd 是否仍然存在
+      try {
+        await stat(state.baseCwd);
+      } catch {
+        logger.error(`[Orchestrator] baseCwd does not exist for ${state.goalName}: ${state.baseCwd}`);
+        state.status = 'paused';
+        saveState(state);
+        await this.notify(state.goalTopicId,
+          `⚠️ Goal "${state.goalName}" 恢复失败: 工作目录不存在\n` +
+          `路径: ${state.baseCwd}\n` +
+          `已自动暂停，请检查后手动恢复`
+        );
+        continue;
+      }
+
       this.activeDrives.set(state.goalId, state);
       logger.info(`[Orchestrator] Restored drive: ${state.goalName} (${state.goalId})`);
       // 检查是否有可派发的任务
@@ -277,7 +302,7 @@ export class GoalOrchestrator {
 
   /** 派发单个子任务 */
   private async dispatchTask(state: GoalDriveState, task: GoalTask): Promise<void> {
-    const branchName = this.generateBranchName(task);
+    const branchName = await this.generateBranchName(task);
     task.branchName = branchName;
     task.status = 'dispatched';
     task.dispatchedAt = Date.now();
@@ -285,9 +310,10 @@ export class GoalOrchestrator {
 
     try {
       // 获取 goal worktree 目录
-      const { stdout } = await execFileAsync(
-        'git', ['worktree', 'list', '--porcelain'],
-        { cwd: state.baseCwd }
+      const stdout = await execGit(
+        ['worktree', 'list', '--porcelain'],
+        state.baseCwd,
+        `dispatchTask(${task.id}): list worktrees`
       );
 
       // 解析 worktree list 找到 goal 分支对应的目录
@@ -443,9 +469,10 @@ export class GoalOrchestrator {
 
     try {
       // 找到 goal worktree 目录
-      const { stdout } = await execFileAsync(
-        'git', ['worktree', 'list', '--porcelain'],
-        { cwd: state.baseCwd }
+      const stdout = await execGit(
+        ['worktree', 'list', '--porcelain'],
+        state.baseCwd,
+        `mergeAndCleanup(${task.branchName}): list worktrees`
       );
       const goalWorktreeDir = this.findWorktreeDir(stdout, state.goalBranch);
       if (!goalWorktreeDir) {
@@ -509,16 +536,11 @@ export class GoalOrchestrator {
 
   // ========== 辅助方法 ==========
 
-  /** 生成子任务分支名 */
-  private generateBranchName(task: GoalTask): string {
+  /** 生成子任务分支名（中文用 haiku 翻译） */
+  private async generateBranchName(task: GoalTask): Promise<string> {
     const prefix = task.type === '调研' ? 'research' : 'feat';
-    const sanitized = task.description
-      .replace(/[^a-z0-9\u4e00-\u9fff]/gi, '-')
-      .replace(/-+/g, '-')
-      .replace(/^-|-$/g, '')
-      .slice(0, 30)
-      .toLowerCase();
-    return `${prefix}/${task.id}-${sanitized || 'task'}`;
+    const translated = await translateToBranchName(task.description);
+    return `${prefix}/${task.id}-${translated.slice(0, 30) || 'task'}`;
   }
 
   /** 构建子任务的 Claude 提示词 */
