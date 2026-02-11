@@ -232,6 +232,44 @@ export interface TelegramBotConfig {
   apiPort: number;                          // 本地 HTTP API 端口（0 = 禁用）
 }
 
+// ========== Goal Orchestrator ==========
+
+export type GoalDriveStatus = 'running' | 'paused' | 'completed' | 'failed';
+export type GoalTaskStatus = 'pending' | 'dispatched' | 'running' | 'completed' | 'failed' | 'blocked' | 'skipped';
+export type GoalTaskType = '代码' | '手动' | '调研';
+
+export interface GoalTask {
+  id: string;                  // 本地唯一 ID（t1, t2, ...）
+  description: string;         // 子任务描述（来自 Notion）
+  type: GoalTaskType;
+  depends: string[];           // 依赖的 task ID（如 ["t1", "t2"]）
+  phase?: number;              // 可选：分批编号
+
+  // 执行状态
+  status: GoalTaskStatus;
+  branchName?: string;         // 分配的分支名
+  topicId?: number;            // 对应的 Telegram Topic ID
+  dispatchedAt?: number;
+  completedAt?: number;
+  error?: string;              // 失败原因
+  merged?: boolean;            // 是否已 merge 到 goal 分支
+  notifiedBlocked?: boolean;   // 已通知用户该手动任务待处理
+}
+
+export interface GoalDriveState {
+  goalId: string;              // Notion page ID
+  goalName: string;
+  goalBranch: string;          // "goal/<name>"
+  goalTopicId: number;         // 调度员 topic（用于通知用户）
+  baseCwd: string;             // 主仓库路径
+  status: GoalDriveStatus;
+  createdAt: number;
+  updatedAt: number;
+  maxConcurrent: number;       // 最大并行子任务数
+
+  tasks: GoalTask[];
+}
+
 // Topic 归档会话
 export interface ArchivedSession extends Session {
   archivedAt: number;        // 归档时间戳

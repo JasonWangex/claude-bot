@@ -19,6 +19,7 @@ import { listTopics, createTopic, getTopic, updateTopic, deleteTopic, archiveTop
 import { sendMessage } from './routes/messages.js';
 import { clearSession, compactSession, rewindSession, stopSession } from './routes/session-ops.js';
 import { getModels, setDefaultModel } from './routes/models.js';
+import { startDrive, getDriveStatus, pauseDrive, resumeDrive, skipTask, markTaskDone, retryTask } from './routes/goals.js';
 
 function defineRoutes(): Route[] {
   const r = (method: string, path: string, handler: Route['handler']): Route => {
@@ -55,6 +56,15 @@ function defineRoutes(): Route[] {
     r('POST', '/api/topics/:topicId/compact', compactSession),
     r('POST', '/api/topics/:topicId/rewind', rewindSession),
     r('POST', '/api/topics/:topicId/stop', stopSession),
+
+    // Goal Drive
+    r('POST', '/api/goals/:goalId/drive', startDrive),
+    r('GET',  '/api/goals/:goalId/status', getDriveStatus),
+    r('POST', '/api/goals/:goalId/pause', pauseDrive),
+    r('POST', '/api/goals/:goalId/resume', resumeDrive),
+    r('POST', '/api/goals/:goalId/tasks/:taskId/skip', skipTask),
+    r('POST', '/api/goals/:goalId/tasks/:taskId/done', markTaskDone),
+    r('POST', '/api/goals/:goalId/tasks/:taskId/retry', retryTask),
   ];
 }
 

@@ -17,6 +17,7 @@ import { logger } from '../utils/logger.js';
 import { getAuthorizedChatId } from '../utils/env.js';
 import { escapeHtml } from './message-utils.js';
 import { ApiServer } from '../api/server.js';
+import { GoalOrchestrator } from '../orchestrator/index.js';
 
 export class TelegramBot {
   private bot: Telegraf;
@@ -27,6 +28,7 @@ export class TelegramBot {
   private messageQueue: MessageQueue;
   private claudeClient: ClaudeClient;
   private apiServer: ApiServer | null = null;
+  private orchestrator: GoalOrchestrator;
   private config: TelegramBotConfig;
 
   constructor(config: TelegramBotConfig) {
@@ -67,6 +69,16 @@ export class TelegramBot {
     this.commandHandler = new CommandHandler(this.stateManager, this.claudeClient, this.messageHandler, this.messageQueue, this.config);
     this.messageHandler.setCommandHandler(this.commandHandler);
 
+    // Goal Orchestrator（自动调度引擎）
+    this.orchestrator = new GoalOrchestrator({
+      stateManager: this.stateManager,
+      claudeClient: this.claudeClient,
+      messageHandler: this.messageHandler,
+      telegram: this.bot.telegram,
+      mq: this.messageQueue,
+      config,
+    });
+
     // API 服务器（直接调用服务层，不走 Telegraf 管道）
     if (config.apiPort > 0) {
       this.apiServer = new ApiServer({
@@ -76,6 +88,7 @@ export class TelegramBot {
         telegram: this.bot.telegram,
         mq: this.messageQueue,
         config,
+        orchestrator: this.orchestrator,
       });
     }
 
@@ -408,6 +421,9 @@ export class TelegramBot {
 
     // 重连上次部署时正在运行的 Claude 进程
     await this.reconnectOrphanedProcesses();
+
+    // 恢复进行中的 Goal drives
+    await this.orchestrator.restoreRunningDrives();
 
     // 启动本地 API 服务器
     if (this.apiServer) {
