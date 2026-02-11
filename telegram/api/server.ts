@@ -20,6 +20,7 @@ import { sendMessage } from './routes/messages.js';
 import { clearSession, compactSession, rewindSession, stopSession } from './routes/session-ops.js';
 import { getModels, setDefaultModel } from './routes/models.js';
 import { startDrive, getDriveStatus, pauseDrive, resumeDrive, skipTask, markTaskDone, retryTask } from './routes/goals.js';
+import { qdev } from './routes/qdev.js';
 
 function defineRoutes(): Route[] {
   const r = (method: string, path: string, handler: Route['handler']): Route => {
@@ -49,6 +50,7 @@ function defineRoutes(): Route[] {
     r('DELETE', '/api/topics/:topicId', deleteTopic),
     r('POST',   '/api/topics/:topicId/archive', archiveTopic),
     r('POST',   '/api/topics/:topicId/fork', forkTopic),
+    r('POST',   '/api/topics/:topicId/qdev', qdev),
 
     // Topic 内操作
     r('POST', '/api/topics/:topicId/message', sendMessage),

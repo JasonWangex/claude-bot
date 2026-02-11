@@ -26,6 +26,7 @@ import {
   resolveCustomPath
 } from '../utils/topic-path.js';
 import { forkTopicCore } from '../utils/fork-topic.js';
+import { generateBranchName } from '../utils/git-utils.js';
 
 export const MODEL_OPTIONS = [
   { id: 'claude-sonnet-4-5-20250929', label: 'Sonnet 4.5' },
@@ -1859,27 +1860,6 @@ export class CommandHandler {
   }
 
   /**
-   * 用 claude -p 生成分支名（极简调用，1 turn，15s 超时）
-   */
-  private async generateBranchName(description: string): Promise<string> {
-    const execFileAsync = promisify(execFileCb);
-    const prompt = `Translate the following task description into a git branch name in <type>/<kebab-case> format. Type must be one of: feat, fix, refactor, perf, chore, docs, test. Output ONLY the branch name, nothing else.\n\nTask: ${description}`;
-    try {
-      const { stdout } = await execFileAsync('claude', [
-        '-p', prompt,
-        '--output-format', 'text',
-        '--max-turns', '1',
-        '--model', 'claude-sonnet-4-5-20250929',
-      ], { timeout: 15000 });
-      const name = stdout.trim();
-      if (/^[\w]+\/[\w][\w-]*$/.test(name)) {
-        return name;
-      }
-    } catch { /* fall through */ }
-    return `dev/task-${Date.now().toString(36)}`;
-  }
-
-  /**
    * /qdev - 快速创建开发分支和任务（原生实现）
    */
   async handleQdev(ctx: Context): Promise<void> {
@@ -1900,7 +1880,7 @@ export class CommandHandler {
       try {
         // 1. 生成分支名
         await editProgress('🚀 正在生成分支名...');
-        const branchName = await this.generateBranchName(description);
+        const branchName = await generateBranchName(description);
 
         // 2. 获取 root topic
         await editProgress(`🚀 分支: ${branchName}\n正在创建 worktree 和 topic...`);

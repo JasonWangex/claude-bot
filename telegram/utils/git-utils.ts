@@ -34,3 +34,23 @@ export async function deleteBranch(cwd: string, branchName: string): Promise<voi
   await execFileAsync('git', ['branch', '-d', branchName], { cwd });
 }
 
+/**
+ * 用 claude -p (Sonnet) 生成 <type>/<kebab-case> 分支名，15s 超时，失败回退时间戳
+ */
+export async function generateBranchName(description: string): Promise<string> {
+  const prompt = `Translate the following task description into a git branch name in <type>/<kebab-case> format. Type must be one of: feat, fix, refactor, perf, chore, docs, test. Output ONLY the branch name, nothing else.\n\nTask: ${description}`;
+  try {
+    const { stdout } = await execFileAsync('claude', [
+      '-p', prompt,
+      '--output-format', 'text',
+      '--max-turns', '1',
+      '--model', 'claude-sonnet-4-5-20250929',
+    ], { timeout: 15000 });
+    const name = stdout.trim();
+    if (/^[\w]+\/[\w][\w-]*$/.test(name)) {
+      return name;
+    }
+  } catch { /* fall through */ }
+  return `dev/task-${Date.now().toString(36)}`;
+}
+
