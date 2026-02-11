@@ -298,6 +298,7 @@ export class MessageHandler {
     let lastProgressText = `⏳${modeLabel} 思考中...`;
     let toolUseCount = 0;
     let lastEditTime = Date.now();
+    const startTime = Date.now();
     let sentTextCount = 0;
     let lastSentText = '';
     let compactPreTokens: number | null = null;
@@ -383,6 +384,9 @@ export class MessageHandler {
       }
     };
 
+    // 经过时间标签（从任务开始计算）
+    const elapsed = () => `${Math.round((Date.now() - startTime) / 1000)}s`;
+
     // 进度回调
     const onProgress = (event: StreamEvent) => {
       // 排队等锁通知
@@ -394,7 +398,7 @@ export class MessageHandler {
         return;
       }
       if (event.type === 'system' && subtype === 'lock_acquired') {
-        const newText = `⏳ 思考中...`;
+        const newText = `⏳ 思考中... (${elapsed()})`;
         lastProgressText = newText;
         mq.edit(chatId, progressMsgId, newText, { replyMarkup });
         return;
@@ -413,7 +417,7 @@ export class MessageHandler {
       }
       if (event.type === 'system' && subtype === 'stall_warning') {
         const secs = (event as any).stallSeconds || '?';
-        const newText = `${lastProgressText}\n⚠️ 已 ${secs}s 无输出，可能在深度思考中...\n使用 ⏹ 可手动停止`;
+        const newText = `${lastProgressText}\n⚠️ 已 ${secs}s 无输出 (${elapsed()})，可能在深度思考中...\n使用 ⏹ 可手动停止`;
         mq.edit(chatId, progressMsgId, newText, { replyMarkup });
         return;
       }
@@ -435,7 +439,7 @@ export class MessageHandler {
 
       // compact 进度
       if (event.status === 'compacting') {
-        const newText = `🗜️ 正在压缩上下文...`;
+        const newText = `🗜️ 正在压缩上下文... (${elapsed()})`;
         mq.edit(chatId, progressMsgId, newText, { replyMarkup });
         return;
       }
@@ -443,7 +447,7 @@ export class MessageHandler {
         compactPreTokens = event.compact_metadata.pre_tokens;
       }
       if (event.subtype === 'compact_boundary') {
-        const newText = `⏳ 上下文已压缩，继续思考...`;
+        const newText = `⏳ 上下文已压缩，继续思考... (${elapsed()})`;
         mq.edit(chatId, progressMsgId, newText, { replyMarkup });
         return;
       }
@@ -504,7 +508,7 @@ export class MessageHandler {
               }
             }
 
-            const newText = `🔧 [${toolUseCount}] ${toolLabel}${detail}`;
+            const newText = `🔧 [${toolUseCount}] ${toolLabel}${detail} (${elapsed()})`;
 
             const now = Date.now();
             if (newText !== lastProgressText && now - lastEditTime >= 5000) {
