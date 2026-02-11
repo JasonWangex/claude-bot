@@ -138,6 +138,7 @@ export class TelegramBot {
     this.bot.command('attach', (ctx) => this.commandHandler.handleAttach(ctx));
     this.bot.command('qdev', (ctx) => this.commandHandler.handleQdev(ctx));
     this.bot.command('merge', (ctx) => this.commandHandler.handleMerge(ctx));
+    this.bot.command('commit', (ctx) => this.commandHandler.handleCommit(ctx));
     // General + Topic 通用命令
     this.bot.command('model', (ctx) => this.commandHandler.handleModel(ctx));
 

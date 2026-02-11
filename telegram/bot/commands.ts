@@ -272,6 +272,7 @@ export class CommandHandler {
         `/model - 切换当前 Topic 模型\n` +
         `/info - 查看当前 Topic 详情\n` +
         `/attach [session_id] - 链接到指定 Claude Session\n` +
+        `/commit [备注] - 审查代码变更后自动提交\n` +
         `/merge &lt;topic或分支名&gt; - 合并 worktree 分支到 main 并清理\n\n` +
         `<b>使用方法</b>\n` +
         `• /topics 统一管理所有 Topic（每个 Topic = 独立会话）\n` +
@@ -1847,6 +1848,37 @@ export class CommandHandler {
 
       // Fire-and-forget: 独立 claude -p 进程，不占用当前 topic 的 session/lock
       this.spawnSkillProcess('qdev', prompt, session.cwd, chatId, topicId);
+    });
+  }
+
+  /**
+   * /commit - 审查代码变更后自动提交（独立非交互 Claude 进程）
+   */
+  async handleCommit(ctx: Context): Promise<void> {
+    await this.requireTopic(ctx, async (session, topicId) => {
+      const text = (ctx.message as any)?.text || '';
+      const message = text.replace(/^\/commit\s*/, '').trim();
+
+      const chatId = ctx.chat!.id;
+
+      const skillPath = join(homedir(), '.claude/skills/commit/SKILL.md');
+      let skillContent: string;
+      try {
+        skillContent = await readFile(skillPath, 'utf-8');
+      } catch {
+        await ctx.reply('❌ 未找到 commit skill 文件: ~/.claude/skills/commit/SKILL.md');
+        return;
+      }
+
+      // 提取 frontmatter 之后的内容
+      const bodyMatch = skillContent.match(/^---[\s\S]*?---\s*([\s\S]*)$/);
+      const prompt = (bodyMatch ? bodyMatch[1] : skillContent)
+        .replace('{{SKILL_ARGS}}', message);
+
+      await ctx.reply(`📝 正在后台审查并提交代码...${message ? `\n备注: ${message}` : ''}`);
+
+      // Fire-and-forget: 独立 claude -p 进程，不占用当前 topic 的 session/lock
+      this.spawnSkillProcess('commit', prompt, session.cwd, chatId, topicId);
     });
   }
 
