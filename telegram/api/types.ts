@@ -9,6 +9,7 @@ import type { MessageHandler } from '../bot/handlers.js';
 import type { TelegramBotConfig } from '../types/index.js';
 import type { Telegram } from 'telegraf';
 import type { MessageQueue } from '../bot/message-queue.js';
+import type { GoalOrchestrator } from '../orchestrator/index.js';
 
 // ========== 通用 ==========
 
@@ -27,6 +28,7 @@ export interface ApiDeps {
   telegram: Telegram;
   mq: MessageQueue;
   config: TelegramBotConfig;
+  orchestrator?: GoalOrchestrator;
 }
 
 // ========== 路由 ==========

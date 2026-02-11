@@ -74,6 +74,8 @@ data_source_url: `collection://d8cfb7d5-bf11-4ce3-bed4-37fabdec77e0`
 - **子任务拆解**：拆解到"执行时不需要做判断"的粒度
   - 每个子任务标注类型：`[代码]` / `[手动]` / `[调研]`
   - 代码类子任务注明技术选择
+  - 标注依赖关系：`— depends: t1, t2`
+  - 可选使用 Phase 分组（Phase N 的任务在 Phase N-1 全部完成后才执行）
 - **关键决策**：记录讨论中做出的重要决策
 
 ### 2. 写入 Notion
@@ -107,9 +109,10 @@ data_source_url: `collection://d8cfb7d5-bf11-4ce3-bed4-37fabdec77e0`
 
 ## 子任务
 
-- [ ] `[类型]` 子任务描述 — 技术备注
-- [ ] `[类型]` 子任务描述
-- [ ] `[类型]` 子任务描述
+- [ ] `[类型]` t1: 子任务描述 — 技术备注
+- [ ] `[类型]` t2: 子任务描述 — depends: t1
+- [ ] `[类型]` t3: 子任务描述 — depends: t1
+- [ ] `[类型]` t4: 子任务描述 — depends: t2, t3
 
 ▶## 决策记录
 	- **<决策主题>**（<日期>）: <决策内容和原因>
@@ -148,6 +151,49 @@ data_source_url: `collection://d8cfb7d5-bf11-4ce3-bed4-37fabdec77e0`
 ⏳ 待确认:
   - <如果有待确认事项>
 ```
+
+### 1.5. 自动推进检测（Drive）
+
+展示摘要后，如果有**未完成的 `[代码]` 或 `[调研]` 子任务**，自动启动 Goal Drive：
+
+1. **解析子任务**为结构化数据：
+   ```json
+   [
+     { "id": "t1", "description": "创建数据模型", "type": "代码", "depends": [], "phase": 1 },
+     { "id": "t2", "description": "实现 API", "type": "代码", "depends": ["t1"], "phase": 2 }
+   ]
+   ```
+
+   解析规则：
+   - 子任务 ID: 按出现顺序 t1, t2, t3...
+   - type: 从 `[代码]`、`[手动]`、`[调研]` 标注解析，默认为 `代码`
+   - depends: 从 `— depends: t1, t2` 解析，或从 Phase 标题推断
+   - phase: 从 `## Phase N` 标题推断
+
+2. **调用 Drive API** 启动自动调度：
+   ```
+   POST http://127.0.0.1:3456/api/goals/<page-id>/drive
+   {
+     "goalName": "<Goal Name>",
+     "goalTopicId": <当前 topic 的 message_thread_id>,
+     "baseCwd": "<当前工作目录>",
+     "tasks": [解析出的子任务数组],
+     "maxConcurrent": 3
+   }
+   ```
+
+3. **输出启动确认**：
+   ```
+   🎯 <Goal Name>
+   📊 进度: 2/6
+   🔜 可并行执行: 3 个子任务
+
+   🚀 自动推进已启动...
+   ```
+
+如果 Drive API 返回错误（如已在运行），显示当前状态并等待用户指令。
+
+如果所有子任务都已完成或都是手动任务，跳过自动推进，直接进入用户指令模式。
 
 ### 2. 根据用户指令更新
 
