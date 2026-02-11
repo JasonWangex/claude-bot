@@ -10,7 +10,8 @@ import { ClaudeClient } from '../claude/client.js';
 import { escapeHtml } from './message-utils.js';
 import { MessageQueue } from './message-queue.js';
 import { StreamEvent, TelegramBotConfig } from '../types/index.js';
-import { spawn } from 'child_process';
+import { spawn, execFile as execFileCb } from 'child_process';
+import { promisify } from 'util';
 import { stat, readFile } from 'fs/promises';
 import { resolve, join } from 'path';
 import { homedir } from 'os';
@@ -1920,6 +1921,22 @@ export class CommandHandler {
         return;
       }
 
+      // 预计算 main worktree 路径
+      let mainCwd: string;
+      try {
+        const execFileAsync = promisify(execFileCb);
+        const { stdout } = await execFileAsync('git', ['worktree', 'list'], { cwd: targetSession.cwd });
+        const mainLine = stdout.split('\n').find(line => /\[(main|master)\]/.test(line));
+        if (!mainLine) {
+          await ctx.reply('❌ 未找到 main/master 分支的 worktree');
+          return;
+        }
+        mainCwd = mainLine.split(/\s+/)[0];
+      } catch (err: any) {
+        await ctx.reply(`❌ 获取 main worktree 路径失败: ${err.message}`);
+        return;
+      }
+
       // 加载 skill
       const skillPath = join(homedir(), '.claude/skills/merge/SKILL.md');
       let skillContent: string;
@@ -1935,7 +1952,8 @@ export class CommandHandler {
       const prompt = (bodyMatch ? bodyMatch[1] : skillContent)
         .replaceAll('{{TARGET_TOPIC_ID}}', String(targetSession.topicId))
         .replaceAll('{{TARGET_BRANCH}}', targetSession.worktreeBranch)
-        .replaceAll('{{TARGET_CWD}}', targetSession.cwd);
+        .replaceAll('{{TARGET_CWD}}', targetSession.cwd)
+        .replaceAll('{{MAIN_CWD}}', mainCwd);
 
       await ctx.reply(
         `🔄 正在后台执行合并清理: ${targetSession.name}\n` +
@@ -1943,9 +1961,9 @@ export class CommandHandler {
         `工作目录: ${targetSession.cwd}`
       );
 
-      // Fire-and-forget: 独立 claude -p 进程
+      // Fire-and-forget: 独立 claude -p 进程，cwd 设为 main worktree（目标 worktree 会被删除）
       const replyTopicId = currentTopicId || targetSession.topicId;
-      this.spawnSkillProcess('merge', prompt, targetSession.cwd, chatId, replyTopicId, { maxTurns: 20 });
+      this.spawnSkillProcess('merge', prompt, mainCwd, chatId, replyTopicId, { maxTurns: 5 });
     });
   }
 }
