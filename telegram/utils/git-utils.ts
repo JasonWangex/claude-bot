@@ -37,7 +37,7 @@ export async function deleteBranch(cwd: string, branchName: string): Promise<voi
  */
 export async function generateBranchName(description: string): Promise<string> {
   const result = await chatCompletion(
-    `Translate the following task description into a git branch name in <type>/<kebab-case> format. Type must be one of: feat, fix, refactor, perf, chore, docs, test. Output ONLY the branch name, nothing else.\n\nTask: ${description}`,
+    `Translate the following task description into a git branch name in <type>/<kebab-case> format. The kebab-case part must be at most 4 words (e.g. feat/add-dark-mode, fix/login-null-check). Type must be one of: feat, fix, refactor, perf, chore, docs, test. Output ONLY the branch name, nothing else.\n\nTask: ${description}`,
   );
   if (result) {
     const name = result.trim();
