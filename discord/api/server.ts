@@ -23,7 +23,7 @@ import { startDrive, getDriveStatus, pauseDrive, resumeDrive, skipTask, markTask
 import { listGoals, createGoal, getGoal, updateGoal } from './routes/goals-crud.js';
 import { qdev } from './routes/qdev.js';
 import { listDevLogs, getDevLog, createDevLog } from './routes/devlogs.js';
-import { listIdeas, createIdea, getIdea, updateIdea } from './routes/ideas.js';
+import { listIdeas, createIdea, getIdea, updateIdea, deleteIdea } from './routes/ideas.js';
 
 function defineRoutes(): Route[] {
   const r = (method: string, path: string, handler: Route['handler']): Route => {
@@ -82,10 +82,11 @@ function defineRoutes(): Route[] {
     r('POST', '/api/goals/:goalId/tasks/:taskId/retry', retryTask),
 
     // Ideas CRUD
-    r('GET',   '/api/ideas', listIdeas),
-    r('POST',  '/api/ideas', createIdea),
-    r('GET',   '/api/ideas/:id', getIdea),
-    r('PATCH', '/api/ideas/:id', updateIdea),
+    r('GET',    '/api/ideas', listIdeas),
+    r('POST',   '/api/ideas', createIdea),
+    r('GET',    '/api/ideas/:id', getIdea),
+    r('PATCH',  '/api/ideas/:id', updateIdea),
+    r('DELETE', '/api/ideas/:id', deleteIdea),
   ];
 }
 

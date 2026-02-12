@@ -1,6 +1,7 @@
 /**
- * Goal Drive API 路由
+ * Goal API 路由
  *
+ * GET  /api/goals                 — 列出 Goals，支持 ?status=&project= 筛选
  * POST /api/goals/:goalId/drive   — 启动 Goal drive
  * GET  /api/goals/:goalId/status  — 查看 drive 状态
  * POST /api/goals/:goalId/pause   — 暂停
@@ -15,6 +16,50 @@ import type { RouteHandler } from '../types.js';
 import { sendJson, requireAuth, readJsonBody } from '../middleware.js';
 import { logger } from '../../utils/logger.js';
 import type { StartDriveParams } from '../../orchestrator/index.js';
+import { getDb } from '../../db/index.js';
+import type { GoalRow } from '../../types/db.js';
+
+/** GoalRow → API 响应格式 */
+function toApiGoal(row: GoalRow) {
+  return {
+    id: row.id,
+    name: row.name,
+    status: row.status,
+    type: row.type,
+    project: row.project,
+    date: row.date,
+    completion: row.completion,
+    progress: row.progress,
+    next: row.next,
+    blocked_by: row.blocked_by,
+  };
+}
+
+// GET /api/goals
+export const listGoals: RouteHandler = async (req, res) => {
+  const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+  const status = url.searchParams.get('status');
+  const project = url.searchParams.get('project');
+
+  try {
+    const db = getDb();
+    let rows: GoalRow[];
+
+    if (status && project) {
+      rows = db.prepare('SELECT * FROM goals WHERE status = ? AND project = ? ORDER BY date DESC').all(status, project) as GoalRow[];
+    } else if (status) {
+      rows = db.prepare('SELECT * FROM goals WHERE status = ? ORDER BY date DESC').all(status) as GoalRow[];
+    } else if (project) {
+      rows = db.prepare('SELECT * FROM goals WHERE project = ? ORDER BY date DESC').all(project) as GoalRow[];
+    } else {
+      rows = db.prepare('SELECT * FROM goals ORDER BY date DESC').all() as GoalRow[];
+    }
+
+    sendJson(res, 200, { ok: true, data: rows.map(toApiGoal) });
+  } catch (error: any) {
+    sendJson(res, 500, { ok: false, error: `Failed to list goals: ${error.message}` });
+  }
+};
 
 // POST /api/goals/:goalId/drive
 export const startDrive: RouteHandler = async (req, res, params, deps) => {
