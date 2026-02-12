@@ -15,8 +15,8 @@
 // 枚举类型（与 index.ts 已有枚举对齐）
 // ================================================================
 
-/** Goal 在 Notion 中的状态（含 Idea） */
-export type GoalStatus = 'Idea' | 'Active' | 'Paused' | 'Done' | 'Abandoned';
+/** Goal 状态 */
+export type GoalStatus = 'Idea' | 'Processing' | 'Active' | 'Paused' | 'Done' | 'Abandoned';
 
 /** Goal 类型 */
 export type GoalType = '探索型' | '交付型';
