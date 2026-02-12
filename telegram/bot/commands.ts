@@ -26,6 +26,7 @@ import {
 } from '../utils/topic-path.js';
 import { forkTopicCore } from '../utils/fork-topic.js';
 import { generateBranchName } from '../utils/git-utils.js';
+import { generateTopicTitle } from '../utils/llm.js';
 
 export const MODEL_OPTIONS = [
   { id: 'claude-sonnet-4-5-20250929', label: 'Sonnet 4.5' },
@@ -1878,9 +1879,12 @@ export class CommandHandler {
         ctx.telegram.editMessageText(chatId, progressMsg.message_id, undefined, text).catch(() => {});
 
       try {
-        // 1. 生成分支名
+        // 1. 并行生成分支名和 topic 标题
         await editProgress('🚀 正在生成分支名...');
-        const branchName = await generateBranchName(description);
+        const [branchName, topicTitle] = await Promise.all([
+          generateBranchName(description),
+          generateTopicTitle(description),
+        ]);
 
         // 2. 获取 root topic
         await editProgress(`🚀 分支: ${branchName}\n正在创建 worktree 和 topic...`);
@@ -1892,7 +1896,7 @@ export class CommandHandler {
           stateManager: this.stateManager,
           telegram: this.telegram,
           worktreesDir: this.config.worktreesDir,
-        });
+        }, topicTitle);
 
         // 4. 发送任务描述到新 topic
         await editProgress(`🚀 分支: ${branchName}\n正在发送任务到新 topic...`);

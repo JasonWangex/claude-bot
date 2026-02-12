@@ -14,6 +14,7 @@ import type { RouteHandler } from '../types.js';
 import { sendJson, requireAuth, readJsonBody } from '../middleware.js';
 import { forkTopicCore } from '../../utils/fork-topic.js';
 import { generateBranchName } from '../../utils/git-utils.js';
+import { generateTopicTitle } from '../../utils/llm.js';
 import { logger } from '../../utils/logger.js';
 
 export const qdev: RouteHandler = async (req, res, params, deps) => {
@@ -36,8 +37,11 @@ export const qdev: RouteHandler = async (req, res, params, deps) => {
   const description = body.description.trim();
 
   try {
-    // 1. 生成分支名
-    const branchName = await generateBranchName(description);
+    // 1. 并行生成分支名和 topic 标题
+    const [branchName, topicTitle] = await Promise.all([
+      generateBranchName(description),
+      generateTopicTitle(description),
+    ]);
 
     // 2. 找到 root topic
     const rootSession = deps.stateManager.getRootSession(groupId, topicId);
@@ -48,7 +52,7 @@ export const qdev: RouteHandler = async (req, res, params, deps) => {
       stateManager: deps.stateManager,
       telegram: deps.telegram,
       worktreesDir: deps.config.worktreesDir,
-    });
+    }, topicTitle);
 
     // 4. 发送任务描述到新 topic
     await deps.telegram.sendMessage(groupId, description, {

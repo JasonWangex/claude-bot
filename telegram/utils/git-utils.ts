@@ -3,6 +3,7 @@
  */
 
 import { execGit } from '../orchestrator/git-ops.js';
+import { chatCompletion } from './llm.js';
 
 export async function isGitRepo(cwd: string): Promise<boolean> {
   try {
@@ -32,24 +33,17 @@ export async function deleteBranch(cwd: string, branchName: string): Promise<voi
 }
 
 /**
- * 用 claude -p (Sonnet) 生成 <type>/<kebab-case> 分支名，15s 超时，失败回退时间戳
+ * 用 DeepSeek 生成 <type>/<kebab-case> 分支名，失败回退时间戳
  */
 export async function generateBranchName(description: string): Promise<string> {
-  const { execFile } = await import('child_process');
-  const { promisify } = await import('util');
-  const execFileAsync = promisify(execFile);
-  const prompt = `Translate the following task description into a git branch name in <type>/<kebab-case> format. Type must be one of: feat, fix, refactor, perf, chore, docs, test. Output ONLY the branch name, nothing else.\n\nTask: ${description}`;
-  try {
-    const { stdout } = await execFileAsync('claude', [
-      '-p', prompt,
-      '--output-format', 'text',
-      '--max-turns', '1',
-      '--model', 'claude-sonnet-4-5-20250929',
-    ], { timeout: 15000 });
-    const name = stdout.trim();
+  const result = await chatCompletion(
+    `Translate the following task description into a git branch name in <type>/<kebab-case> format. Type must be one of: feat, fix, refactor, perf, chore, docs, test. Output ONLY the branch name, nothing else.\n\nTask: ${description}`,
+  );
+  if (result) {
+    const name = result.trim();
     if (/^[\w]+\/[\w][\w-]*$/.test(name)) {
       return name;
     }
-  } catch { /* fall through */ }
+  }
   return `dev/task-${Date.now().toString(36)}`;
 }
