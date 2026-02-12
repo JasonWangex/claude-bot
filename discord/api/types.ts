@@ -161,6 +161,20 @@ export interface QdevResponse {
   cwd: string;
 }
 
+// ========== Ideas ==========
+
+export interface CreateIdeaRequest {
+  name: string;
+  project: string;
+  status?: string;   // IdeaStatus, default 'Idea'
+}
+
+export interface UpdateIdeaRequest {
+  name?: string;
+  status?: string;   // IdeaStatus
+  project?: string;
+}
+
 // ========== 状态 ==========
 
 export interface StatusResponse {
