@@ -21,6 +21,7 @@ import { clearSession, compactSession, rewindSession, stopSession } from './rout
 import { getModels, setDefaultModel } from './routes/models.js';
 import { startDrive, getDriveStatus, pauseDrive, resumeDrive, skipTask, markTaskDone, retryTask } from './routes/goals.js';
 import { qdev } from './routes/qdev.js';
+import { listDevLogs, getDevLog, createDevLog } from './routes/devlogs.js';
 
 function defineRoutes(): Route[] {
   const r = (method: string, path: string, handler: Route['handler']): Route => {
@@ -57,6 +58,11 @@ function defineRoutes(): Route[] {
     r('POST', '/api/tasks/:threadId/compact', compactSession),
     r('POST', '/api/tasks/:threadId/rewind', rewindSession),
     r('POST', '/api/tasks/:threadId/stop', stopSession),
+
+    // DevLog CRUD
+    r('GET',  '/api/devlogs', listDevLogs),
+    r('POST', '/api/devlogs', createDevLog),
+    r('GET',  '/api/devlogs/:id', getDevLog),
 
     // Goal Drive
     r('POST', '/api/goals/:goalId/drive', startDrive),
