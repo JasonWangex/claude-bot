@@ -258,30 +258,32 @@ export class MessageHandler {
       if (textBuffer.length === 0) return;
       const drained = textBuffer.splice(0);
       const newContent = drained.join('\n\n');
-      const fullContent = textFlushedContent
-        ? textFlushedContent + '\n\n' + newContent
-        : newContent;
 
       try {
-        if (fullContent.length > 4096) {
-          if (textPlaceholderMsgId) {
-            mq.delete(threadId, textPlaceholderMsgId);
+        // 尝试追加到现有占位消息（edit 仅支持 <= 2000 字符，超出会被截断）
+        if (textPlaceholderMsgId) {
+          const combined = textFlushedContent
+            ? textFlushedContent + '\n\n' + newContent
+            : newContent;
+          if (combined.length <= 2000) {
+            mq.edit(threadId, textPlaceholderMsgId, combined);
+            textFlushedContent = combined;
+            lastTextFlushTime = Date.now();
+            return;
           }
-          await mq.sendDocument(threadId, fullContent, 'response.md', fullContent.slice(0, 1000));
-          textFlushedContent = '';
-          textPlaceholderMsgId = null;
-          await recreateProgress();
-          lastTextFlushTime = Date.now();
-          return;
+          // 超限：不合并历史内容，新发一条消息
         }
 
-        if (textPlaceholderMsgId) {
-          mq.edit(threadId, textPlaceholderMsgId, fullContent);
+        // 新发一条消息（sendLong 自动选格式：<2000 普通 / 2000-4096 embed / >4096 response.md）
+        if (newContent.length <= 2000) {
+          textPlaceholderMsgId = await mq.send(threadId, newContent, { priority: 'high' });
+          textFlushedContent = newContent;
         } else {
-          textPlaceholderMsgId = await mq.send(threadId, fullContent, { priority: 'high' });
-          await recreateProgress();
+          await mq.sendLong(threadId, newContent, { priority: 'high' });
+          textPlaceholderMsgId = null;
+          textFlushedContent = '';
         }
-        textFlushedContent = fullContent;
+        await recreateProgress();
         lastTextFlushTime = Date.now();
       } catch (e) {
         textBuffer.unshift(...drained);
