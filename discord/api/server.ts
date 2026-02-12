@@ -22,6 +22,7 @@ import { getModels, setDefaultModel } from './routes/models.js';
 import { startDrive, getDriveStatus, pauseDrive, resumeDrive, skipTask, markTaskDone, retryTask } from './routes/goals.js';
 import { qdev } from './routes/qdev.js';
 import { listDevLogs, getDevLog, createDevLog } from './routes/devlogs.js';
+import { listIdeas, getIdea, createIdea, updateIdea } from './routes/ideas.js';
 
 function defineRoutes(): Route[] {
   const r = (method: string, path: string, handler: Route['handler']): Route => {
@@ -63,6 +64,12 @@ function defineRoutes(): Route[] {
     r('GET',  '/api/devlogs', listDevLogs),
     r('POST', '/api/devlogs', createDevLog),
     r('GET',  '/api/devlogs/:id', getDevLog),
+
+    // Idea CRUD
+    r('GET',    '/api/ideas', listIdeas),
+    r('POST',   '/api/ideas', createIdea),
+    r('GET',    '/api/ideas/:id', getIdea),
+    r('PATCH',  '/api/ideas/:id', updateIdea),
 
     // Goal Drive
     r('POST', '/api/goals/:goalId/drive', startDrive),
