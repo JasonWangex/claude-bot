@@ -530,7 +530,7 @@ export class ClaudeExecutor {
 
   /**
    * 中止指定 lockKey 的运行中进程 + 排空等待队列
-   * 支持前缀匹配（用于按钮的截断 lockKey）
+   * 优先精确匹配，回退到前缀匹配
    */
   abort(lockKeyOrPrefix: string): boolean {
     let aborted = false;

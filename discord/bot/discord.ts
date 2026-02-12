@@ -226,10 +226,10 @@ export class DiscordBot {
 
     const customId = interaction.customId;
 
-    // Stop button: stop:<lockKeyPrefix>
+    // Stop button: stop:<lockKey>
     if (customId.startsWith('stop:')) {
-      const lockKeyPrefix = customId.slice('stop:'.length);
-      const wasRunning = this.claudeClient.abort(lockKeyPrefix);
+      const lockKey = customId.slice('stop:'.length);
+      const wasRunning = this.claudeClient.abort(lockKey);
       await interaction.reply({
         content: wasRunning ? 'Stopping...' : 'No running task.',
         ephemeral: true,
