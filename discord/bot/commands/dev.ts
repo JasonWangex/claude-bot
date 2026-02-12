@@ -210,7 +210,7 @@ async function handleCommit(
   const guildId = interaction.guildId!;
   const threadId = interaction.channelId;
   const message = interaction.options.getString('message') || '';
-  const { stateManager, messageQueue } = deps;
+  const { stateManager, messageHandler, messageQueue } = deps;
 
   const session = stateManager.getSession(guildId, threadId);
   if (!session) {
@@ -231,9 +231,15 @@ async function handleCommit(
   const prompt = (bodyMatch ? bodyMatch[1] : skillContent)
     .replace('{{SKILL_ARGS}}', message);
 
-  await interaction.reply(`Reviewing and committing code...${message ? `\nHint: ${message}` : ''}`);
+  await interaction.reply({
+    content: `Reviewing and committing code...${message ? `\nHint: ${message}` : ''}`,
+    ephemeral: true,
+  });
 
-  spawnSkillProcess('commit', prompt, session.cwd, threadId, messageQueue);
+  messageHandler.handleBackgroundChat(guildId, threadId, prompt).catch((err) => {
+    logger.error('commit failed:', err.message);
+    messageQueue.sendLong(threadId, `commit failed: ${err.message}`).catch(() => {});
+  });
 }
 
 // ========== /merge ==========
