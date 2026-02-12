@@ -60,10 +60,19 @@ export interface FileToolResult {
   originalFile?: string;
 }
 
-// compact 元数据
+// compact 元数据（compact_boundary 事件）
 export interface CompactMetadata {
   trigger: 'auto' | 'manual';
   pre_tokens: number;
+}
+
+// microcompact 元数据（microcompact_boundary 事件）
+export interface MicrocompactMetadata {
+  trigger: 'auto' | 'manual';
+  preTokens: number;
+  tokensSaved: number;
+  compactedToolIds?: string[];
+  clearedAttachmentUUIDs?: string[];
 }
 
 // Claude Code stream-json 事件
@@ -72,8 +81,10 @@ export interface StreamEvent {
   subtype?: string;
   session_id?: string;
   // compact 相关
-  status?: string | null;           // 'compacting' | null
+  // status 事件: {type:"system", subtype:"status", status:"compacting"|null}
+  status?: string | null;
   compact_metadata?: CompactMetadata;
+  microcompact_metadata?: MicrocompactMetadata;
   // assistant event
   message?: {
     role: string;
