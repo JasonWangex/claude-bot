@@ -3,7 +3,7 @@ name: idea
 description: >
   快速记录想法或推进已有想法到开发。有参数时直接记录到 Notion（Status=Idea）；
   无参数时列出当前项目的未开发 Ideas，选中后标记 Processing 并走 qdev 流程。
-version: 2.0.0
+version: 3.0.0
 ---
 
 # Idea - 想法管理
@@ -33,7 +33,7 @@ version: 2.0.0
 写入成功后，简短确认：
 
 ```
-💡 已记录: <想法标题>
+已记录: <想法标题>
 ```
 
 ---
@@ -51,7 +51,7 @@ version: 2.0.0
 ### 2. 展示列表
 
 ```
-💡 未开发的 Ideas (项目: <Project>)
+未开发的 Ideas (项目: <Project>)
 
 1. <Idea Name>
 2. <Idea Name>
@@ -86,32 +86,32 @@ version: 2.0.0
 - **type**: `feat`(新功能), `fix`(修复), `refactor`(重构), `perf`(性能), `docs`(文档), `test`(测试), `chore`(工程化)
 - **kebab-case**: 小写字母+连字符，2-4 个单词
 
-**查找 root topic：**
+**查找 root task：**
 
 ```bash
 API="http://127.0.0.1:3456"
-curl -s $API/api/topics
+curl -s $API/api/tasks
 ```
 
-从返回的 topic 列表中：
-1. 用当前工作目录 (`pwd`) 匹配 topic 的 `cwd` 字段，找到**当前 topic**
-2. 如果当前 topic 有 `parent_topic_id`，沿着 parent 链向上查找，直到找到没有 `parent_topic_id` 的 topic — 这就是 **root topic**
-3. 如果当前 topic 没有 `parent_topic_id`，它自己就是 root topic
+从返回的 task 列表中：
+1. 用当前工作目录 (`pwd`) 匹配 task 的 `cwd` 字段，找到**当前 task**
+2. 如果当前 task 有 `parent_thread_id`，沿着 parent 链向上查找，直到找到没有 `parent_thread_id` 的 task — 这就是 **root task**
+3. 如果当前 task 没有 `parent_thread_id`，它自己就是 root task
 
-**Fork root topic：**
+**Fork root task：**
 
 ```bash
-curl -s -X POST $API/api/topics/<ROOT_TOPIC_ID>/fork \
+curl -s -X POST $API/api/tasks/<ROOT_TASK_ID>/fork \
   -H 'Content-Type: application/json' \
   -d '{"branch": "<生成的分支名>"}'
 ```
 
-从响应中获取 `data.topic_id` 作为新 fork 的 topic ID。
+从响应中获取 `data.thread_id` 作为新 fork 的 task ID。
 
 **发送任务描述：**
 
 ```bash
-curl -s -X POST $API/api/topics/<FORK_TOPIC_ID>/message \
+curl -s -X POST $API/api/tasks/<FORK_TASK_ID>/message \
   -H 'Content-Type: application/json' \
   -d '{"text": "<Idea 的 Name>"}'
 ```
@@ -119,16 +119,16 @@ curl -s -X POST $API/api/topics/<FORK_TOPIC_ID>/message \
 #### 3.3 输出确认
 
 ```
-✅ Idea 已推进到开发
+Idea 已推进到开发
 
-📋 **任务信息**
+任务信息
 - Idea: <Idea Name>
-- Root Topic: <root topic name>
-- Fork Topic: <fork topic name>
+- Root Task: <root task name>
+- Fork Task: <fork task name>
 - 分支: `<branch>`
 - Notion 状态: Processing
 
-🚀 已在 fork topic 中发送任务，Claude 正在处理！
+已在 fork task 中发送任务，Claude 正在处理！
 ```
 
 ## 重要提示
@@ -137,7 +137,7 @@ curl -s -X POST $API/api/topics/<FORK_TOPIC_ID>/message \
 - **列表模式**: 列出后等待用户选择，选择后不再确认，直接推进
 - **所有 API 操作通过 curl**: 不直接执行 git 命令
 - **如果 API 不可用**: 提示用户检查 Bot 是否运行
-- **如果找不到匹配的 topic**: 提示用户当前目录不在任何 topic 的工作目录中
+- **如果找不到匹配的 task**: 提示用户当前目录不在任何 task 的工作目录中
 
 ## 项目名判断
 

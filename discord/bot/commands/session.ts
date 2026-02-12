@@ -1,0 +1,296 @@
+/**
+ * Session 命令: /clear, /compact, /rewind, /plan, /stop, /attach
+ * 这些命令只在 Forum Post Thread 中有效
+ */
+
+import {
+  SlashCommandBuilder,
+  type ChatInputCommandInteraction,
+} from 'discord.js';
+import { checkAuth } from '../auth.js';
+import { getAuthorizedGuildId } from '../../utils/env.js';
+import { escapeMarkdown } from '../message-utils.js';
+import { StateManager } from '../state.js';
+import { logger } from '../../utils/logger.js';
+import type { CommandDeps } from './types.js';
+
+export const sessionCommands = [
+  new SlashCommandBuilder()
+    .setName('clear')
+    .setDescription('Clear Claude conversation context'),
+
+  new SlashCommandBuilder()
+    .setName('compact')
+    .setDescription('Compact Claude conversation context'),
+
+  new SlashCommandBuilder()
+    .setName('rewind')
+    .setDescription('Undo last conversation turn'),
+
+  new SlashCommandBuilder()
+    .setName('plan')
+    .setDescription('Send message in plan mode (plan only, no execution)')
+    .addStringOption(opt =>
+      opt.setName('message').setDescription('Message to send in plan mode').setRequired(true)
+    ),
+
+  new SlashCommandBuilder()
+    .setName('stop')
+    .setDescription('Stop the currently running Claude task'),
+
+  new SlashCommandBuilder()
+    .setName('attach')
+    .setDescription('Link to a specific Claude session')
+    .addStringOption(opt =>
+      opt.setName('session_id').setDescription('Claude session ID to attach to').setRequired(false)
+    ),
+];
+
+export async function handleSessionCommand(
+  interaction: ChatInputCommandInteraction,
+  deps: CommandDeps,
+): Promise<void> {
+  switch (interaction.commandName) {
+    case 'clear':
+      return handleClear(interaction, deps);
+    case 'compact':
+      return handleCompact(interaction, deps);
+    case 'rewind':
+      return handleRewind(interaction, deps);
+    case 'plan':
+      return handlePlan(interaction, deps);
+    case 'stop':
+      return handleStop(interaction, deps);
+    case 'attach':
+      return handleAttach(interaction, deps);
+  }
+}
+
+// ========== /clear ==========
+
+async function handleClear(
+  interaction: ChatInputCommandInteraction,
+  deps: CommandDeps,
+): Promise<void> {
+  if (!requireAuth(interaction)) return;
+  if (!requireThread(interaction)) return;
+
+  const guildId = interaction.guildId!;
+  const threadId = interaction.channelId;
+  deps.stateManager.clearSessionClaudeId(guildId, threadId);
+  await interaction.reply('Context cleared. Next message will start a new Claude session.');
+}
+
+// ========== /compact ==========
+
+async function handleCompact(
+  interaction: ChatInputCommandInteraction,
+  deps: CommandDeps,
+): Promise<void> {
+  if (!requireAuth(interaction)) return;
+  if (!requireThread(interaction)) return;
+
+  const guildId = interaction.guildId!;
+  const threadId = interaction.channelId;
+  const { stateManager, claudeClient } = deps;
+
+  const session = stateManager.getSession(guildId, threadId);
+  if (!session?.claudeSessionId) {
+    await interaction.reply({ content: 'No active Claude context to compact.', ephemeral: true });
+    return;
+  }
+
+  await interaction.deferReply();
+
+  let preTokens: number | null = null;
+  let postTokens: number | null = null;
+
+  const onProgress = (event: any) => {
+    if (event.compact_metadata) {
+      preTokens = event.compact_metadata.pre_tokens;
+    }
+    if (event.usage) {
+      postTokens = event.usage.input_tokens
+        + (event.usage.cache_read_input_tokens || 0)
+        + (event.usage.cache_creation_input_tokens || 0);
+    }
+  };
+
+  try {
+    const lockKey = StateManager.threadLockKey(guildId, threadId);
+    await claudeClient.compact(session.claudeSessionId, session.cwd, lockKey, onProgress);
+
+    let info = 'Context compacted';
+    if (preTokens) {
+      info += `\nBefore: ${Math.round(preTokens / 1000)}K tokens`;
+      if (postTokens) {
+        info += ` → After: ${Math.round(postTokens / 1000)}K tokens`;
+      }
+    }
+    await interaction.editReply(info);
+  } catch (error: any) {
+    await interaction.editReply(`Compact failed: ${error.message}`);
+  }
+}
+
+// ========== /rewind ==========
+
+async function handleRewind(
+  interaction: ChatInputCommandInteraction,
+  deps: CommandDeps,
+): Promise<void> {
+  if (!requireAuth(interaction)) return;
+  if (!requireThread(interaction)) return;
+
+  const guildId = interaction.guildId!;
+  const threadId = interaction.channelId;
+
+  const result = deps.stateManager.rewindSession(guildId, threadId);
+  if (!result.success) {
+    await interaction.reply({ content: result.reason || 'Cannot rewind', ephemeral: true });
+    return;
+  }
+
+  await interaction.reply('Last conversation turn undone. Claude context will continue from previous turn.');
+}
+
+// ========== /plan ==========
+
+async function handlePlan(
+  interaction: ChatInputCommandInteraction,
+  deps: CommandDeps,
+): Promise<void> {
+  if (!requireAuth(interaction)) return;
+  if (!requireThread(interaction)) return;
+
+  const guildId = interaction.guildId!;
+  const threadId = interaction.channelId;
+  const message = interaction.options.getString('message', true);
+
+  deps.stateManager.setSessionPlanMode(guildId, threadId, true);
+
+  // TODO: Phase 5 — 将消息路由到 messageHandler.handleTextWithMode()
+  await interaction.reply(`Plan mode enabled. Processing: ${message.slice(0, 100)}...`);
+}
+
+// ========== /stop ==========
+
+async function handleStop(
+  interaction: ChatInputCommandInteraction,
+  deps: CommandDeps,
+): Promise<void> {
+  if (!requireAuth(interaction)) return;
+  if (!requireThread(interaction)) return;
+
+  const guildId = interaction.guildId!;
+  const threadId = interaction.channelId;
+  const { stateManager, claudeClient } = deps;
+
+  const session = stateManager.getSession(guildId, threadId);
+  if (!session) {
+    await interaction.reply({ content: 'No session found.', ephemeral: true });
+    return;
+  }
+
+  const lockKey = StateManager.threadLockKey(guildId, threadId);
+  const wasRunning = claudeClient.abort(lockKey);
+  await interaction.reply(wasRunning
+    ? 'Stopping task...'
+    : 'No running task to stop.');
+}
+
+// ========== /attach ==========
+
+async function handleAttach(
+  interaction: ChatInputCommandInteraction,
+  deps: CommandDeps,
+): Promise<void> {
+  if (!requireAuth(interaction)) return;
+  if (!requireThread(interaction)) return;
+
+  const guildId = interaction.guildId!;
+  const threadId = interaction.channelId;
+  const { stateManager, claudeClient } = deps;
+  const threadName = (interaction.channel && 'name' in interaction.channel ? interaction.channel.name : null) ?? `thread-${threadId}`;
+
+  const session = stateManager.getOrCreateSession(guildId, threadId, {
+    name: threadName,
+    cwd: stateManager.getGuildDefaultCwd(guildId),
+  });
+
+  const targetSessionId = interaction.options.getString('session_id');
+
+  if (!targetSessionId) {
+    const currentId = session.claudeSessionId;
+    await interaction.reply({
+      content: currentId
+        ? `Current Claude Session: \`${currentId}\`\n\nUsage: \`/attach session_id:<id>\``
+        : `No active Claude Session.\n\nUsage: \`/attach session_id:<id>\``,
+      ephemeral: true,
+    });
+    return;
+  }
+
+  // 检查是否有其他 thread 持有该 session
+  const holder = stateManager.findSessionHolder(guildId, targetSessionId);
+  if (holder && holder.threadId === threadId) {
+    await interaction.reply({ content: 'Already linked to this session.', ephemeral: true });
+    return;
+  }
+
+  if (holder) {
+    const holderLockKey = StateManager.threadLockKey(guildId, holder.threadId);
+    if (claudeClient.isRunning(holderLockKey)) {
+      await interaction.reply({
+        content: `Thread "${holder.name}" is currently using this session. Stop it first.`,
+        ephemeral: true,
+      });
+      return;
+    }
+    stateManager.clearSessionClaudeId(guildId, holder.threadId);
+  }
+
+  const currentLockKey = StateManager.threadLockKey(guildId, threadId);
+  if (claudeClient.isRunning(currentLockKey)) {
+    await interaction.reply({
+      content: 'Current thread has a running task. Stop it first.',
+      ephemeral: true,
+    });
+    return;
+  }
+
+  stateManager.setSessionClaudeId(guildId, threadId, targetSessionId);
+
+  let msg = `Linked to Claude Session: \`${targetSessionId.slice(0, 8)}...\``;
+  if (holder) {
+    msg += `\n(Disconnected from thread "${holder.name}")`;
+  }
+  await interaction.reply(msg);
+}
+
+// ========== Helpers ==========
+
+function requireAuth(interaction: ChatInputCommandInteraction): boolean {
+  if (!checkAuth(interaction.guildId)) {
+    const authorizedGuildId = getAuthorizedGuildId();
+    interaction.reply({
+      content: authorizedGuildId
+        ? 'Unauthorized.'
+        : 'Please use `/login <token>` first.',
+      ephemeral: true,
+    }).catch(() => {});
+    return false;
+  }
+  return true;
+}
+
+function requireThread(interaction: ChatInputCommandInteraction): boolean {
+  if (!interaction.channel?.isThread()) {
+    interaction.reply({
+      content: 'This command must be used inside a Forum Post thread.',
+      ephemeral: true,
+    }).catch(() => {});
+    return false;
+  }
+  return true;
+}

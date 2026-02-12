@@ -2,7 +2,7 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-SERVICES="claude-telegram claude-monitor"
+SERVICES="claude-discord claude-monitor"
 
 if [ ! -f prd.env ]; then
   echo "Missing prd.env. Please create it from env.example."
@@ -104,7 +104,7 @@ do_status() {
 }
 
 do_logs() {
-  journalctl --user -u claude-telegram -u claude-monitor -f
+  journalctl --user -u claude-discord -u claude-monitor -f
 }
 
 case "${1:-}" in
@@ -122,7 +122,7 @@ case "${1:-}" in
     echo "  stop     Stop services"
     echo "  restart  Restart services"
     echo "  status   Show service status"
-    echo "  logs     Follow logs (telegram + monitor)"
+    echo "  logs     Follow logs (discord + monitor)"
     exit 1
     ;;
 esac

@@ -5,23 +5,22 @@
 export interface ProcessInfo {
   pid: number;
   sessionId: string;
-  topicId?: number;
+  threadId?: string;
   startTime: number;
 }
 
 export interface MonitorConfig {
-  telegramToken: string;
-  authorizedChatId: number;
-  checkInterval: number;           // 检查间隔（毫秒）
-  cooldownPeriod: number;          // 冷却期（毫秒）
-  minRuntimeThreshold: number;     // 最小运行时间阈值（秒）- 低于此值视为异常
-  maxRuntimeThreshold: number;     // 最大运行时间阈值（秒）- 超过此值视为超时
-  proxyUrl?: string;
+  discordToken: string;
+  generalChannelId: string;
+  checkInterval: number;
+  cooldownPeriod: number;
+  minRuntimeThreshold: number;
+  maxRuntimeThreshold: number;
 }
 
 export interface CrashNotification {
   sessionId: string;
-  topicId?: number;
+  threadId?: string;
   pid: number;
   exitCode: number | null;
   signal: string | null;

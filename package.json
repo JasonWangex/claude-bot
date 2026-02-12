@@ -4,17 +4,15 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "tsx watch telegram/index.ts",
+    "dev": "tsx watch discord/index.ts",
     "dev:monitor": "tsx watch monitor/index.ts",
-    "start": "NODE_ENV=production tsx telegram/index.ts"
+    "start": "NODE_ENV=production tsx discord/index.ts"
   },
   "dependencies": {
     "chokidar": "^5.0.0",
+    "discord.js": "^14.25.1",
     "dotenv": "^17.2.4",
-    "https-proxy-agent": "^7.0.6",
     "sharp": "^0.34.5",
-    "socks-proxy-agent": "^8.0.5",
-    "telegraf": "^4.16.3",
     "tsx": "^4.21.0",
     "undici": "^7.21.0"
   },

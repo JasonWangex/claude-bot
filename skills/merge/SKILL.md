@@ -2,8 +2,8 @@
 name: merge
 description: >
   合并 worktree 分支到主分支并清理。检查未提交代码、合并分支、删除 worktree、
-  删除 Telegram topic。合并成功后自动写入 Notion Dev Log。
-version: 1.2.0
+  删除 Discord Thread。合并成功后自动写入 Notion Dev Log。
+version: 2.0.0
 ---
 
 # Merge & Cleanup - 分支合并与清理
@@ -11,7 +11,7 @@ version: 1.2.0
 将 worktree 分支合并到 main 并清理资源。
 
 **参数:**
-- 目标 Topic ID: {{TARGET_TOPIC_ID}}
+- 目标 Task ID: {{TARGET_TOPIC_ID}}
 - 目标分支: {{TARGET_BRANCH}}
 - 工作目录: {{TARGET_CWD}}
 - Main worktree: {{MAIN_CWD}}
@@ -26,7 +26,7 @@ set -e
 
 TARGET_CWD="{{TARGET_CWD}}"
 TARGET_BRANCH="{{TARGET_BRANCH}}"
-TOPIC_ID="{{TARGET_TOPIC_ID}}"
+TASK_ID="{{TARGET_TOPIC_ID}}"
 MAIN_CWD="{{MAIN_CWD}}"
 
 echo "=== Step 1: 检查工作目录 ==="
@@ -68,18 +68,18 @@ echo "=== Step 6: 删除分支 ==="
 git branch -d "$TARGET_BRANCH" || { echo "FAIL: 删除分支失败（可能未完全合并）"; exit 1; }
 echo "分支已删除"
 
-echo "=== Step 7: 删除 Telegram Topic ==="
-RESP=$(curl -sf --connect-timeout 3 --max-time 10 -X DELETE "http://127.0.0.1:3456/api/topics/$TOPIC_ID" 2>/dev/null) \
+echo "=== Step 7: 删除 Discord Thread ==="
+RESP=$(curl -sf --connect-timeout 3 --max-time 10 -X DELETE "http://127.0.0.1:3456/api/tasks/$TASK_ID" 2>/dev/null) \
   && echo "API 响应: $RESP" \
-  || echo "⚠️ 删除 Topic 跳过（API 不可用或 Topic 不存在）"
+  || echo "删除 Thread 跳过（API 不可用或 Thread 不存在）"
 
 echo ""
 echo "===== 完成 ====="
-echo "✅ 合并清理完成"
+echo "合并清理完成"
 echo "- 分支: $TARGET_BRANCH → main"
 echo "- Worktree: 已删除"
 echo "- 分支: 已删除"
-echo "- Telegram Topic: 已删除"
+echo "- Discord Thread: 已归档"
 ```
 
 ## 第二步：写入 Dev Log

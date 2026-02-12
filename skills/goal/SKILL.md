@@ -79,7 +79,7 @@ data_source_url: `collection://d8cfb7d5-bf11-4ce3-bed4-37fabdec77e0`
       POST http://127.0.0.1:3456/api/goals/<page-id>/drive
       {
         "goalName": "<Goal Name>",
-        "goalTopicId": <当前 topic 的 message_thread_id>,
+        "goalThreadId": "<当前 task 的 thread ID>",
         "baseCwd": "<当前工作目录>",
         "tasks": [解析出的子任务数组],
         "maxConcurrent": 3
@@ -233,7 +233,7 @@ data_source_url: `collection://d8cfb7d5-bf11-4ce3-bed4-37fabdec77e0`
    POST http://127.0.0.1:3456/api/goals/<page-id>/drive
    {
      "goalName": "<Goal Name>",
-     "goalTopicId": <当前 topic 的 message_thread_id>,
+     "goalThreadId": "<当前 task 的 thread ID>",
      "baseCwd": "<当前工作目录>",
      "tasks": [解析出的子任务数组],
      "maxConcurrent": 3
