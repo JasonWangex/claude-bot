@@ -123,7 +123,7 @@ export class MessageHandler {
       cwd: this.stateManager.getGuildDefaultCwd(guildId),
     });
 
-    const processingMsgId = await this.mq.send(threadId, 'Processing image...');
+    const processingMsgId = await this.mq.send(threadId, 'Processing image...', { silent: true });
 
     try {
       const firstAttachment = attachments.first()!;
@@ -159,7 +159,7 @@ export class MessageHandler {
    * Compact session context, show progress in thread
    */
   private async compactSession(threadId: string, sessionId: string, cwd: string, lockKey: string): Promise<void> {
-    const compactMsgId = await this.mq.send(threadId, 'Compacting context...');
+    const compactMsgId = await this.mq.send(threadId, 'Compacting context...', { silent: true });
     try {
       await this.claudeClient.compact(sessionId, cwd, lockKey);
       this.mq.edit(threadId, compactMsgId, 'Context compacted. Executing plan...');
@@ -175,7 +175,7 @@ export class MessageHandler {
     this.stateManager.setSessionPlanMode(guildId, threadId, false);
 
     if (!session.claudeSessionId) {
-      await this.mq.send(threadId, 'No active context. Please send `/plan` again.');
+      await this.mq.send(threadId, 'No active context. Please send `/plan` again.', { silent: true });
       return;
     }
 
@@ -214,7 +214,7 @@ export class MessageHandler {
       .setStyle(ButtonStyle.Danger);
     const stopRow = new ActionRowBuilder<ButtonBuilder>().addComponents(stopButton);
 
-    let progressMsgId = await this.mq.send(threadId, `Thinking${modeLabel}...`, { components: [stopRow as any], priority: 'high' });
+    let progressMsgId = await this.mq.send(threadId, `Thinking${modeLabel}...`, { components: [stopRow as any], priority: 'high', silent: true });
 
     let lastProgressText = `Thinking${modeLabel}...`;
     let toolUseCount = 0;
@@ -247,7 +247,7 @@ export class MessageHandler {
       recreatingProgress = true;
       try {
         mq.delete(threadId, progressMsgId);
-        progressMsgId = await mq.send(threadId, lastProgressText, { components: [stopRow as any] });
+        progressMsgId = await mq.send(threadId, lastProgressText, { components: [stopRow as any], silent: true });
         allProgressMsgIds.add(progressMsgId);
       } finally {
         recreatingProgress = false;
@@ -276,10 +276,10 @@ export class MessageHandler {
 
         // 新发一条消息（sendLong 自动选格式：<2000 普通 / 2000-4096 embed / >4096 response.md）
         if (newContent.length <= 2000) {
-          textPlaceholderMsgId = await mq.send(threadId, newContent, { priority: 'high' });
+          textPlaceholderMsgId = await mq.send(threadId, newContent, { priority: 'high', silent: true });
           textFlushedContent = newContent;
         } else {
-          await mq.sendLong(threadId, newContent, { priority: 'high' });
+          await mq.sendLong(threadId, newContent, { priority: 'high', silent: true });
           textPlaceholderMsgId = null;
           textFlushedContent = '';
         }
@@ -465,14 +465,14 @@ export class MessageHandler {
             try {
               const planContent = readFileSync(planFile.filePath, 'utf-8').trim();
               if (planContent) {
-                await mq.sendLong(threadId, planContent, { priority: 'high' });
+                await mq.sendLong(threadId, planContent, { priority: 'high', silent: true });
                 planSent = true;
               }
             } catch {}
           }
         }
         if (!planSent && sentTextCount === 0 && response.result.trim()) {
-          await mq.sendLong(threadId, response.result, { priority: 'high' });
+          await mq.sendLong(threadId, response.result, { priority: 'high', silent: true });
         }
 
         if (planSent) fileChanges.length = 0;
@@ -518,7 +518,7 @@ export class MessageHandler {
       }
 
       if (sentTextCount === 0 && response.result.trim()) {
-        await mq.sendLong(threadId, response.result);
+        await mq.sendLong(threadId, response.result, { silent: true });
       }
 
       // 完成标记
@@ -550,7 +550,7 @@ export class MessageHandler {
       if (fileChanges.length > 0 && !skipChangesHtml) {
         const html = buildChangesHtml(fileChanges);
         await mq.sendDocument(threadId, html, 'changes.html',
-          `${fileChanges.length} file(s) changed`);
+          `${fileChanges.length} file(s) changed`, { silent: true });
       }
 
       if (mode === 'plan') {
@@ -579,7 +579,7 @@ export class MessageHandler {
         try {
           const html = buildChangesHtml(fileChanges);
           await mq.sendDocument(threadId, html, 'changes.html',
-            `${fileChanges.length} file(s) changed`);
+            `${fileChanges.length} file(s) changed`, { silent: true });
         } catch {}
       }
 

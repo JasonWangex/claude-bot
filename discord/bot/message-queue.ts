@@ -17,6 +17,7 @@ import {
   type Message,
   EmbedBuilder,
   AttachmentBuilder,
+  MessageFlags,
   type MessageCreateOptions,
   type ActionRowBuilder,
   type MessageActionRowComponentBuilder,
@@ -422,6 +423,7 @@ export class MessageQueue {
           const msgOpts: MessageCreateOptions = {
             embeds: [embed],
             components: op.options?.components as any,
+            ...(op.options?.silent && { flags: MessageFlags.SuppressNotifications }),
           };
           const msg = await (channel as any).send(msgOpts);
           op.resolve(msg.id);
@@ -432,6 +434,7 @@ export class MessageQueue {
         const msgOpts: MessageCreateOptions = {
           content: op.text.slice(0, this.MAX_MESSAGE_LENGTH),
           components: op.options?.components as any,
+          ...(op.options?.silent && { flags: MessageFlags.SuppressNotifications }),
         };
         const msg = await (channel as any).send(msgOpts);
         op.resolve(msg.id);
@@ -464,6 +467,7 @@ export class MessageQueue {
         const msgOpts: MessageCreateOptions = {
           content: op.caption?.slice(0, this.MAX_MESSAGE_LENGTH),
           files: [attachment],
+          ...(op.silent && { flags: MessageFlags.SuppressNotifications }),
         };
         const msg = await (channel as any).send(msgOpts);
         op.resolve(msg.id);
