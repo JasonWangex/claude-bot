@@ -9,6 +9,7 @@ import { ProxyAgent, setGlobalDispatcher } from 'undici';
 import { TelegramBot } from './bot/telegram.js';
 import { loadTelegramConfig } from './utils/config.js';
 import { logger } from './utils/logger.js';
+import { initOss } from './utils/oss.js';
 import { resolve } from 'path';
 
 // 检查是否配置了 Telegram Bot Token
@@ -45,6 +46,7 @@ async function main() {
   try {
     // 加载配置
     const config = loadTelegramConfig();
+    initOss();
 
     logger.info('Starting Telegram Bot...');
     logger.info('Bot Token (first 10 chars):', config.telegramToken.substring(0, 10) + '...');

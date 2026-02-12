@@ -6,9 +6,11 @@ import 'dotenv/config';
 import { DiscordBot } from './bot/discord.js';
 import { loadDiscordConfig } from './utils/config.js';
 import { logger } from './utils/logger.js';
+import { initOss } from './utils/oss.js';
 
 async function main(): Promise<void> {
   logger.info('Starting Discord Bot...');
+  initOss();
 
   const config = loadDiscordConfig();
   const bot = new DiscordBot(config);
