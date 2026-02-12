@@ -1,0 +1,78 @@
+/**
+ * 轻量 LLM 调用模块 — DeepSeek API（OpenAI 兼容格式）
+ *
+ * 用于简单的单轮文本生成（如分支名翻译），不适合多轮对话。
+ * 环境变量:
+ *   DEEPSEEK_API_KEY  — 必需，缺失时返回 null
+ *   DEEPSEEK_BASE_URL — 可选，默认 https://api.deepseek.com
+ */
+
+import { logger } from './logger.js';
+
+const DEFAULT_BASE_URL = 'https://api.deepseek.com';
+const DEFAULT_MODEL = 'deepseek-chat';
+const DEFAULT_TIMEOUT = 10_000;
+
+interface ChatOptions {
+  model?: string;
+  maxTokens?: number;
+  temperature?: number;
+  timeout?: number;
+}
+
+/**
+ * 单轮聊天补全，失败自动重试一次
+ * @returns 生成的文本，API key 缺失或调用失败返回 null
+ */
+export async function chatCompletion(
+  prompt: string,
+  options: ChatOptions = {},
+): Promise<string | null> {
+  const apiKey = process.env.DEEPSEEK_API_KEY;
+  if (!apiKey) {
+    logger.debug('[LLM] DEEPSEEK_API_KEY not set, skipping');
+    return null;
+  }
+
+  const baseUrl = (process.env.DEEPSEEK_BASE_URL || DEFAULT_BASE_URL).replace(/\/+$/, '');
+  const url = `${baseUrl}/v1/chat/completions`;
+  const body = JSON.stringify({
+    model: options.model || DEFAULT_MODEL,
+    max_tokens: options.maxTokens ?? 64,
+    temperature: options.temperature ?? 0.3,
+    messages: [{ role: 'user', content: prompt }],
+  });
+  const timeout = options.timeout ?? DEFAULT_TIMEOUT;
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body,
+        signal: AbortSignal.timeout(timeout),
+      });
+
+      if (!res.ok) {
+        const text = await res.text().catch(() => '');
+        throw new Error(`HTTP ${res.status}: ${text.slice(0, 200)}`);
+      }
+
+      const data = await res.json() as any;
+      const content = data.choices?.[0]?.message?.content?.trim();
+      if (content) return content;
+      throw new Error('Empty response from API');
+    } catch (err: any) {
+      if (attempt === 0) {
+        logger.warn(`[LLM] Attempt 1 failed, retrying: ${err.message}`);
+        continue;
+      }
+      logger.warn(`[LLM] Attempt 2 failed, giving up: ${err.message}`);
+      return null;
+    }
+  }
+  return null;
+}
