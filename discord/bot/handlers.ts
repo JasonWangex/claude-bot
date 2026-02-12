@@ -556,13 +556,13 @@ export class MessageHandler {
       if (mode === 'plan') {
         this.stateManager.setSessionPlanMode(guildId, threadId, true);
         await mq.send(threadId,
-          `Plan generated${summary}\n\n` +
+          `@everyone Plan generated${summary}\n\n` +
           `Reply "ok" to compact context and execute.\n` +
           `Reply with anything else to continue discussing.`,
           { priority: 'high' }
         );
       } else {
-        await mq.send(threadId, `Done${summary}`, { priority: 'high' });
+        await mq.send(threadId, `@everyone Done${summary}`, { priority: 'high' });
       }
 
     } catch (error: any) {
@@ -662,7 +662,7 @@ export class MessageHandler {
     if (!q) return 'No question';
 
     if (!q.options?.length) {
-      await this.mq.send(threadId, `**${q.header || 'Question'}**\n\n${q.question}\n\nPlease type your reply directly.`, { priority: 'high' });
+      await this.mq.send(threadId, `@everyone **${q.header || 'Question'}**\n\n${q.question}\n\nPlease type your reply directly.`, { priority: 'high' });
       const { promise } = this.interactionRegistry.register(toolUseId, guildId, threadId);
       this.interactionRegistry.setWaitingCustomText(toolUseId, true);
       return promise;
@@ -700,7 +700,7 @@ export class MessageHandler {
       rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(buttons.slice(i, i + 5)));
     }
 
-    await this.mq.send(threadId, questionText, { components: rows as any, priority: 'high' });
+    await this.mq.send(threadId, `@everyone\n${questionText}`, { components: rows as any, priority: 'high' });
 
     return promise;
   }
@@ -718,7 +718,7 @@ export class MessageHandler {
       toolUseId, guildId, threadId
     );
 
-    let text = '**Plan ready, waiting for confirmation**\n';
+    let text = '@everyone **Plan ready, waiting for confirmation**\n';
     if (input.allowedPrompts?.length) {
       text += '\nPermissions needed:\n';
       for (const p of input.allowedPrompts) {
