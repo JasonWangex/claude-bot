@@ -25,7 +25,8 @@ import {
   resolveCustomPath
 } from '../utils/topic-path.js';
 import { forkTopicCore } from '../utils/fork-topic.js';
-import { generateBranchName } from '../utils/git-utils.js';
+import { generateBranchName, hasUncommittedChanges, isBranchMerged, removeWorktree, deleteBranch } from '../utils/git-utils.js';
+import { execGit, resolveMainWorktree } from '../orchestrator/git-ops.js';
 import { generateTopicTitle } from '../utils/llm.js';
 
 export const MODEL_OPTIONS = [
@@ -279,6 +280,7 @@ export class CommandHandler {
         `/attach [session_id] - 链接到指定 Claude Session\n` +
         `/commit [备注] - 审查代码变更后自动提交\n` +
         `/merge &lt;topic或分支名&gt; - 合并 worktree 分支到 main 并清理\n` +
+        `/close [--force] - 关闭当前 Topic 并清理 worktree/分支\n` +
         `/idea [描述] - 记录想法或推进已有想法到开发\n\n` +
         `<b>使用方法</b>\n` +
         `• /topics 统一管理所有 Topic（每个 Topic = 独立会话）\n` +
@@ -2080,6 +2082,108 @@ export class CommandHandler {
       // Fire-and-forget: 独立 claude -p 进程，cwd 设为 main worktree（目标 worktree 会被删除）
       const replyTopicId = currentTopicId || targetSession.topicId;
       this.spawnSkillProcess('merge', prompt, mainCwd, chatId, replyTopicId, { maxTurns: 5 });
+    });
+  }
+
+  /**
+   * /close [--force] - 关闭当前 Topic，清理 worktree 和分支
+   *
+   * 默认模式：检查未提交改动和未合并分支，有问题则拒绝
+   * --force：跳过检查，强制关闭
+   */
+  async handleClose(ctx: Context): Promise<void> {
+    await this.requireTopic(ctx, async (session, topicId) => {
+      const text = (ctx.message as any)?.text || '';
+      const args = text.replace(/^\/close\s*/, '').trim();
+      const force = args === '--force' || args === '-f';
+      const groupId = ctx.chat!.id;
+      const branch = session.worktreeBranch as string | undefined;
+
+      // 有 worktree 分支时执行 git 安全检查（非 --force）
+      if (branch && !force) {
+        try {
+          const dirty = await hasUncommittedChanges(session.cwd);
+          if (dirty) {
+            await ctx.reply(
+              `❌ 工作目录存在未提交的改动，拒绝关闭。\n\n` +
+              `请先提交或丢弃改动，或使用 /close --force 强制关闭。`,
+            );
+            return;
+          }
+        } catch (err: any) {
+          // worktree 目录不存在等情况，跳过检查继续清理
+          logger.warn(`close: hasUncommittedChanges check failed: ${err.message}`);
+        }
+
+        try {
+          const merged = await isBranchMerged(session.cwd, branch);
+          if (!merged) {
+            await ctx.reply(
+              `❌ 分支 <code>${escapeHtml(branch)}</code> 尚未合并到 main，拒绝关闭。\n\n` +
+              `请先合并分支（/merge），或使用 /close --force 强制关闭。`,
+              { parse_mode: 'HTML' },
+            );
+            return;
+          }
+        } catch (err: any) {
+          logger.warn(`close: isBranchMerged check failed: ${err.message}`);
+        }
+      }
+
+      // 开始清理
+      const results: string[] = [];
+
+      // 1. 移除 worktree
+      if (branch) {
+        try {
+          const mainCwd = await resolveMainWorktree(session.cwd);
+          try {
+            await removeWorktree(mainCwd, session.cwd);
+            results.push(`✅ Worktree 已移除`);
+          } catch (err: any) {
+            // --force 时用 git worktree remove --force
+            if (force) {
+              await execGit(['worktree', 'remove', '--force', session.cwd], mainCwd, 'close: force remove worktree');
+              results.push(`✅ Worktree 已强制移除`);
+            } else {
+              results.push(`⚠️ Worktree 移除失败: ${err.message}`);
+            }
+          }
+
+          // 2. 删除分支
+          try {
+            if (force) {
+              await execGit(['branch', '-D', branch], mainCwd, 'close: force delete branch');
+              results.push(`✅ 分支 ${branch} 已强制删除`);
+            } else {
+              await deleteBranch(mainCwd, branch);
+              results.push(`✅ 分支 ${branch} 已删除`);
+            }
+          } catch (err: any) {
+            results.push(`⚠️ 分支删除失败: ${err.message}`);
+          }
+        } catch (err: any) {
+          results.push(`⚠️ 获取 main worktree 失败: ${err.message}`);
+        }
+      }
+
+      // 3. 删除 Telegram Topic
+      try {
+        await ctx.telegram.deleteForumTopic(groupId, topicId);
+        results.push(`✅ Topic 已删除`);
+      } catch {
+        // deleteForumTopic 可能不被支持，回退为关闭
+        await ctx.telegram.closeForumTopic(groupId, topicId).catch(() => {});
+        results.push(`✅ Topic 已关闭`);
+      }
+
+      // 4. 清理 session 状态
+      this.stateManager.deleteSession(groupId, topicId);
+      results.push(`✅ Session 已清理`);
+
+      // 发送结果到 General（因为当前 topic 可能已被删除）
+      const summary = `🗑️ Topic <b>${escapeHtml(session.name)}</b> 已关闭${force ? '（强制）' : ''}\n\n` + results.join('\n');
+      await this.mq.send(groupId, undefined, summary, { parseMode: 'HTML' });
     });
   }
 }

@@ -2,7 +2,7 @@
  * Git 工具函数（用于 Fork/Worktree 功能）
  */
 
-import { execGit } from '../orchestrator/git-ops.js';
+import { execGit, resolveMainWorktree } from '../orchestrator/git-ops.js';
 import { chatCompletion } from './llm.js';
 
 export async function isGitRepo(cwd: string): Promise<boolean> {
@@ -30,6 +30,24 @@ export async function removeWorktree(cwd: string, worktreePath: string): Promise
 
 export async function deleteBranch(cwd: string, branchName: string): Promise<void> {
   await execGit(['branch', '-d', branchName], cwd, 'deleteBranch');
+}
+
+/**
+ * 检查工作目录是否有未提交的改动（包括 staged 和 unstaged）
+ */
+export async function hasUncommittedChanges(cwd: string): Promise<boolean> {
+  const stdout = await execGit(['status', '--porcelain'], cwd, 'hasUncommittedChanges');
+  return stdout.trim().length > 0;
+}
+
+/**
+ * 检查分支是否已合并到 main/master
+ */
+export async function isBranchMerged(cwd: string, branchName: string): Promise<boolean> {
+  const mainCwd = await resolveMainWorktree(cwd);
+  const stdout = await execGit(['branch', '--merged', 'main'], mainCwd, 'isBranchMerged');
+  const mergedBranches = stdout.split('\n').map(l => l.trim().replace(/^\*\s*/, ''));
+  return mergedBranches.includes(branchName);
 }
 
 /**
