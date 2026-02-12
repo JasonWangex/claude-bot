@@ -75,7 +75,7 @@ export const getDriveStatus: RouteHandler = async (_req, res, params, deps) => {
     return;
   }
 
-  const state = deps.orchestrator.getStatus(params.goalId);
+  const state = await deps.orchestrator.getStatus(params.goalId);
   if (!state) {
     sendJson(res, 404, { ok: false, error: 'No drive found for this goal' });
     return;

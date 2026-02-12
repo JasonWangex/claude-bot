@@ -14,11 +14,12 @@ import type { ClaudeClient } from '../claude/client.js';
 import type { MessageHandler } from '../bot/handlers.js';
 import { type MessageQueue, EmbedColors, type EmbedColor } from '../bot/message-queue.js';
 import type { DiscordBotConfig, GoalDriveState, GoalTask } from '../types/index.js';
+import type { IGoalRepo } from '../types/repository.js';
 import { stat } from 'fs/promises';
 import { getAuthorizedGuildId } from '../utils/env.js';
 import { generateTopicTitle } from '../utils/llm.js';
 import { execGit, resolveMainWorktree } from './git-ops.js';
-import { loadState, saveState, loadAllRunningStates, parseTasks, goalNameToBranch, translateToBranchName } from './goal-state.js';
+import { parseTasks, goalNameToBranch, translateToBranchName } from './goal-state.js';
 import { getNextBatch, isGoalComplete, isGoalStuck, getProgressSummary } from './task-scheduler.js';
 import {
   createGoalBranch,
@@ -37,6 +38,7 @@ interface OrchestratorDeps {
   client: Client;
   mq: MessageQueue;
   config: DiscordBotConfig;
+  goalRepo: IGoalRepo;
 }
 
 /** startDrive 的入参 */
@@ -68,7 +70,7 @@ export class GoalOrchestrator {
   async startDrive(params: StartDriveParams): Promise<GoalDriveState> {
     const { goalId, goalName, goalThreadId, baseCwd: inputCwd, tasks: rawTasks, maxConcurrent = 3 } = params;
 
-    const existing = this.activeDrives.get(goalId) || loadState(goalId);
+    const existing = this.activeDrives.get(goalId) || await this.deps.goalRepo.get(goalId);
     if (existing && (existing.status === 'running' || existing.status === 'paused')) {
       const hint = existing.status === 'paused' ? ' Use resumeDrive to continue.' : '';
       await this.notify(goalThreadId, `Goal "${goalName}" is already ${existing.status}.${hint}`, 'info');
@@ -109,7 +111,7 @@ export class GoalOrchestrator {
       tasks: parseTasks(rawTasks),
     };
 
-    saveState(state);
+    await this.saveState(state);
     this.activeDrives.set(goalId, state);
 
     await this.notify(goalThreadId,
@@ -125,56 +127,56 @@ export class GoalOrchestrator {
   }
 
   async pauseDrive(goalId: string): Promise<boolean> {
-    const state = this.getState(goalId);
+    const state = await this.getState(goalId);
     if (!state || state.status !== 'running') return false;
     state.status = 'paused';
-    saveState(state);
+    await this.saveState(state);
     await this.notify(state.goalThreadId, `Goal "${state.goalName}" paused`, 'warning');
     return true;
   }
 
   async resumeDrive(goalId: string): Promise<boolean> {
-    const state = this.getState(goalId);
+    const state = await this.getState(goalId);
     if (!state || state.status !== 'paused') return false;
     state.status = 'running';
-    saveState(state);
+    await this.saveState(state);
     await this.notify(state.goalThreadId, `Goal "${state.goalName}" resumed`, 'success');
     await this.dispatchNext(state);
     return true;
   }
 
-  getStatus(goalId: string): GoalDriveState | null {
-    return this.getState(goalId);
+  async getStatus(goalId: string): Promise<GoalDriveState | null> {
+    return await this.getState(goalId);
   }
 
   async skipTask(goalId: string, taskId: string): Promise<boolean> {
-    const state = this.getState(goalId);
+    const state = await this.getState(goalId);
     if (!state) return false;
     const task = state.tasks.find(t => t.id === taskId);
     if (!task) return false;
     if (task.status !== 'pending' && task.status !== 'blocked' && task.status !== 'failed') return false;
     task.status = 'skipped';
-    saveState(state);
+    await this.saveState(state);
     await this.notify(state.goalThreadId, `Skipped task: ${task.id} - ${task.description}`, 'info');
     if (state.status === 'running') await this.dispatchNext(state);
     return true;
   }
 
   async markTaskDone(goalId: string, taskId: string): Promise<boolean> {
-    const state = this.getState(goalId);
+    const state = await this.getState(goalId);
     if (!state) return false;
     const task = state.tasks.find(t => t.id === taskId);
     if (!task || task.status !== 'blocked') return false;
     task.status = 'completed';
     task.completedAt = Date.now();
-    saveState(state);
+    await this.saveState(state);
     await this.notify(state.goalThreadId, `Manual task completed: ${task.id} - ${task.description}`, 'success');
     if (state.status === 'running') await this.dispatchNext(state);
     return true;
   }
 
   async retryTask(goalId: string, taskId: string): Promise<boolean> {
-    const state = this.getState(goalId);
+    const state = await this.getState(goalId);
     if (!state) return false;
     const task = state.tasks.find(t => t.id === taskId);
     if (!task || task.status !== 'failed') return false;
@@ -184,21 +186,21 @@ export class GoalOrchestrator {
     task.threadId = undefined;
     task.dispatchedAt = undefined;
     task.merged = false;
-    saveState(state);
+    await this.saveState(state);
     await this.notify(state.goalThreadId, `Retrying task: ${task.id} - ${task.description}`, 'warning');
     if (state.status === 'running') await this.dispatchNext(state);
     return true;
   }
 
   async restoreRunningDrives(): Promise<void> {
-    const states = loadAllRunningStates();
+    const states = await this.deps.goalRepo.findByStatus('running');
     for (const state of states) {
       try {
         await stat(state.baseCwd);
       } catch {
         logger.error(`[Orchestrator] baseCwd does not exist for ${state.goalName}: ${state.baseCwd}`);
         state.status = 'paused';
-        saveState(state);
+        await this.saveState(state);
         await this.notify(state.goalThreadId,
           `Goal "${state.goalName}" restore failed: working directory not found\n` +
           `Path: ${state.baseCwd}\n` +
@@ -232,7 +234,7 @@ export class GoalOrchestrator {
           }
         }
       }
-      if (stateModified) saveState(state);
+      if (stateModified) await this.saveState(state);
 
       this.activeDrives.set(state.goalId, state);
       logger.info(`[Orchestrator] Restored drive: ${state.goalName} (${state.goalId})`);
@@ -245,8 +247,13 @@ export class GoalOrchestrator {
 
   // ========== 内部方法 ==========
 
-  private getState(goalId: string): GoalDriveState | null {
-    return this.activeDrives.get(goalId) || loadState(goalId);
+  private async getState(goalId: string): Promise<GoalDriveState | null> {
+    return this.activeDrives.get(goalId) || await this.deps.goalRepo.get(goalId);
+  }
+
+  private async saveState(state: GoalDriveState): Promise<void> {
+    state.updatedAt = Date.now();
+    await this.deps.goalRepo.save(state);
   }
 
   private async dispatchNext(state: GoalDriveState): Promise<void> {
@@ -254,7 +261,7 @@ export class GoalOrchestrator {
 
     if (isGoalComplete(state)) {
       state.status = 'completed';
-      saveState(state);
+      await this.saveState(state);
       await this.notify(state.goalThreadId,
         `**Goal "${state.goalName}" completed!**\n` +
         `Review branch \`${state.goalBranch}\` and merge to main.`,
@@ -286,7 +293,7 @@ export class GoalOrchestrator {
       }
     }
 
-    saveState(state);
+    await this.saveState(state);
 
     for (const task of batch) {
       await this.dispatchTask(state, task);
@@ -298,7 +305,7 @@ export class GoalOrchestrator {
     task.branchName = branchName;
     task.status = 'dispatched';
     task.dispatchedAt = Date.now();
-    saveState(state);
+    await this.saveState(state);
 
     try {
       const stdout = await execGit(
@@ -364,7 +371,7 @@ export class GoalOrchestrator {
 
       task.threadId = newThreadId;
       task.status = 'running';
-      saveState(state);
+      await this.saveState(state);
 
       await this.notify(state.goalThreadId,
         `Dispatched: ${task.id} - ${task.description} → \`${branchName}\``,
@@ -377,7 +384,7 @@ export class GoalOrchestrator {
     } catch (err: any) {
       task.status = 'failed';
       task.error = err.message;
-      saveState(state);
+      await this.saveState(state);
       await this.notify(state.goalThreadId,
         `Dispatch failed: ${task.id} - ${task.description}\nError: ${err.message}`,
         'error'
@@ -410,27 +417,27 @@ export class GoalOrchestrator {
   }
 
   private async onTaskCompleted(goalId: string, taskId: string): Promise<void> {
-    const state = this.getState(goalId);
+    const state = await this.getState(goalId);
     if (!state) return;
     const task = state.tasks.find(t => t.id === taskId);
     if (!task) return;
     task.status = 'completed';
     task.completedAt = Date.now();
-    saveState(state);
+    await this.saveState(state);
     await this.notify(state.goalThreadId, `Completed: ${task.id} - ${task.description}`, 'success');
     if (task.branchName) await this.mergeAndCleanup(state, task);
-    const refreshed = this.getState(goalId);
+    const refreshed = await this.getState(goalId);
     if (refreshed && refreshed.status === 'running') await this.dispatchNext(refreshed);
   }
 
   private async onTaskFailed(goalId: string, taskId: string, error: string): Promise<void> {
-    const state = this.getState(goalId);
+    const state = await this.getState(goalId);
     if (!state) return;
     const task = state.tasks.find(t => t.id === taskId);
     if (!task) return;
     task.status = 'failed';
     task.error = error;
-    saveState(state);
+    await this.saveState(state);
     await this.notify(state.goalThreadId,
       `Failed: ${task.id} - ${task.description}\nError: ${error}\n\nReply "retry ${task.id}" to retry.`,
       'error'
@@ -477,7 +484,7 @@ export class GoalOrchestrator {
 
       if (result.success) {
         task.merged = true;
-        saveState(state);
+        await this.saveState(state);
         await this.notify(state.goalThreadId, `Merged: \`${branchName}\` → \`${state.goalBranch}\``, 'success');
 
         if (subtaskDir) {
@@ -506,7 +513,7 @@ export class GoalOrchestrator {
         );
         task.status = 'blocked';
         task.error = 'merge conflict';
-        saveState(state);
+        await this.saveState(state);
       } else {
         await this.notify(state.goalThreadId, `Merge failed: ${branchName}\nError: ${result.error}`, 'error');
       }

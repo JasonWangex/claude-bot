@@ -7,10 +7,12 @@ import { DiscordBot } from './bot/discord.js';
 import { loadDiscordConfig } from './utils/config.js';
 import { logger } from './utils/logger.js';
 import { initOss } from './utils/oss.js';
+import { initDb } from './db/index.js';
 
 async function main(): Promise<void> {
   logger.info('Starting Discord Bot...');
   initOss();
+  initDb();
 
   const config = loadDiscordConfig();
   const bot = new DiscordBot(config);

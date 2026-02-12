@@ -1,89 +1,15 @@
 /**
- * Goal Drive 状态持久化
+ * Goal Drive 工具函数
  *
- * 状态文件存储在 data/goals/<goalId>.json
- * 负责读写和解析子任务结构
+ * 负责解析子任务结构和生成 git 分支名。
+ * 持久化已迁移到 IGoalRepo (SQLite)。
  */
 
-import { readFileSync, writeFileSync, mkdirSync, readdirSync, renameSync } from 'fs';
-import { join } from 'path';
-import type { GoalDriveState, GoalTask, GoalTaskType } from '../types/index.js';
+import type { GoalTask, GoalTaskType } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 import { chatCompletion } from '../utils/llm.js';
 
 const VALID_GOAL_TASK_TYPES: GoalTaskType[] = ['代码', '手动', '调研'];
-
-const GOALS_DIR = join(process.cwd(), 'data', 'goals');
-
-function ensureDir(): void {
-  mkdirSync(GOALS_DIR, { recursive: true });
-}
-
-function stateFilePath(goalId: string): string {
-  // Notion page ID 含连字符，保留原样
-  return join(GOALS_DIR, `${goalId}.json`);
-}
-
-export function loadState(goalId: string): GoalDriveState | null {
-  try {
-    const raw = readFileSync(stateFilePath(goalId), 'utf-8');
-    const data = JSON.parse(raw) as any;
-
-    // Schema migration: goalTopicId → goalThreadId
-    if (data.goalTopicId && !data.goalThreadId) {
-      data.goalThreadId = data.goalTopicId;
-      delete data.goalTopicId;
-    }
-    // Schema migration: task.topicId → task.threadId
-    if (Array.isArray(data.tasks)) {
-      for (const task of data.tasks) {
-        if (task.topicId && !task.threadId) {
-          task.threadId = task.topicId;
-          delete task.topicId;
-        }
-      }
-    }
-
-    return data as GoalDriveState;
-  } catch (err: any) {
-    if (err?.code !== 'ENOENT') {
-      logger.warn(`[GoalState] Failed to load state for ${goalId}: ${err.message}`);
-    }
-    return null;
-  }
-}
-
-export function saveState(state: GoalDriveState): void {
-  ensureDir();
-  state.updatedAt = Date.now();
-  const filePath = stateFilePath(state.goalId);
-  const tmpPath = filePath + '.tmp';
-  writeFileSync(tmpPath, JSON.stringify(state, null, 2));
-  renameSync(tmpPath, filePath);
-}
-
-/** 加载所有正在运行的 Goal drive 状态 */
-export function loadAllRunningStates(): GoalDriveState[] {
-  ensureDir();
-  const results: GoalDriveState[] = [];
-  try {
-    const files = readdirSync(GOALS_DIR).filter(f => f.endsWith('.json'));
-    for (const file of files) {
-      try {
-        const raw = readFileSync(join(GOALS_DIR, file), 'utf-8');
-        const state = JSON.parse(raw) as GoalDriveState;
-        if (state.status === 'running') {
-          results.push(state);
-        }
-      } catch (err: any) {
-        logger.warn(`[GoalState] Skipping corrupted state file ${file}: ${err.message}`);
-      }
-    }
-  } catch {
-    // dir doesn't exist yet
-  }
-  return results;
-}
 
 /**
  * 从 Goal Skill 传入的结构化子任务列表解析为 GoalTask[]
