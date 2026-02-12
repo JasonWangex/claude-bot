@@ -403,5 +403,6 @@ export class DiscordBot {
     this.claudeClient.detachAll();
     await this.stateManager.flush();
     this.client.destroy();
+    process.exit(0);
   }
 }
