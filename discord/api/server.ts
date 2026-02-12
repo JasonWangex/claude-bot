@@ -21,6 +21,7 @@ import { clearSession, compactSession, rewindSession, stopSession } from './rout
 import { getModels, setDefaultModel } from './routes/models.js';
 import { startDrive, getDriveStatus, pauseDrive, resumeDrive, skipTask, markTaskDone, retryTask } from './routes/goals.js';
 import { qdev } from './routes/qdev.js';
+import { listIdeas, createIdea, getIdea, updateIdea } from './routes/ideas.js';
 
 function defineRoutes(): Route[] {
   const r = (method: string, path: string, handler: Route['handler']): Route => {
@@ -66,6 +67,12 @@ function defineRoutes(): Route[] {
     r('POST', '/api/goals/:goalId/tasks/:taskId/skip', skipTask),
     r('POST', '/api/goals/:goalId/tasks/:taskId/done', markTaskDone),
     r('POST', '/api/goals/:goalId/tasks/:taskId/retry', retryTask),
+
+    // Ideas CRUD
+    r('GET',   '/api/ideas', listIdeas),
+    r('POST',  '/api/ideas', createIdea),
+    r('GET',   '/api/ideas/:id', getIdea),
+    r('PATCH', '/api/ideas/:id', updateIdea),
   ];
 }
 
