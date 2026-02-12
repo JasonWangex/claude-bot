@@ -1,7 +1,7 @@
 /**
  * Model 命令: /model
  * 在 General 中切换全局默认模型，在 task channel 中切换当前 channel 模型
- * 使用 Discord StringSelectMenu 替代 Telegram Inline Keyboard
+ * 使用 Discord StringSelectMenu
  */
 
 import {

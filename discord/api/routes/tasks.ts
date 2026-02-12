@@ -90,7 +90,7 @@ export const createTask: RouteHandler = async (req, res, _params, deps) => {
     let dirCreated = false;
 
     if (body.cwd) {
-      cwd = resolveCustomPath(body.cwd, deps.stateManager.getGuildDefaultCwd(guildId));
+      cwd = resolveCustomPath(body.cwd, deps.stateManager.getGuildDefaultCwd(guildId), deps.config.projectsRoot);
       const dirResult = await ensureProjectDir(cwd, deps.config.autoCreateProjectDir);
       dirCreated = dirResult.created;
       if (!dirResult.exists && !deps.config.autoCreateProjectDir) {
@@ -229,7 +229,7 @@ export const updateTask: RouteHandler = async (req, res, params, deps) => {
 
   // cwd
   if (body.cwd !== undefined) {
-    const resolvedCwd = resolveCustomPath(body.cwd, deps.stateManager.getGuildDefaultCwd(guildId));
+    const resolvedCwd = resolveCustomPath(body.cwd, deps.stateManager.getGuildDefaultCwd(guildId), deps.config.projectsRoot);
     deps.stateManager.setSessionCwd(guildId, threadId, resolvedCwd);
   }
 

@@ -1,6 +1,5 @@
 /**
  * Discord Bot 类型定义
- * ID 从 Telegram number → Discord string snowflake
  */
 
 // 会话

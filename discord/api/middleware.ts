@@ -5,17 +5,28 @@
 import type { IncomingMessage, ServerResponse } from 'http';
 import { getAuthorizedGuildId } from '../utils/env.js';
 
+const MAX_BODY_SIZE = 1024 * 1024; // 1MB
+
 /**
- * 读取请求体并解析为 JSON
+ * 读取请求体并解析为 JSON（限制 1MB）
  */
 export async function readJsonBody<T = any>(req: IncomingMessage): Promise<T | null> {
   return new Promise((resolve) => {
-    let data = '';
-    req.on('data', (chunk) => { data += chunk; });
+    let size = 0;
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > MAX_BODY_SIZE) {
+        req.destroy();
+        resolve(null);
+        return;
+      }
+      chunks.push(chunk);
+    });
     req.on('end', () => {
-      if (!data) { resolve(null); return; }
+      if (size === 0) { resolve(null); return; }
       try {
-        resolve(JSON.parse(data));
+        resolve(JSON.parse(Buffer.concat(chunks).toString('utf8')));
       } catch {
         resolve(null);
       }
@@ -30,6 +41,18 @@ export async function readJsonBody<T = any>(req: IncomingMessage): Promise<T | n
 export function sendJson(res: ServerResponse, status: number, data: any): void {
   res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify(data, null, 2));
+}
+
+/**
+ * 验证 API 请求的 Bearer token
+ */
+export function requireToken(req: IncomingMessage, res: ServerResponse, accessToken: string): boolean {
+  const auth = req.headers.authorization;
+  if (!auth || auth !== `Bearer ${accessToken}`) {
+    sendJson(res, 401, { ok: false, error: 'Invalid or missing Authorization header' });
+    return false;
+  }
+  return true;
 }
 
 /**

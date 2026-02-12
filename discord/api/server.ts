@@ -9,7 +9,7 @@
 import { createServer, IncomingMessage, ServerResponse } from 'http';
 import type { Server } from 'http';
 import type { Route, ApiDeps } from './types.js';
-import { sendJson } from './middleware.js';
+import { sendJson, requireToken } from './middleware.js';
 import { logger } from '../utils/logger.js';
 
 // Route handlers
@@ -117,6 +117,11 @@ export class ApiServer {
     const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
     const pathname = url.pathname;
     const method = req.method || 'GET';
+
+    // health 端点无需认证，其他端点需要 Bearer token
+    if (pathname !== '/api/health') {
+      if (!requireToken(req, res, this.deps.config.accessToken)) return;
+    }
 
     for (const route of this.routes) {
       if (route.method !== method) continue;

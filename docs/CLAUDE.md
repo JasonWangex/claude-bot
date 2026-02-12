@@ -69,8 +69,6 @@ claude-bot/
 │   ├── process-monitor.ts   # 崩溃检测 + Discord REST API 通知
 │   └── types.ts             # 监控类型
 │
-├── telegram/                 # 旧版 Telegram Bot（已停用，保留供参考）
-│
 ├── data/                     # 持久化数据
 │   ├── discord-states.json  # Bot 状态（sessions + guilds）
 │   ├── goals/               # Goal Drive 状态文件（<goalId>.json）

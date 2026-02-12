@@ -60,7 +60,7 @@ export function buildChangesSummary(changes: FileChange[]): string {
 
 /**
  * 将 FileChange[] 生成 GitHub 风格的 HTML diff 报告（用于文件附件）
- * 直接复用自 Telegram 版 message-utils.ts
+ * GitHub 风格的 HTML diff 报告
  */
 export function buildChangesHtml(changes: FileChange[]): string {
   const e = escapeHtml;

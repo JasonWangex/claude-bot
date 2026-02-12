@@ -57,7 +57,7 @@ export interface StartDriveParams {
 
 export class GoalOrchestrator {
   private deps: OrchestratorDeps;
-  private mergeLock = false;
+  private mergeLocks = new Map<string, Promise<void>>();
   private activeDrives = new Map<string, GoalDriveState>();
 
   constructor(deps: OrchestratorDeps) {
@@ -69,8 +69,9 @@ export class GoalOrchestrator {
     const { goalId, goalName, goalThreadId, baseCwd: inputCwd, tasks: rawTasks, maxConcurrent = 3 } = params;
 
     const existing = this.activeDrives.get(goalId) || loadState(goalId);
-    if (existing && existing.status === 'running') {
-      await this.notify(goalThreadId, `Goal "${goalName}" is already running`, 'info');
+    if (existing && (existing.status === 'running' || existing.status === 'paused')) {
+      const hint = existing.status === 'paused' ? ' Use resumeDrive to continue.' : '';
+      await this.notify(goalThreadId, `Goal "${goalName}" is already ${existing.status}.${hint}`, 'info');
       return existing;
     }
 
@@ -440,29 +441,31 @@ export class GoalOrchestrator {
   private async mergeAndCleanup(state: GoalDriveState, task: GoalTask): Promise<void> {
     if (!task.branchName) return;
 
-    const MERGE_LOCK_TIMEOUT = 60_000;
-    const lockStart = Date.now();
-    while (this.mergeLock) {
-      if (Date.now() - lockStart > MERGE_LOCK_TIMEOUT) {
-        throw new Error(`Merge lock timeout after ${MERGE_LOCK_TIMEOUT / 1000}s — previous merge may have stalled`);
-      }
-      await new Promise(r => setTimeout(r, 500));
-    }
-    this.mergeLock = true;
+    // Per-goal merge lock: queue merges for the same goal, allow different goals concurrently
+    const goalId = state.goalId;
+    const prev = this.mergeLocks.get(goalId) || Promise.resolve();
+    const current = prev.then(() => this.doMergeAndCleanup(state, task)).catch(() => {});
+    this.mergeLocks.set(goalId, current);
+    await current;
+  }
+
+  private async doMergeAndCleanup(state: GoalDriveState, task: GoalTask): Promise<void> {
+    if (!task.branchName) return;
+    const branchName = task.branchName;
 
     try {
       const stdout = await execGit(
         ['worktree', 'list', '--porcelain'],
         state.baseCwd,
-        `mergeAndCleanup(${task.branchName}): list worktrees`
+        `mergeAndCleanup(${branchName}): list worktrees`
       );
       const goalWorktreeDir = this.findWorktreeDir(stdout, state.goalBranch);
       if (!goalWorktreeDir) {
-        await this.notify(state.goalThreadId, `Cannot find goal worktree, skipping merge: ${task.branchName}`, 'warning');
+        await this.notify(state.goalThreadId, `Cannot find goal worktree, skipping merge: ${branchName}`, 'warning');
         return;
       }
 
-      const subtaskDir = this.findWorktreeDir(stdout, task.branchName);
+      const subtaskDir = this.findWorktreeDir(stdout, branchName);
       if (subtaskDir) {
         const hasChanges = await hasUncommittedChanges(subtaskDir);
         if (hasChanges) {
@@ -470,15 +473,15 @@ export class GoalOrchestrator {
         }
       }
 
-      const result = await mergeSubtaskBranch(goalWorktreeDir, task.branchName);
+      const result = await mergeSubtaskBranch(goalWorktreeDir, branchName);
 
       if (result.success) {
         task.merged = true;
         saveState(state);
-        await this.notify(state.goalThreadId, `Merged: \`${task.branchName}\` → \`${state.goalBranch}\``, 'success');
+        await this.notify(state.goalThreadId, `Merged: \`${branchName}\` → \`${state.goalBranch}\``, 'success');
 
         if (subtaskDir) {
-          await cleanupSubtask(state.baseCwd, subtaskDir, task.branchName);
+          await cleanupSubtask(state.baseCwd, subtaskDir, branchName);
         }
 
         // Delete subtask channel
@@ -496,7 +499,7 @@ export class GoalOrchestrator {
         }
       } else if (result.conflict) {
         await this.notify(state.goalThreadId,
-          `Merge conflict: \`${task.branchName}\` → \`${state.goalBranch}\`\n` +
+          `Merge conflict: \`${branchName}\` → \`${state.goalBranch}\`\n` +
           `Manual resolution needed.\n` +
           `Reply "done ${task.id}" when resolved.`,
           'error'
@@ -505,10 +508,10 @@ export class GoalOrchestrator {
         task.error = 'merge conflict';
         saveState(state);
       } else {
-        await this.notify(state.goalThreadId, `Merge failed: ${task.branchName}\nError: ${result.error}`, 'error');
+        await this.notify(state.goalThreadId, `Merge failed: ${branchName}\nError: ${result.error}`, 'error');
       }
-    } finally {
-      this.mergeLock = false;
+    } catch (err: any) {
+      logger.error(`[Orchestrator] mergeAndCleanup error: ${err.message}`);
     }
   }
 

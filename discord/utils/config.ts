@@ -38,7 +38,13 @@ export function loadDiscordConfig(): DiscordBotConfig {
   const autoCreateProjectDir = process.env.AUTO_CREATE_PROJECT_DIR !== 'false';
   const topicDirNaming = (process.env.TOPIC_DIR_NAMING || 'kebab-case') as 'kebab-case' | 'snake_case' | 'original';
   const worktreesDir = process.env.WORKTREES_DIR || `${projectsRoot}/worktrees`;
-  const apiPort = parseInt(process.env.API_PORT || '3456', 10);
+  const parseIntSafe = (val: string | undefined, fallback: number): number => {
+    if (!val) return fallback;
+    const n = parseInt(val, 10);
+    return isNaN(n) ? fallback : n;
+  };
+
+  const apiPort = parseIntSafe(process.env.API_PORT, 3456);
 
   return {
     discordToken,
@@ -48,9 +54,9 @@ export function loadDiscordConfig(): DiscordBotConfig {
     generalChannelId,
     defaultWorkDir,
     claudeCliPath: process.env.CLAUDE_CLI_PATH || 'claude',
-    maxTurns: parseInt(process.env.MAX_TURNS || '20', 10),
-    commandTimeout: parseInt(process.env.COMMAND_TIMEOUT || '300000', 10),
-    stallTimeout: parseInt(process.env.STALL_TIMEOUT || '60000', 10),
+    maxTurns: parseIntSafe(process.env.MAX_TURNS, 20),
+    commandTimeout: parseIntSafe(process.env.COMMAND_TIMEOUT, 300000),
+    stallTimeout: parseIntSafe(process.env.STALL_TIMEOUT, 60000),
     projectsRoot,
     autoCreateProjectDir,
     topicDirNaming,
