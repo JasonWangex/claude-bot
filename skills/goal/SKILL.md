@@ -12,6 +12,16 @@ version: 1.0.0
 
 **Goals Database**: `d8cfb7d5-bf11-4ce3-bed4-37fabdec77e0`
 
+**Bot API 鉴权**: 所有 Bot API 调用需要 Bearer token。使用前先初始化：
+
+```bash
+API="http://127.0.0.1:3456"
+BOT_TOKEN=$(grep '^BOT_ACCESS_TOKEN=' /home/jason/projects/claude-bot/.env 2>/dev/null | cut -d= -f2-)
+AUTH="Authorization: Bearer $BOT_TOKEN"
+```
+
+所有 curl 请求携带 `-H "$AUTH"`。
+
 ## 模式判断
 
 根据 `{{SKILL_ARGS}}` 决定模式：
@@ -74,16 +84,11 @@ data_source_url: `collection://d8cfb7d5-bf11-4ce3-bed4-37fabdec77e0`
 
    d. 如果有 → 按继续模式中的解析规则，将子任务解析为结构化 JSON
 
-   e. 调用 Drive API 启动：
-      ```
-      POST http://127.0.0.1:3456/api/goals/<page-id>/drive
-      {
-        "goalName": "<Goal Name>",
-        "goalThreadId": "<当前 task 的 thread ID>",
-        "baseCwd": "<当前工作目录>",
-        "tasks": [解析出的子任务数组],
-        "maxConcurrent": 3
-      }
+   e. 调用 Drive API 启动（需携带 `-H "$AUTH"`）：
+      ```bash
+      curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+        -d '{"goalName":"<Goal Name>","goalThreadId":"<当前 task 的 thread ID>","baseCwd":"<当前工作目录>","tasks":[解析出的子任务数组],"maxConcurrent":3}' \
+        "$API/api/goals/<page-id>/drive"
       ```
 
    f. 如果 API 返回"已在运行中" → 跳过，记为"已在运行"
@@ -228,16 +233,11 @@ data_source_url: `collection://d8cfb7d5-bf11-4ce3-bed4-37fabdec77e0`
    - depends: 从 `— depends: t1, t2` 解析，或从 Phase 标题推断
    - phase: 从 `## Phase N` 标题推断
 
-2. **调用 Drive API** 启动自动调度：
-   ```
-   POST http://127.0.0.1:3456/api/goals/<page-id>/drive
-   {
-     "goalName": "<Goal Name>",
-     "goalThreadId": "<当前 task 的 thread ID>",
-     "baseCwd": "<当前工作目录>",
-     "tasks": [解析出的子任务数组],
-     "maxConcurrent": 3
-   }
+2. **调用 Drive API** 启动自动调度（需携带 `-H "$AUTH"`）：
+   ```bash
+   curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+     -d '{"goalName":"<Goal Name>","goalThreadId":"<当前 task 的 thread ID>","baseCwd":"<当前工作目录>","tasks":[解析出的子任务数组],"maxConcurrent":3}' \
+     "$API/api/goals/<page-id>/drive"
    ```
 
 3. **输出启动确认**：

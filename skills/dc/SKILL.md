@@ -67,68 +67,79 @@ version: 1.0.0
 }
 ```
 
+## 鉴权
+
+除 `/api/health` 外，所有端点需要 Bearer token。Token 从项目 `.env` 文件的 `BOT_ACCESS_TOKEN` 获取。
+
+**标准初始化（所有 API 调用前必须执行）：**
+
+```bash
+API="http://127.0.0.1:3456"
+BOT_TOKEN=$(grep '^BOT_ACCESS_TOKEN=' /home/jason/projects/claude-bot/.env 2>/dev/null | cut -d= -f2-)
+AUTH="Authorization: Bearer $BOT_TOKEN"
+```
+
+之后所有请求（health 除外）携带 `-H "$AUTH"`。
+
 ## 常用操作示例
 
 ```bash
 API="http://127.0.0.1:3456"
+BOT_TOKEN=$(grep '^BOT_ACCESS_TOKEN=' /home/jason/projects/claude-bot/.env 2>/dev/null | cut -d= -f2-)
+AUTH="Authorization: Bearer $BOT_TOKEN"
 
-# 健康检查
+# 健康检查（无需鉴权）
 curl -s $API/api/health | jq
 
 # 查看全局状态
-curl -s $API/api/status | jq
+curl -s -H "$AUTH" $API/api/status | jq
 
 # 查看可用模型
-curl -s $API/api/models | jq
+curl -s -H "$AUTH" $API/api/models | jq
 
 # 设置全局默认模型为 Opus
-curl -s -X PUT $API/api/models/default \
-  -H 'Content-Type: application/json' \
-  -d '{"model": "claude-opus-4-6"}' | jq
+curl -s -X PUT -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"model": "claude-opus-4-6"}' $API/api/models/default | jq
 
 # 列出所有 Task
-curl -s $API/api/tasks | jq
+curl -s -H "$AUTH" $API/api/tasks | jq
 
 # 创建 Task
-curl -s -X POST $API/api/tasks \
-  -H 'Content-Type: application/json' \
-  -d '{"name": "my-project", "cwd": "/home/jason/projects/my-project"}' | jq
+curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"name": "my-project", "cwd": "/home/jason/projects/my-project"}' $API/api/tasks | jq
 
 # 查看 Task 详情
-curl -s $API/api/tasks/1234567890 | jq
+curl -s -H "$AUTH" $API/api/tasks/1234567890 | jq
 
 # 更新 Task（改名 + 切换模型）
-curl -s -X PATCH $API/api/tasks/1234567890 \
-  -H 'Content-Type: application/json' \
-  -d '{"name": "new-name", "model": "claude-opus-4-6"}' | jq
+curl -s -X PATCH -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"name": "new-name", "model": "claude-opus-4-6"}' $API/api/tasks/1234567890 | jq
 
 # 删除 Task（归档 Thread）
-curl -s -X DELETE $API/api/tasks/1234567890 | jq
+curl -s -X DELETE -H "$AUTH" $API/api/tasks/1234567890 | jq
 
 # 归档 Task
-curl -s -X POST $API/api/tasks/1234567890/archive | jq
+curl -s -X POST -H "$AUTH" $API/api/tasks/1234567890/archive | jq
 
 # Fork Task（创建 worktree 子 Task）
-curl -s -X POST $API/api/tasks/1234567890/fork \
-  -H 'Content-Type: application/json' \
-  -d '{"branch": "feature/new-branch"}' | jq
+curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"branch": "feature/new-branch"}' $API/api/tasks/1234567890/fork | jq
 
 # 在 Task 中与 Claude 对话（消息会出现在 Discord Thread 中）
-curl -s -X POST $API/api/tasks/1234567890/message \
-  -H 'Content-Type: application/json' \
-  -d '{"text": "帮我分析一下项目结构"}' | jq
+curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"text": "帮我分析一下项目结构"}' $API/api/tasks/1234567890/message | jq
 
 # 清空 Claude 上下文
-curl -s -X POST $API/api/tasks/1234567890/clear | jq
+curl -s -X POST -H "$AUTH" $API/api/tasks/1234567890/clear | jq
 
 # 压缩上下文
-curl -s -X POST $API/api/tasks/1234567890/compact | jq
+curl -s -X POST -H "$AUTH" $API/api/tasks/1234567890/compact | jq
 
 # 撤销最后一轮对话
-curl -s -X POST $API/api/tasks/1234567890/rewind | jq
+curl -s -X POST -H "$AUTH" $API/api/tasks/1234567890/rewind | jq
 
 # 停止运行中的任务
-curl -s -X POST $API/api/tasks/1234567890/stop | jq
+curl -s -X POST -H "$AUTH" $API/api/tasks/1234567890/stop | jq
 ```
 
 ## 可用模型 ID

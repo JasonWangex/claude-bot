@@ -90,7 +90,10 @@ version: 3.0.0
 
 ```bash
 API="http://127.0.0.1:3456"
-curl -s $API/api/tasks
+BOT_TOKEN=$(grep '^BOT_ACCESS_TOKEN=' /home/jason/projects/claude-bot/.env 2>/dev/null | cut -d= -f2-)
+AUTH="Authorization: Bearer $BOT_TOKEN"
+
+curl -s -H "$AUTH" $API/api/tasks
 ```
 
 从返回的 task 列表中：
@@ -101,9 +104,8 @@ curl -s $API/api/tasks
 **Fork root task：**
 
 ```bash
-curl -s -X POST $API/api/tasks/<ROOT_TASK_ID>/fork \
-  -H 'Content-Type: application/json' \
-  -d '{"branch": "<生成的分支名>"}'
+curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"branch": "<生成的分支名>"}' $API/api/tasks/<ROOT_TASK_ID>/fork
 ```
 
 从响应中获取 `data.thread_id` 作为新 fork 的 task ID。
@@ -111,9 +113,8 @@ curl -s -X POST $API/api/tasks/<ROOT_TASK_ID>/fork \
 **发送任务描述：**
 
 ```bash
-curl -s -X POST $API/api/tasks/<FORK_TASK_ID>/message \
-  -H 'Content-Type: application/json' \
-  -d '{"text": "<Idea 的 Name>"}'
+curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"text": "<Idea 的 Name>"}' $API/api/tasks/<FORK_TASK_ID>/message
 ```
 
 #### 3.3 输出确认

@@ -17,7 +17,11 @@ version: 5.0.0
 ### 1. 查找当前 task
 
 ```bash
-TASKS=$(curl -sf "http://127.0.0.1:3456/api/tasks") || { echo "API 不可用"; exit 1; }
+API="http://127.0.0.1:3456"
+BOT_TOKEN=$(grep '^BOT_ACCESS_TOKEN=' /home/jason/projects/claude-bot/.env 2>/dev/null | cut -d= -f2-)
+AUTH="Authorization: Bearer $BOT_TOKEN"
+
+TASKS=$(curl -sf -H "$AUTH" "$API/api/tasks") || { echo "API 不可用"; exit 1; }
 TASK_ID=$(echo "$TASKS" | jq -r --arg cwd "$(pwd)" '[.data[] | select(.cwd == $cwd)] | .[0].thread_id // empty')
 [ -n "$TASK_ID" ] && echo "当前 task ID: $TASK_ID" || { echo "当前目录不在任何 task 中"; exit 1; }
 ```
@@ -25,9 +29,8 @@ TASK_ID=$(echo "$TASKS" | jq -r --arg cwd "$(pwd)" '[.data[] | select(.cwd == $c
 ### 2. 调用 qdev API
 
 ```bash
-curl -sf -X POST "http://127.0.0.1:3456/api/tasks/$TASK_ID/qdev" \
-  -H 'Content-Type: application/json' \
-  -d '{"description": "<用户的原始描述>"}'
+curl -sf -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"description": "<用户的原始描述>"}' "$API/api/tasks/$TASK_ID/qdev"
 ```
 
 API 会自动完成：生成分支名 → fork root task → 创建 worktree → 发送任务 → 触发 Claude。

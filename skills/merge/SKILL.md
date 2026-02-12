@@ -28,6 +28,8 @@ TARGET_CWD="{{TARGET_CWD}}"
 TARGET_BRANCH="{{TARGET_BRANCH}}"
 TASK_ID="{{TARGET_TOPIC_ID}}"
 MAIN_CWD="{{MAIN_CWD}}"
+BOT_TOKEN=$(grep '^BOT_ACCESS_TOKEN=' /home/jason/projects/claude-bot/.env 2>/dev/null | cut -d= -f2-)
+AUTH="Authorization: Bearer $BOT_TOKEN"
 
 echo "=== Step 1: 检查工作目录 ==="
 cd "$TARGET_CWD"
@@ -69,7 +71,7 @@ git branch -d "$TARGET_BRANCH" || { echo "FAIL: 删除分支失败（可能未�
 echo "分支已删除"
 
 echo "=== Step 7: 删除 Discord Thread ==="
-RESP=$(curl -sf --connect-timeout 3 --max-time 10 -X DELETE "http://127.0.0.1:3456/api/tasks/$TASK_ID" 2>/dev/null) \
+RESP=$(curl -sf --connect-timeout 3 --max-time 10 -X DELETE -H "$AUTH" "http://127.0.0.1:3456/api/tasks/$TASK_ID" 2>/dev/null) \
   && echo "API 响应: $RESP" \
   || echo "删除 Thread 跳过（API 不可用或 Thread 不存在）"
 
