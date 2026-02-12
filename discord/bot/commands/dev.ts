@@ -18,6 +18,7 @@ import { generateTopicTitle } from '../../utils/llm.js';
 import { forkTaskCore } from '../../utils/fork-task.js';
 import { logger } from '../../utils/logger.js';
 import { EmbedColors } from '../message-queue.js';
+import { StateManager } from '../state.js';
 import type { CommandDeps } from './types.js';
 import { requireAuth, requireThread } from './utils.js';
 
@@ -257,7 +258,7 @@ async function handleMerge(
 
   const guildId = interaction.guildId!;
   const target = interaction.options.getString('target', true);
-  const { stateManager, messageHandler, messageQueue } = deps;
+  const { stateManager, claudeClient, messageHandler, messageQueue } = deps;
 
   // 查找匹配的 session
   const allSessions = stateManager.getAllSessions(guildId);
@@ -310,13 +311,25 @@ async function handleMerge(
     .replaceAll('{{TARGET_CWD}}', targetSession.cwd)
     .replaceAll('{{MAIN_CWD}}', mainCwd);
 
+  // Step 1: 停止 target session 正在运行的 Claude 进程
+  const targetLockKey = StateManager.threadLockKey(guildId, targetSession.threadId);
+  const wasRunning = claudeClient.abort(targetLockKey);
+  if (wasRunning) {
+    logger.info(`[merge] Stopped target session: ${targetSession.name}`);
+  }
+
+  // Step 2: 清除旧 session，设置 cwd 为 main worktree（等同于 /clear + 改 cwd）
+  stateManager.clearSessionClaudeId(guildId, targetSession.threadId);
+  stateManager.setSessionCwd(guildId, targetSession.threadId, mainCwd);
+
   await interaction.editReply(
     `Merging: **${targetSession.name}**\n` +
     `Branch: \`${targetSession.worktreeBranch}\`\n` +
-    `Working directory: \`${targetSession.cwd}\``
+    `Executing in: <#${targetSession.threadId}>`
   );
 
-  // 在目标 session 中执行 merge（而非开独立 claude -p 进程）
+  // Step 3: 在 target session 中用全新 Claude 执行 merge
+  // merge skill 最后会 DELETE /api/tasks/$TASK_ID，删除 channel 和 session
   messageHandler.handleBackgroundChat(guildId, targetSession.threadId, prompt).catch((err) => {
     logger.error('merge failed:', err.message);
     messageQueue.sendLong(targetSession.threadId, `merge failed: ${err.message}`).catch(() => {});
