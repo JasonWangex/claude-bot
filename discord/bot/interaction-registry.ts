@@ -20,6 +20,7 @@ interface PendingEntry {
   resolve: (value: string) => void;
   createdAt: number;
   waitingCustomText?: boolean;
+  noTimeout?: boolean;  // true = 必须等用户显式操作，不自动超时
 }
 
 export class InteractionRegistry {
@@ -35,6 +36,7 @@ export class InteractionRegistry {
     guildId: string,
     threadId: string,
     options?: string[],
+    opts?: { noTimeout?: boolean },
   ): { promise: Promise<string>; customIdPrefix: string } {
     // 使用 toolUseId 的前 12 字符作为 customId 前缀
     const customIdPrefix = toolUseId.slice(0, 12);
@@ -47,17 +49,20 @@ export class InteractionRegistry {
         options,
         resolve,
         createdAt: Date.now(),
+        noTimeout: opts?.noTimeout,
       };
       this.pending.set(toolUseId, entry);
 
-      // 自动超时：TTL 后 resolve 为 __timeout__ 并清理
-      setTimeout(() => {
-        if (this.pending.has(toolUseId)) {
-          entry.resolve('__timeout__');
-          this.pending.delete(toolUseId);
-          logger.warn(`Interaction timeout: ${toolUseId.slice(0, 12)}`);
-        }
-      }, this.TTL);
+      // Plan 等交互必须等用户显式操作，不设超时
+      if (!opts?.noTimeout) {
+        setTimeout(() => {
+          if (this.pending.has(toolUseId)) {
+            entry.resolve('__timeout__');
+            this.pending.delete(toolUseId);
+            logger.warn(`Interaction timeout: ${toolUseId.slice(0, 12)}`);
+          }
+        }, this.TTL);
+      }
     });
 
     return { promise, customIdPrefix };
@@ -120,7 +125,7 @@ export class InteractionRegistry {
   cleanup(): void {
     const now = Date.now();
     for (const [key, entry] of this.pending.entries()) {
-      if (now - entry.createdAt > this.TTL) {
+      if (!entry.noTimeout && now - entry.createdAt > this.TTL) {
         entry.resolve('__timeout__');
         this.pending.delete(key);
       }

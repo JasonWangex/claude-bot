@@ -504,7 +504,11 @@ export class MessageHandler {
         // 构造后续消息
         let followUpText: string;
         if (pi.toolName === 'AskUserQuestion') {
-          followUpText = `关于上面的问题，我的回答是: ${answer}`;
+          if (answer === '__timeout__') {
+            followUpText = '用户没有在规定时间内回复这个问题，请跳过该问题，自行选择最佳选项继续执行';
+          } else {
+            followUpText = `关于上面的问题，我的回答是: ${answer}`;
+          }
         } else {
           if (answer === 'compact_execute') {
             const updatedSession = this.stateManager.getSession(guildId, threadId)!;
@@ -737,7 +741,7 @@ export class MessageHandler {
     input: ExitPlanModeInput,
   ): Promise<string> {
     const { promise, customIdPrefix } = this.interactionRegistry.register(
-      toolUseId, guildId, threadId
+      toolUseId, guildId, threadId, undefined, { noTimeout: true }
     );
 
     let text = '@everyone **Plan ready, waiting for confirmation**\n';
