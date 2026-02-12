@@ -44,7 +44,8 @@ export async function forkTopicCore(
   }
 
   const repoName = await getRepoName(session.cwd);
-  const worktreeDir = resolve(worktreesDir, `${repoName}_${branchName}`);
+  const dirSafeBranch = branchName.replaceAll('/', '_');
+  const worktreeDir = resolve(worktreesDir, `${repoName}_${dirSafeBranch}`);
   await mkdir(worktreesDir, { recursive: true });
   await createWorktree(session.cwd, worktreeDir, branchName);
 
