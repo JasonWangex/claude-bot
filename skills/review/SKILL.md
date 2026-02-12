@@ -1,18 +1,24 @@
 ---
 name: review
 description: >
-  自动生成开发日报/周报。从 Notion Dev Log 和 Goals 收集数据，
+  自动生成开发日报/周报。从本地数据库的 Dev Log 和 Goals 收集数据，
   生成结构化回顾，输出到当前对话。支持 daily（默认）和 weekly 模式。
-version: 1.0.0
+version: 2.0.0
 ---
 
 # Review - 开发回顾报告
 
-自动收集 Notion Dev Log 和 Goals 数据，生成结构化的日报或周报。
+自动收集 Dev Log 和 Goals 数据，生成结构化的日报或周报。
 
-**数据源：**
-- Dev Log: `collection://c1d6130c-fff9-47eb-a525-b53534a3c215`
-- Goals: `collection://d8cfb7d5-bf11-4ce3-bed4-37fabdec77e0`
+## API 初始化
+
+所有数据通过 Bot HTTP API 获取：
+
+```bash
+API="http://127.0.0.1:3456"
+BOT_TOKEN=$(grep '^BOT_ACCESS_TOKEN=' /home/jason/projects/claude-bot/.env 2>/dev/null | cut -d= -f2-)
+AUTH="Authorization: Bearer $BOT_TOKEN"
+```
 
 ## 模式判断
 
@@ -24,33 +30,53 @@ version: 1.0.0
 
 ### 1.1 从 Dev Log 收集
 
-用 `mcp__claude_ai_Notion__notion-search` 搜索 Dev Log：
+根据模式确定日期范围，然后调用 API：
 
-- **data_source_url**: `collection://c1d6130c-fff9-47eb-a525-b53534a3c215`
-- **query**: 根据模式选择关键词（项目名、日期范围等）
-- **filters**: 按日期范围过滤
-  - 日报: `created_date_range` 为今天
-  - 周报: `created_date_range` 为本周一到今天
+**日报（今天）：**
 
-对搜索到的每条 Dev Log 记录，用 `mcp__claude_ai_Notion__notion-fetch` 获取详情，提取：
-- Name（功能标题）
-- Project（项目）
-- Branch（分支）
-- Summary（摘要）
-- Commits（commit 数）
-- Lines Changed（代码变化）
-- Goal（关联目标）
-- Content 中的"背景与动机"和"主要变更"
+```bash
+TODAY=$(date +%Y-%m-%d)
+curl -s -H "$AUTH" "$API/api/devlogs?date=$TODAY"
+```
+
+**周报（本周一到今天）：**
+
+```bash
+# 计算本周一
+MONDAY=$(date -d "last monday" +%Y-%m-%d 2>/dev/null || date -v-monday +%Y-%m-%d)
+TODAY=$(date +%Y-%m-%d)
+curl -s -H "$AUTH" "$API/api/devlogs?start=$MONDAY&end=$TODAY"
+```
+
+**指定日期：**
+
+```bash
+curl -s -H "$AUTH" "$API/api/devlogs?date=<指定日期>"
+```
+
+从响应的 `data` 数组中提取每条 Dev Log：
+- `name`（功能标题）
+- `project`（项目）
+- `branch`（分支）
+- `summary`（摘要）
+- `commits`（commit 数）
+- `lines_changed`（代码变化）
+- `goal`（关联目标）
+- `content`（详细内容，包含"背景与动机"和"主要变更"）
 
 ### 1.2 从 Goals 收集
 
-用 `mcp__claude_ai_Notion__notion-search` 搜索 Active Goals：
+查询 Active Goals：
 
-- **data_source_url**: `collection://d8cfb7d5-bf11-4ce3-bed4-37fabdec77e0`
-- **query**: "Active"
+```bash
+curl -s -H "$AUTH" "$API/api/goals?status=Active"
+```
 
-对每个 Active Goal 提取：
-- Name、Progress、Next、BlockedBy
+从响应的 `data` 数组中提取每个 Active Goal：
+- `name`
+- `progress`
+- `next`
+- `blocked_by`
 
 ### 1.3 从 Git 补充
 
@@ -129,30 +155,8 @@ git log --since="last monday" --pretty=format:"- %h %s (%ar)" --all
 （根据 Goals 的 Next 和 BlockedBy 推断下周可能的工作方向）
 ```
 
-## 第三步：知识沉淀（P3 自动化）
-
-生成报告时，如果发现以下内容，**自动追加到 Notion 知识库**：
-
-1. **踩过的坑**：开发中遇到的非显而易见的问题和解决方案
-2. **有价值的模式**：可复用的代码模式或架构决策
-3. **工具/流程改进**：对开发工作流本身的优化
-
-调用 `mcp__claude_ai_Notion__notion-create-pages` 写入知识库：
-
-```json
-{
-  "parent": {"page_id": "30473f81-21af-8103-aab8-e7771aa6c3da"},
-  "pages": [{
-    "properties": {"title": "<知识点标题>"},
-    "content": "## 场景\n<什么情况下会遇到>\n\n## 要点\n<关键知识点>\n\n## 来源\n<来自哪个 Dev Log / Goal>"
-  }]
-}
-```
-
-**判断标准：** 只记录跨项目/跨场景可复用的经验，不记录纯项目特定的细节。如果本次回顾没有值得沉淀的知识，不写入，不强制。
-
 ## 输出
 
-直接在当前对话中输出报告内容。不写入 Notion（报告本身不持久化，Dev Log 和知识库已经是持久化的）。
+直接在当前对话中输出报告内容。不写入数据库（报告本身不持久化，Dev Log 和知识库已经是持久化的）。
 
 **立即执行。参数：{{SKILL_ARGS}}**
