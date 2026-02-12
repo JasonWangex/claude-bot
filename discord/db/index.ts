@@ -100,3 +100,7 @@ export function closeDb(): void {
 // Re-export migration 工具
 export { getCurrentVersion, runMigrations, rollbackTo } from './migrate.js';
 export type { Migration } from './migrate.js';
+
+// Re-export Repository 实现
+export { DevLogRepository } from './devlog-repo.js';
+export { IdeaRepository } from './idea-repo.js';

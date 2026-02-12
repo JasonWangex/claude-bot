@@ -228,6 +228,27 @@ export interface DevLogRow {
 }
 
 // ================================================================
+// ideas 表 — 对应 Notion Ideas Database
+// ================================================================
+
+export interface IdeaRow {
+  /** 本地 UUID 或 Notion Page ID (PRIMARY KEY) */
+  id: string;
+  /** 想法标题 */
+  name: string;
+  /** 状态 */
+  status: string;
+  /** 项目名 */
+  project: string;
+  /** 日期 (ISO-8601 date) */
+  date: string;
+  /** 创建时间 (Unix ms) */
+  created_at: number;
+  /** 更新时间 (Unix ms) */
+  updated_at: number;
+}
+
+// ================================================================
 // 运行时类型转换辅助
 // ================================================================
 
