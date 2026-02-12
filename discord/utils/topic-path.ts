@@ -153,17 +153,22 @@ export async function resolveTopicWorkDir(
 
 /**
  * 验证并解析用户提供的自定义路径
+ * 防止路径穿越：解析后的路径必须在 allowedRoot 下
  *
  * @param customPath - 用户提供的路径
  * @param baseCwd - 当前工作目录（用于解析相对路径）
+ * @param allowedRoot - 允许的根目录（可选，不传则不限制）
  * @returns 解析后的绝对路径
  */
-export function resolveCustomPath(customPath: string, baseCwd: string): string {
-  // 如果已是绝对路径，直接返回
-  if (isAbsolute(customPath)) {
-    return customPath;
+export function resolveCustomPath(customPath: string, baseCwd: string, allowedRoot?: string): string {
+  const resolved = isAbsolute(customPath) ? resolve(customPath) : resolve(baseCwd, customPath);
+
+  if (allowedRoot) {
+    const normalizedRoot = resolve(allowedRoot);
+    if (!resolved.startsWith(normalizedRoot + '/') && resolved !== normalizedRoot) {
+      throw new Error(`Path "${customPath}" is outside allowed directory`);
+    }
   }
 
-  // 相对路径，基于 baseCwd 解析
-  return resolve(baseCwd, customPath);
+  return resolved;
 }

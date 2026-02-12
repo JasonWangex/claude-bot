@@ -129,8 +129,15 @@ export class ClaudeExecutor {
 
       const outputFile = join(this.processDir, `${Date.now()}-${lockKey.replace(/[^a-zA-Z0-9_-]/g, '_')}.jsonl`);
       const stderrFile = outputFile.replace('.jsonl', '.stderr');
-      const outputFd = openSync(outputFile, 'w');
-      const stderrFd = openSync(stderrFile, 'w');
+      let outputFd: number | null = null;
+      let stderrFd: number | null = null;
+      try {
+        outputFd = openSync(outputFile, 'w');
+        stderrFd = openSync(stderrFile, 'w');
+      } catch (e: any) {
+        if (outputFd !== null) closeSync(outputFd);
+        throw new ClaudeExecutionError(`无法创建输出文件: ${e.message}`, ClaudeErrorType.FATAL);
+      }
 
       const child = spawn(this.claudeCliPath, args, {
         cwd: options.cwd,
@@ -209,8 +216,15 @@ export class ClaudeExecutor {
 
       const outputFile = join(this.processDir, `${Date.now()}-compact-${key.replace(/[^a-zA-Z0-9_-]/g, '_')}.jsonl`);
       const stderrFile = outputFile.replace('.jsonl', '.stderr');
-      const outputFd = openSync(outputFile, 'w');
-      const stderrFd = openSync(stderrFile, 'w');
+      let outputFd: number | null = null;
+      let stderrFd: number | null = null;
+      try {
+        outputFd = openSync(outputFile, 'w');
+        stderrFd = openSync(stderrFile, 'w');
+      } catch (e: any) {
+        if (outputFd !== null) closeSync(outputFd);
+        throw new ClaudeExecutionError(`无法创建输出文件: ${e.message}`, ClaudeErrorType.FATAL);
+      }
 
       const child = spawn(this.claudeCliPath, args, {
         cwd,

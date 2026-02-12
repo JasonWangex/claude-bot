@@ -3,7 +3,7 @@
  * Promise-based bridge between Discord component interactions (Buttons/SelectMenus/Modals)
  * and the Claude executor.
  *
- * 替代 Telegram 的 CallbackRegistry，支持:
+ * 支持:
  * - AskUserQuestion → Buttons / StringSelectMenu
  * - ExitPlanMode → Buttons (approve/reject/compact)
  * - Model Switch → StringSelectMenu
@@ -40,14 +40,24 @@ export class InteractionRegistry {
     const customIdPrefix = toolUseId.slice(0, 12);
 
     const promise = new Promise<string>((resolve) => {
-      this.pending.set(toolUseId, {
+      const entry: PendingEntry = {
         toolUseId,
         guildId,
         threadId,
         options,
         resolve,
         createdAt: Date.now(),
-      });
+      };
+      this.pending.set(toolUseId, entry);
+
+      // 自动超时：TTL 后 resolve 为 __timeout__ 并清理
+      setTimeout(() => {
+        if (this.pending.has(toolUseId)) {
+          entry.resolve('__timeout__');
+          this.pending.delete(toolUseId);
+          logger.warn(`Interaction timeout: ${toolUseId.slice(0, 12)}`);
+        }
+      }, this.TTL);
     });
 
     return { promise, customIdPrefix };

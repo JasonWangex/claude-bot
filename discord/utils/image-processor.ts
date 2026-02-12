@@ -16,6 +16,8 @@ const MAX_DIMENSION = 1568;
 const JPEG_QUALITY = 80;
 // 小图片阈值：低于此大小且尺寸合适的 PNG 不转换格式
 const SMALL_IMAGE_BYTES = 200 * 1024;
+// 最大下载大小限制（20MB，防止 OOM）
+const MAX_DOWNLOAD_BYTES = 20 * 1024 * 1024;
 
 /**
  * 从 URL 下载图片并压缩处理
@@ -26,12 +28,19 @@ const SMALL_IMAGE_BYTES = 200 * 1024;
 export async function downloadAndProcessImage(
   fileUrl: string,
 ): Promise<ImageAttachment> {
-  // 下载图片
+  // 下载图片（限制大小）
   const response = await fetch(fileUrl);
   if (!response.ok) {
     throw new Error(`下载图片失败: HTTP ${response.status}`);
   }
+  const contentLength = response.headers.get('content-length');
+  if (contentLength && parseInt(contentLength, 10) > MAX_DOWNLOAD_BYTES) {
+    throw new Error(`图片过大: ${contentLength} bytes (limit: ${MAX_DOWNLOAD_BYTES})`);
+  }
   const rawBuffer = Buffer.from(await response.arrayBuffer());
+  if (rawBuffer.length > MAX_DOWNLOAD_BYTES) {
+    throw new Error(`图片过大: ${rawBuffer.length} bytes (limit: ${MAX_DOWNLOAD_BYTES})`);
+  }
   logger.debug(`Image downloaded: ${rawBuffer.length} bytes`);
 
   // 获取元数据
