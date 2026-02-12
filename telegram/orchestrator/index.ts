@@ -14,7 +14,6 @@ import type { MessageHandler } from '../bot/handlers.js';
 import type { MessageQueue } from '../bot/message-queue.js';
 import type { TelegramBotConfig, GoalDriveState, GoalTask } from '../types/index.js';
 import type { Telegram } from 'telegraf';
-import { resolve } from 'path';
 import { stat } from 'fs/promises';
 import { getAuthorizedChatId } from '../utils/env.js';
 import { execGit, resolveMainWorktree } from './git-ops.js';
@@ -483,7 +482,7 @@ export class GoalOrchestrator {
       }
 
       // 检查子任务 worktree 是否有未提交更改
-      const subtaskDir = this.getSubtaskDir(task.branchName);
+      const subtaskDir = this.findWorktreeDir(stdout, task.branchName);
       if (subtaskDir) {
         const hasChanges = await hasUncommittedChanges(subtaskDir);
         if (hasChanges) {
@@ -574,14 +573,6 @@ export class GoalOrchestrator {
       }
     }
     return null;
-  }
-
-  /** 获取子任务 worktree 目录路径 */
-  private getSubtaskDir(branchName: string): string | null {
-    return resolve(
-      this.deps.config.worktreesDir,
-      `${branchName.replace(/\//g, '_')}`
-    );
   }
 
   /** 发送通知到 Goal Topic */
