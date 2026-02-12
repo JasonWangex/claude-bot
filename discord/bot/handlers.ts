@@ -351,14 +351,16 @@ export class MessageHandler {
         return;
       }
 
-      if (event.status === 'compacting') {
+      // 压缩状态事件: {type:"system", subtype:"status", status:"compacting"|null}
+      if (event.type === 'system' && subtype === 'status' && event.status === 'compacting') {
         mq.edit(threadId, progressMsgId, `Compacting context... (${elapsed()})`, { components: [stopRow as any], embedColor: EmbedColors.GRAY });
         return;
       }
+      // compact_boundary 携带 compact_metadata
       if (event.compact_metadata) {
         compactPreTokens = event.compact_metadata.pre_tokens;
       }
-      if (event.subtype === 'compact_boundary') {
+      if (subtype === 'compact_boundary') {
         mq.edit(threadId, progressMsgId, `Context compacted, thinking... (${elapsed()})`, { components: [stopRow as any], embedColor: EmbedColors.GRAY });
         return;
       }

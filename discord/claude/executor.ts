@@ -283,7 +283,7 @@ export class ClaudeExecutor {
       let compactPreTokens: number | null = null;
       let lastOutputTime = Date.now();
       let stallWarned = false;
-      let compacting = false;   // 自动压缩中，暂停 stall 检测
+      let compacting = false;   // 自动压缩中，暂停 stall 检测和 command timeout
 
       const readNewData = () => {
         try {
@@ -325,9 +325,32 @@ export class ClaudeExecutor {
 
             if (event.session_id) lastSessionId = event.session_id;
 
-            // 追踪压缩状态：压缩期间暂停 stall 检测
-            if (event.status === 'compacting') compacting = true;
-            if (event.subtype === 'compact_boundary' || (event.type === 'assistant' && compacting)) compacting = false;
+            // 追踪压缩状态：压缩期间暂停 stall 检测和 command timeout
+            // status 事件格式: {type:"system", subtype:"status", status:"compacting"|null}
+            if (event.type === 'system' && event.subtype === 'status') {
+              if (event.status === 'compacting' && !compacting) {
+                compacting = true;
+                // 暂停 command timeout：压缩期间不应计入超时
+                if (active?.timeoutHandle) {
+                  clearTimeout(active.timeoutHandle);
+                  active.timeoutHandle = null;
+                  logger.debug('Command timeout paused during compaction');
+                }
+              } else if (event.status !== 'compacting' && compacting) {
+                compacting = false;
+                this.resetCommandTimeout(child, flags, active);
+              }
+            } else if (event.type === 'system' && event.subtype === 'compact_boundary') {
+              // compact_boundary 是压缩结束的确定信号
+              if (compacting) {
+                compacting = false;
+                this.resetCommandTimeout(child, flags, active);
+              }
+            } else if (event.type === 'assistant' && compacting) {
+              // fallback: compacting 状态下收到 assistant 事件，说明压缩已结束
+              compacting = false;
+              this.resetCommandTimeout(child, flags, active);
+            }
 
             if (event.compact_metadata) {
               compactPreTokens = event.compact_metadata.pre_tokens;
@@ -655,6 +678,33 @@ export class ClaudeExecutor {
    */
   isRunning(lockKey: string): boolean {
     return this.activeProcesses.has(lockKey);
+  }
+
+  /**
+   * 压缩结束后重新启动 command timeout
+   */
+  private resetCommandTimeout(
+    child: ChildProcess,
+    flags: { killed: boolean; aborted: boolean },
+    active: ActiveProcess | undefined
+  ): void {
+    if (this.commandTimeout <= 0 || flags.killed || flags.aborted) return;
+    // 清除旧的（如果有的话）
+    if (active?.timeoutHandle) {
+      clearTimeout(active.timeoutHandle);
+      active.timeoutHandle = null;
+    }
+    const timeoutHandle = setTimeout(() => {
+      logger.warn(`Process timeout after ${this.commandTimeout}ms (post-compact)`);
+      flags.killed = true;
+      child.kill('SIGTERM');
+      const killTimer = setTimeout(() => {
+        if (child.exitCode === null) child.kill('SIGKILL');
+      }, 5000);
+      if (active) active.killTimer = killTimer;
+    }, this.commandTimeout);
+    if (active) active.timeoutHandle = timeoutHandle;
+    logger.debug('Command timeout restarted after compaction');
   }
 
   /**
