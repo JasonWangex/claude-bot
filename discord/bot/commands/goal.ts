@@ -73,11 +73,12 @@ async function handleGoal(
   }
 
   const bodyMatch = skillContent.match(/^---[\s\S]*?---\s*([\s\S]*)$/);
-  const prompt = (bodyMatch ? bodyMatch[1] : skillContent)
+  const promptTemplate = (bodyMatch ? bodyMatch[1] : skillContent)
     .replace('{{SKILL_ARGS}}', text);
 
   if (!newSession) {
     // 直接在当前 session 中执行 goal skill
+    const prompt = promptTemplate.replace('{{THREAD_ID}}', threadId);
     await interaction.reply(`Goal: ${text || '(listing goals)'}...`);
     messageHandler.handleBackgroundChat(guildId, threadId, prompt).catch((err) => {
       logger.error('goal failed:', err.message);
@@ -135,7 +136,8 @@ async function handleGoal(
       await (newChannel as any).send({ embeds: [descEmbed] });
     }
 
-    // 6. 在新 session 中触发 goal skill
+    // 6. 在新 session 中触发 goal skill（注入新 channel 的 thread ID）
+    const prompt = promptTemplate.replace('{{THREAD_ID}}', forkResult.threadId);
     messageHandler.handleBackgroundChat(guildId, forkResult.threadId, prompt).catch((err) => {
       logger.error('goal (new session) background chat failed:', err.message);
     });

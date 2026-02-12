@@ -87,7 +87,7 @@ data_source_url: `collection://d8cfb7d5-bf11-4ce3-bed4-37fabdec77e0`
    e. 调用 Drive API 启动（需携带 `-H "$AUTH"`）：
       ```bash
       curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' \
-        -d '{"goalName":"<Goal Name>","goalThreadId":"<当前 task 的 thread ID>","baseCwd":"<当前工作目录>","tasks":[解析出的子任务数组],"maxConcurrent":3}' \
+        -d '{"goalName":"<Goal Name>","goalThreadId":"{{THREAD_ID}}","baseCwd":"<当前工作目录>","tasks":[解析出的子任务数组],"maxConcurrent":3}' \
         "$API/api/goals/<page-id>/drive"
       ```
 
@@ -236,7 +236,7 @@ data_source_url: `collection://d8cfb7d5-bf11-4ce3-bed4-37fabdec77e0`
 2. **调用 Drive API** 启动自动调度（需携带 `-H "$AUTH"`）：
    ```bash
    curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' \
-     -d '{"goalName":"<Goal Name>","goalThreadId":"<当前 task 的 thread ID>","baseCwd":"<当前工作目录>","tasks":[解析出的子任务数组],"maxConcurrent":3}' \
+     -d '{"goalName":"<Goal Name>","goalThreadId":"{{THREAD_ID}}","baseCwd":"<当前工作目录>","tasks":[解析出的子任务数组],"maxConcurrent":3}' \
      "$API/api/goals/<page-id>/drive"
    ```
 
