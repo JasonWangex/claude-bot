@@ -10,6 +10,7 @@ import type { MessageHandler } from '../bot/handlers.js';
 import type { MessageQueue } from '../bot/message-queue.js';
 import type { DiscordBotConfig } from '../types/index.js';
 import type { GoalOrchestrator } from '../orchestrator/index.js';
+import type { GoalStatus, GoalType } from '../types/db.js';
 
 // ========== 通用 ==========
 
@@ -167,4 +168,64 @@ export interface StatusResponse {
   default_model: string | null;
   active_tasks: number;
   tasks: TaskSummary[];
+}
+
+// ========== Goal CRUD ==========
+
+export interface GoalSummary {
+  id: string;
+  name: string;
+  status: GoalStatus;
+  type: GoalType | null;
+  project: string | null;
+  date: string | null;
+  progress: string | null;
+  drive_status: string | null;
+}
+
+export interface GoalDetail extends GoalSummary {
+  completion: string | null;
+  next: string | null;
+  blocked_by: string | null;
+  body: string | null;
+  drive_branch: string | null;
+  drive_thread_id: string | null;
+  drive_base_cwd: string | null;
+  drive_max_concurrent: number | null;
+  drive_created_at: number | null;
+  drive_updated_at: number | null;
+  tasks: GoalTaskSummary[];
+}
+
+export interface GoalTaskSummary {
+  id: string;
+  description: string;
+  type: string;
+  phase: number | null;
+  status: string;
+  depends: string[];
+  branch_name: string | null;
+  thread_id: string | null;
+}
+
+export interface CreateGoalRequest {
+  name: string;
+  status?: GoalStatus;
+  type?: GoalType;
+  project?: string;
+  completion?: string;
+  body?: string;
+}
+
+export interface UpdateGoalRequest {
+  name?: string;
+  status?: GoalStatus;
+  type?: GoalType;
+  project?: string;
+  date?: string;
+  completion?: string;
+  progress?: string;
+  next?: string;
+  blocked_by?: string;
+  body?: string;
 }
