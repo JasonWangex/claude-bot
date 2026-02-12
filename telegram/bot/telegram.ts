@@ -315,16 +315,16 @@ export class TelegramBot {
       this.commandHandler.handleTopicsCancelCallback(ctx).catch(e => logger.error('topics:cancel error:', e));
     });
 
-    // 停止按钮回调: stop:<lockKey-prefix>
+    // 停止按钮回调: stop:<lockKey>
     this.bot.action(/^stop:(.+)$/, (ctx) => {
       if (!ctx.chat) return;
       if (!checkAuth(ctx)) {
         ctx.answerCbQuery('❌ 未授权').catch(() => {});
         return;
       }
-      // 从 callback data 中取 lockKey 前缀，尝试 abort
-      const lockKeyPrefix = ctx.match[1];
-      const wasRunning = this.claudeClient.abort(lockKeyPrefix);
+      // 从 callback data 中取完整 lockKey，精确 abort
+      const lockKey = ctx.match[1];
+      const wasRunning = this.claudeClient.abort(lockKey);
       ctx.answerCbQuery(wasRunning ? '⏹ 正在停止...' : 'ℹ️ 没有运行中的任务').catch(() => {});
     });
 

@@ -289,7 +289,7 @@ export class MessageHandler {
     // 停止按钮
     const lockKey = StateManager.topicLockKey(session.groupId, session.topicId);
     const stopKeyboard = Markup.inlineKeyboard([[
-      Markup.button.callback('⏹ 停止', `stop:${lockKey.slice(0, 20)}`)
+      Markup.button.callback('⏹ 停止', `stop:${lockKey}`)
     ]]);
     // 发送初始进度消息（附带停止按钮）
     let progressMsgId = await this.mq.send(chatId, session.topicId, `⏳${modeLabel} 思考中...`, { replyMarkup: stopKeyboard.reply_markup });

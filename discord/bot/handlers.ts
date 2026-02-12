@@ -209,7 +209,7 @@ export class MessageHandler {
 
     // 停止按钮
     const stopButton = new ButtonBuilder()
-      .setCustomId(`stop:${lockKey.slice(0, 20)}`)
+      .setCustomId(`stop:${lockKey}`)
       .setLabel('Stop')
       .setStyle(ButtonStyle.Danger);
     const stopRow = new ActionRowBuilder<ButtonBuilder>().addComponents(stopButton);
