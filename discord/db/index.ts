@@ -105,3 +105,4 @@ export type { Migration } from './migrate.js';
 export { DevLogRepository } from './devlog-repo.js';
 export { IdeaRepository } from './idea-repo.js';
 export { GoalRepo, GoalTaskRepo } from './repo/index.js';
+export { SessionRepository, GuildRepository } from './repo/index.js';
