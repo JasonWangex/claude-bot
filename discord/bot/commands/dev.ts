@@ -10,12 +10,14 @@ import { join } from 'path';
 import {
   SlashCommandBuilder,
   ChannelType,
+  EmbedBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
 import { generateBranchName } from '../../utils/git-utils.js';
 import { generateTopicTitle } from '../../utils/llm.js';
 import { forkTaskCore } from '../../utils/fork-task.js';
 import { logger } from '../../utils/logger.js';
+import { EmbedColors } from '../message-queue.js';
 import type { CommandDeps } from './types.js';
 import { requireAuth, requireThread } from './utils.js';
 
@@ -125,7 +127,10 @@ async function handleQdev(
     await interaction.editReply(`Branch: \`${branchName}\`\nSending task to new thread...`);
     const newChannel = await client.channels.fetch(forkResult.threadId);
     if (newChannel && newChannel.isTextBased() && 'send' in newChannel) {
-      await (newChannel as any).send(description);
+      const descEmbed = new EmbedBuilder()
+        .setColor(EmbedColors.PURPLE)
+        .setDescription(`[qdev] ${description}`.slice(0, 4096));
+      await (newChannel as any).send({ embeds: [descEmbed] });
     }
 
     // 6. 触发 Claude 处理（fire-and-forget）

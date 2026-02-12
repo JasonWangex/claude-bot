@@ -8,11 +8,11 @@
  * 4. 全程通知用户，异常时暂停等待干预
  */
 
-import { ChannelType, type Client } from 'discord.js';
+import { ChannelType, EmbedBuilder, type Client } from 'discord.js';
 import type { StateManager } from '../bot/state.js';
 import type { ClaudeClient } from '../claude/client.js';
 import type { MessageHandler } from '../bot/handlers.js';
-import type { MessageQueue } from '../bot/message-queue.js';
+import { type MessageQueue, EmbedColors, type EmbedColor } from '../bot/message-queue.js';
 import type { DiscordBotConfig, GoalDriveState, GoalTask } from '../types/index.js';
 import { stat } from 'fs/promises';
 import { getAuthorizedGuildId } from '../utils/env.js';
@@ -70,7 +70,7 @@ export class GoalOrchestrator {
 
     const existing = this.activeDrives.get(goalId) || loadState(goalId);
     if (existing && existing.status === 'running') {
-      await this.notify(goalThreadId, `Goal "${goalName}" is already running`);
+      await this.notify(goalThreadId, `Goal "${goalName}" is already running`, 'info');
       return existing;
     }
 
@@ -81,7 +81,7 @@ export class GoalOrchestrator {
         logger.info(`[Orchestrator] Normalized baseCwd: ${inputCwd} → ${baseCwd}`);
       }
     } catch (err: any) {
-      await this.notify(goalThreadId, `Invalid working directory: ${inputCwd}\nError: ${err.message}`);
+      await this.notify(goalThreadId, `Invalid working directory: ${inputCwd}\nError: ${err.message}`, 'error');
       throw err;
     }
 
@@ -91,7 +91,7 @@ export class GoalOrchestrator {
     try {
       goalWorktreeDir = await createGoalBranch(baseCwd, goalBranch, this.deps.config.worktreesDir);
     } catch (err: any) {
-      await this.notify(goalThreadId, `Failed to create goal branch: ${err.message}`);
+      await this.notify(goalThreadId, `Failed to create goal branch: ${err.message}`, 'error');
       throw err;
     }
 
@@ -115,7 +115,8 @@ export class GoalOrchestrator {
       `**Goal Drive started:** ${goalName}\n` +
       `Branch: \`${goalBranch}\`\n` +
       `Tasks: ${state.tasks.length}\n` +
-      `Max concurrent: ${maxConcurrent}`
+      `Max concurrent: ${maxConcurrent}`,
+      'success'
     );
 
     await this.dispatchNext(state);
@@ -127,7 +128,7 @@ export class GoalOrchestrator {
     if (!state || state.status !== 'running') return false;
     state.status = 'paused';
     saveState(state);
-    await this.notify(state.goalThreadId, `Goal "${state.goalName}" paused`);
+    await this.notify(state.goalThreadId, `Goal "${state.goalName}" paused`, 'warning');
     return true;
   }
 
@@ -136,7 +137,7 @@ export class GoalOrchestrator {
     if (!state || state.status !== 'paused') return false;
     state.status = 'running';
     saveState(state);
-    await this.notify(state.goalThreadId, `Goal "${state.goalName}" resumed`);
+    await this.notify(state.goalThreadId, `Goal "${state.goalName}" resumed`, 'success');
     await this.dispatchNext(state);
     return true;
   }
@@ -153,7 +154,7 @@ export class GoalOrchestrator {
     if (task.status !== 'pending' && task.status !== 'blocked' && task.status !== 'failed') return false;
     task.status = 'skipped';
     saveState(state);
-    await this.notify(state.goalThreadId, `Skipped task: ${task.id} - ${task.description}`);
+    await this.notify(state.goalThreadId, `Skipped task: ${task.id} - ${task.description}`, 'info');
     if (state.status === 'running') await this.dispatchNext(state);
     return true;
   }
@@ -166,7 +167,7 @@ export class GoalOrchestrator {
     task.status = 'completed';
     task.completedAt = Date.now();
     saveState(state);
-    await this.notify(state.goalThreadId, `Manual task completed: ${task.id} - ${task.description}`);
+    await this.notify(state.goalThreadId, `Manual task completed: ${task.id} - ${task.description}`, 'success');
     if (state.status === 'running') await this.dispatchNext(state);
     return true;
   }
@@ -183,7 +184,7 @@ export class GoalOrchestrator {
     task.dispatchedAt = undefined;
     task.merged = false;
     saveState(state);
-    await this.notify(state.goalThreadId, `Retrying task: ${task.id} - ${task.description}`);
+    await this.notify(state.goalThreadId, `Retrying task: ${task.id} - ${task.description}`, 'warning');
     if (state.status === 'running') await this.dispatchNext(state);
     return true;
   }
@@ -200,7 +201,8 @@ export class GoalOrchestrator {
         await this.notify(state.goalThreadId,
           `Goal "${state.goalName}" restore failed: working directory not found\n` +
           `Path: ${state.baseCwd}\n` +
-          `Auto-paused. Check and resume manually.`
+          `Auto-paused. Check and resume manually.`,
+          'error'
         );
         continue;
       }
@@ -254,7 +256,8 @@ export class GoalOrchestrator {
       saveState(state);
       await this.notify(state.goalThreadId,
         `**Goal "${state.goalName}" completed!**\n` +
-        `Review branch \`${state.goalBranch}\` and merge to main.`
+        `Review branch \`${state.goalBranch}\` and merge to main.`,
+        'success'
       );
       return;
     }
@@ -263,7 +266,8 @@ export class GoalOrchestrator {
       await this.notify(state.goalThreadId,
         `Goal "${state.goalName}" is stuck\n` +
         `May have unresolved dependencies or failed tasks\n` +
-        `Progress: ${getProgressSummary(state)}`
+        `Progress: ${getProgressSummary(state)}`,
+        'warning'
       );
       return;
     }
@@ -275,7 +279,8 @@ export class GoalOrchestrator {
       if (!task.notifiedBlocked) {
         task.notifiedBlocked = true;
         await this.notify(state.goalThreadId,
-          `Manual task pending: ${task.id} - ${task.description}\nReply "done ${task.id}" when complete.`
+          `Manual task pending: ${task.id} - ${task.description}\nReply "done ${task.id}" when complete.`,
+          'warning'
         );
       }
     }
@@ -343,9 +348,10 @@ export class GoalOrchestrator {
       });
 
       // 发送初始消息
-      await textChannel.send(
-        `Task: \`${task.id}\` - ${task.description}\nBranch: \`${branchName}\`\nWorking directory: \`${subtaskDir}\``
-      );
+      const initEmbed = new EmbedBuilder()
+        .setColor(EmbedColors.PURPLE)
+        .setDescription(`[goal] Task: \`${task.id}\` - ${task.description}\nBranch: \`${branchName}\`\nWorking directory: \`${subtaskDir}\``.slice(0, 4096));
+      await textChannel.send({ embeds: [initEmbed] });
 
       const newThreadId = textChannel.id;
 
@@ -360,7 +366,8 @@ export class GoalOrchestrator {
       saveState(state);
 
       await this.notify(state.goalThreadId,
-        `Dispatched: ${task.id} - ${task.description} → \`${branchName}\``
+        `Dispatched: ${task.id} - ${task.description} → \`${branchName}\``,
+        'info'
       );
 
       const taskPrompt = this.buildTaskPrompt(task, state);
@@ -371,7 +378,8 @@ export class GoalOrchestrator {
       task.error = err.message;
       saveState(state);
       await this.notify(state.goalThreadId,
-        `Dispatch failed: ${task.id} - ${task.description}\nError: ${err.message}`
+        `Dispatch failed: ${task.id} - ${task.description}\nError: ${err.message}`,
+        'error'
       );
     }
   }
@@ -408,7 +416,7 @@ export class GoalOrchestrator {
     task.status = 'completed';
     task.completedAt = Date.now();
     saveState(state);
-    await this.notify(state.goalThreadId, `Completed: ${task.id} - ${task.description}`);
+    await this.notify(state.goalThreadId, `Completed: ${task.id} - ${task.description}`, 'success');
     if (task.branchName) await this.mergeAndCleanup(state, task);
     const refreshed = this.getState(goalId);
     if (refreshed && refreshed.status === 'running') await this.dispatchNext(refreshed);
@@ -423,7 +431,8 @@ export class GoalOrchestrator {
     task.error = error;
     saveState(state);
     await this.notify(state.goalThreadId,
-      `Failed: ${task.id} - ${task.description}\nError: ${error}\n\nReply "retry ${task.id}" to retry.`
+      `Failed: ${task.id} - ${task.description}\nError: ${error}\n\nReply "retry ${task.id}" to retry.`,
+      'error'
     );
     if (state.status === 'running') await this.dispatchNext(state);
   }
@@ -449,7 +458,7 @@ export class GoalOrchestrator {
       );
       const goalWorktreeDir = this.findWorktreeDir(stdout, state.goalBranch);
       if (!goalWorktreeDir) {
-        await this.notify(state.goalThreadId, `Cannot find goal worktree, skipping merge: ${task.branchName}`);
+        await this.notify(state.goalThreadId, `Cannot find goal worktree, skipping merge: ${task.branchName}`, 'warning');
         return;
       }
 
@@ -466,7 +475,7 @@ export class GoalOrchestrator {
       if (result.success) {
         task.merged = true;
         saveState(state);
-        await this.notify(state.goalThreadId, `Merged: \`${task.branchName}\` → \`${state.goalBranch}\``);
+        await this.notify(state.goalThreadId, `Merged: \`${task.branchName}\` → \`${state.goalBranch}\``, 'success');
 
         if (subtaskDir) {
           await cleanupSubtask(state.baseCwd, subtaskDir, task.branchName);
@@ -489,13 +498,14 @@ export class GoalOrchestrator {
         await this.notify(state.goalThreadId,
           `Merge conflict: \`${task.branchName}\` → \`${state.goalBranch}\`\n` +
           `Manual resolution needed.\n` +
-          `Reply "done ${task.id}" when resolved.`
+          `Reply "done ${task.id}" when resolved.`,
+          'error'
         );
         task.status = 'blocked';
         task.error = 'merge conflict';
         saveState(state);
       } else {
-        await this.notify(state.goalThreadId, `Merge failed: ${task.branchName}\nError: ${result.error}`);
+        await this.notify(state.goalThreadId, `Merge failed: ${task.branchName}\nError: ${result.error}`, 'error');
       }
     } finally {
       this.mergeLock = false;
@@ -539,9 +549,16 @@ export class GoalOrchestrator {
     return null;
   }
 
-  private async notify(threadId: string, message: string): Promise<void> {
+  private async notify(threadId: string, message: string, type?: 'success' | 'error' | 'warning' | 'info'): Promise<void> {
     try {
-      await this.deps.mq.sendLong(threadId, message);
+      const colorMap: Record<string, EmbedColor> = {
+        success: EmbedColors.GREEN,
+        error: EmbedColors.RED,
+        warning: EmbedColors.YELLOW,
+        info: EmbedColors.GRAY,
+      };
+      const embedColor = type ? colorMap[type] : undefined;
+      await this.deps.mq.sendLong(threadId, message, { embedColor });
     } catch (err: any) {
       logger.error(`[Orchestrator] Failed to send notification: ${err.message}`);
     }

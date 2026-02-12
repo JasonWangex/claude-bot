@@ -24,6 +24,18 @@ import {
 } from 'discord.js';
 import { logger } from '../utils/logger.js';
 
+// --- Embed 颜色常量 ---
+
+export const EmbedColors = {
+  GRAY: 0x99AAB5,     // 进度状态 (info)
+  GREEN: 0x57F287,    // 成功/完成
+  RED: 0xED4245,      // 错误
+  YELLOW: 0xFEE75C,   // 警告
+  PURPLE: 0x9B59B6,   // 系统/API 来源消息
+} as const;
+
+export type EmbedColor = typeof EmbedColors[keyof typeof EmbedColors] | number;
+
 // --- 操作类型 ---
 
 interface SendOp {
@@ -34,6 +46,7 @@ interface SendOp {
     components?: ActionRowBuilder<MessageActionRowComponentBuilder>[];
     silent?: boolean;  // 抑制 @everyone 提及 (suppressNotifications)
     priority?: 'high' | 'normal';
+    embedColor?: EmbedColor;  // 设置后以 Embed 格式发送
   };
   resolve: (messageId: string) => void;
   reject: (error: Error) => void;
@@ -57,6 +70,7 @@ interface EditOp {
   text: string;
   options?: {
     components?: ActionRowBuilder<MessageActionRowComponentBuilder>[];
+    embedColor?: EmbedColor;  // 设置后以 Embed 格式编辑
   };
 }
 
@@ -135,12 +149,13 @@ export class MessageQueue {
     components?: ActionRowBuilder<MessageActionRowComponentBuilder>[];
     silent?: boolean;
     priority?: 'high' | 'normal';
+    embedColor?: EmbedColor;
   }): Promise<string> {
     const priority = options?.priority || 'normal';
     const buffer = this.threadBuffers.get(channelId);
 
     const isFirst = !buffer?.firstSent;
-    const hasSpecialFormat = !!(options?.components);
+    const hasSpecialFormat = !!(options?.components || options?.embedColor);
     if (priority === 'high' || isFirst || hasSpecialFormat) {
       this.flushThreadBuffer(channelId);
       this.ensureBuffer(channelId).firstSent = true;
@@ -171,6 +186,7 @@ export class MessageQueue {
     components?: ActionRowBuilder<MessageActionRowComponentBuilder>[];
     silent?: boolean;
     priority?: 'high' | 'normal';
+    embedColor?: EmbedColor;
   }): Promise<string> {
     if (text.length > this.MAX_EMBED_LENGTH) {
       const caption = text.slice(0, 1000);
@@ -178,17 +194,9 @@ export class MessageQueue {
     }
 
     if (text.length > this.MAX_MESSAGE_LENGTH) {
-      // 使用 Embed
-      this.flushThreadBuffer(channelId);
-      this.ensureBuffer(channelId).firstSent = true;
-      return new Promise((resolve, reject) => {
-        this.queue.push({
-          type: 'send', channelId,
-          text: '__EMBED__',  // 标记为 Embed 消息
-          options: { ...options, _embedText: text } as any,
-          resolve, reject,
-        });
-      });
+      // 使用 Embed（embedColor 有自定义就用，否则默认 Discord Blurple）
+      const embedColor = options?.embedColor ?? 0x5865F2;
+      return this.send(channelId, text, { ...options, embedColor, priority: 'high' });
     }
 
     const priority = options?.priority || 'normal';
@@ -210,6 +218,7 @@ export class MessageQueue {
    */
   edit(channelId: string, messageId: string, text: string, options?: {
     components?: ActionRowBuilder<MessageActionRowComponentBuilder>[];
+    embedColor?: EmbedColor;
   }): void {
     this.queue.push({ type: 'edit', channelId, messageId, text, options });
   }
@@ -416,10 +425,12 @@ export class MessageQueue {
 
     for (let attempt = 0; attempt <= this.MAX_RETRY; attempt++) {
       try {
-        // Embed 消息
-        const embedText = (op.options as any)?._embedText;
-        if (embedText) {
-          const embed = new EmbedBuilder().setDescription(embedText).setColor(0x5865F2);
+        // embedColor 参数 → Embed 消息
+        const embedColor = op.options?.embedColor;
+        if (embedColor !== undefined) {
+          const embed = new EmbedBuilder()
+            .setDescription(op.text.slice(0, this.MAX_EMBED_LENGTH))
+            .setColor(embedColor);
           const msgOpts: MessageCreateOptions = {
             embeds: [embed],
             components: op.options?.components as any,
@@ -493,6 +504,20 @@ export class MessageQueue {
       try {
         const message = await (channel as any).messages.fetch(op.messageId);
         if (!message) return;
+
+        const embedColor = op.options?.embedColor;
+        if (embedColor !== undefined) {
+          const embed = new EmbedBuilder()
+            .setDescription(op.text.slice(0, this.MAX_EMBED_LENGTH))
+            .setColor(embedColor);
+          await message.edit({
+            content: null,
+            embeds: [embed],
+            components: op.options?.components as any,
+          });
+          return;
+        }
+
         await message.edit({
           content: op.text.slice(0, this.MAX_MESSAGE_LENGTH),
           components: op.options?.components as any,

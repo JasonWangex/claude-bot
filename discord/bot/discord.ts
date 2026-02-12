@@ -9,7 +9,7 @@ import {
 } from 'discord.js';
 import { StateManager } from './state.js';
 import { InteractionRegistry } from './interaction-registry.js';
-import { MessageQueue } from './message-queue.js';
+import { MessageQueue, EmbedColors } from './message-queue.js';
 import { MessageHandler } from './handlers.js';
 import { ClaudeClient } from '../claude/client.js';
 import { DiscordBotConfig } from '../types/index.js';
@@ -372,14 +372,8 @@ export class DiscordBot {
       `Source: ${threadInfo}\n` +
       `\`\`\`\n${errMsg}\n\`\`\``;
 
-    this.client.channels.fetch(generalChannelId).then(channel => {
-      if (channel && channel.isTextBased() && 'send' in channel) {
-        (channel as any).send(text).catch((e: any) => {
-          logger.debug('sendErrorToGeneral send failed:', e.message);
-        });
-      }
-    }).catch((e: any) => {
-      logger.debug('sendErrorToGeneral failed:', e.message);
+    this.messageQueue.send(generalChannelId, text, { embedColor: EmbedColors.RED }).catch((e: any) => {
+      logger.debug('sendErrorToGeneral send failed:', e.message);
     });
   }
 
