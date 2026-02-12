@@ -3,14 +3,14 @@ name: goal
 description: >
   管理开发目标。无参数列出 Active/Paused Goals；`drive all` 批量启动所有 Active Goals 的自动推进；
   有参数时搜索匹配的 Goal 进入继续模式，没找到则进入创建模式。支持子任务拆解、进度跟踪、方向变更。
-version: 1.0.0
+version: 2.0.0
 ---
 
 # Goal - 开发目标管理
 
 管理大型开发目标，支持子任务拆解、进度跟踪和方向变更。
 
-**Goals Database**: `d8cfb7d5-bf11-4ce3-bed4-37fabdec77e0`
+**数据存储**: SQLite（通过 Bot API 访问）
 
 **Bot API 鉴权**: 所有 Bot API 调用需要 Bearer token。使用前先初始化：
 
@@ -34,9 +34,13 @@ AUTH="Authorization: Bearer $BOT_TOKEN"
 
 ## 列表模式（无参数）
 
-用 `mcp__claude_ai_Notion__notion-search` 在 Goals database 中搜索 Active 和 Paused 的 Goal。
+通过 Bot API 查询 Active 和 Paused 的 Goal：
 
-data_source_url: `collection://d8cfb7d5-bf11-4ce3-bed4-37fabdec77e0`
+```bash
+ACTIVE=$(curl -s -H "$AUTH" "$API/api/goals?status=Active")
+PAUSED=$(curl -s -H "$AUTH" "$API/api/goals?status=Paused")
+IDEAS=$(curl -s -H "$AUTH" "$API/api/ideas?status=Idea")
+```
 
 展示格式：
 
@@ -68,27 +72,30 @@ data_source_url: `collection://d8cfb7d5-bf11-4ce3-bed4-37fabdec77e0`
 
 1. **查询所有 Active Goals**
 
-   用 `mcp__claude_ai_Notion__notion-search` 搜索 Goals database 中 Status=Active 的 Goal。
-
-   data_source_url: `collection://d8cfb7d5-bf11-4ce3-bed4-37fabdec77e0`
+   ```bash
+   curl -s -H "$AUTH" "$API/api/goals?status=Active"
+   ```
 
 2. **逐个处理每个 Active Goal**
 
    对每个 Active Goal：
 
-   a. 用 `mcp__claude_ai_Notion__notion-fetch` 获取完整页面内容
+   a. 获取 Goal 详情（含子任务）：
+      ```bash
+      curl -s -H "$AUTH" "$API/api/goals/<goal-id>"
+      ```
 
-   b. 检查是否有**未完成的 `[代码]` 或 `[调研]` 子任务**（即 `- [ ]` 且类型为代码或调研）
+   b. 检查是否有**未完成的 `[代码]` 或 `[调研]` 子任务**（即 status 为 pending 且 type 为 代码 或 调研）
 
    c. 如果没有可自动执行的子任务（全部完成或全是手动任务）→ 跳过，记为"无可执行任务"
 
-   d. 如果有 → 按继续模式中的解析规则，将子任务解析为结构化 JSON
+   d. 如果有 → 直接使用 API 返回的 tasks 数据
 
    e. 调用 Drive API 启动（需携带 `-H "$AUTH"`）：
       ```bash
       curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' \
-        -d '{"goalName":"<Goal Name>","goalThreadId":"<当前 task 的 thread ID>","baseCwd":"<当前工作目录>","tasks":[解析出的子任务数组],"maxConcurrent":3}' \
-        "$API/api/goals/<page-id>/drive"
+        -d '{"goalName":"<Goal Name>","goalThreadId":"<当前 task 的 thread ID>","baseCwd":"<当前工作目录>","tasks":[子任务数组],"maxConcurrent":3}' \
+        "$API/api/goals/<goal-id>/drive"
       ```
 
    f. 如果 API 返回"已在运行中" → 跳过，记为"已在运行"
@@ -114,10 +121,13 @@ data_source_url: `collection://d8cfb7d5-bf11-4ce3-bed4-37fabdec77e0`
 
 ## 搜索匹配
 
-用 `mcp__claude_ai_Notion__notion-search` 搜索匹配的 Goal：
+通过 Bot API 获取所有 Goals 并在本地匹配：
 
-- query: 用户输入的关键词（`{{SKILL_ARGS}}`）
-- data_source_url: `collection://d8cfb7d5-bf11-4ce3-bed4-37fabdec77e0`
+```bash
+ALL_GOALS=$(curl -s -H "$AUTH" "$API/api/goals")
+```
+
+从返回的列表中匹配名称包含 `{{SKILL_ARGS}}` 的 Goal。
 
 如果找到匹配的 Goal → **继续模式**
 如果没找到 → **创建模式**
@@ -141,21 +151,31 @@ data_source_url: `collection://d8cfb7d5-bf11-4ce3-bed4-37fabdec77e0`
   - 可选使用 Phase 分组（Phase N 的任务在 Phase N-1 全部完成后才执行）
 - **关键决策**：记录讨论中做出的重要决策
 
-### 2. 写入 Notion
+### 2. 写入 SQLite
 
-调用 `mcp__claude_ai_Notion__notion-create-pages` 创建：
+通过 Bot API 创建 Goal：
 
-**数据库字段：**
-- **data_source_id**: `d8cfb7d5-bf11-4ce3-bed4-37fabdec77e0`
-- **Name**: Goal 标题（简短，10 字以内）
-- **Status**: `Active`
-- **Type**: 探索型 / 交付型
-- **Project**: 根据当前工作目录判断
-- **date:Date:start**: 今天（ISO-8601）
-- **date:Date:is_datetime**: 0
-- **Completion**: 完成标准（一句话）
-- **Progress**: "0/N 子任务完成"
-- **Next**: 第一个待执行的子任务
+```bash
+curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{
+    "name": "<Goal 标题（简短，10 字以内）>",
+    "status": "Active",
+    "type": "<探索型|交付型>",
+    "project": "<项目名>",
+    "completion": "<完成标准（一句话）>"
+  }' "$API/api/goals"
+```
+
+创建成功后获取返回的 `id`，然后通过 PATCH 更新 body 和其他字段：
+
+```bash
+curl -s -X PATCH -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{
+    "progress": "0/N 子任务完成",
+    "next": "<第一个待执行的子任务>",
+    "body": "<页面 body Markdown>"
+  }' "$API/api/goals/<goal-id>"
+```
 
 **页面 body 结构：**
 
@@ -202,7 +222,13 @@ data_source_url: `collection://d8cfb7d5-bf11-4ce3-bed4-37fabdec77e0`
 
 ### 1. 读取并展示摘要
 
-用 `mcp__claude_ai_Notion__notion-fetch` 获取 Goal 页面完整内容，展示摘要：
+通过 Bot API 获取 Goal 详情（含子任务）：
+
+```bash
+GOAL=$(curl -s -H "$AUTH" "$API/api/goals/<goal-id>")
+```
+
+展示摘要：
 
 ```
 🎯 <Goal Name>
@@ -217,15 +243,9 @@ data_source_url: `collection://d8cfb7d5-bf11-4ce3-bed4-37fabdec77e0`
 
 ### 1.5. 自动推进检测（Drive）
 
-展示摘要后，如果有**未完成的 `[代码]` 或 `[调研]` 子任务**，自动启动 Goal Drive：
+展示摘要后，如果有**未完成的 `[代码]` 或 `[调研]` 子任务**（从 API 返回的 tasks 中 status=pending 且 type=代码/调研），自动启动 Goal Drive：
 
-1. **解析子任务**为结构化数据：
-   ```json
-   [
-     { "id": "t1", "description": "创建数据模型", "type": "代码", "depends": [], "phase": 1 },
-     { "id": "t2", "description": "实现 API", "type": "代码", "depends": ["t1"], "phase": 2 }
-   ]
-   ```
+1. **使用 API 返回的子任务数据**，构建 Drive 请求。如果 API 返回的 tasks 为空但 body 中有子任务描述，则从 body 解析：
 
    解析规则：
    - 子任务 ID: 按出现顺序 t1, t2, t3...
@@ -236,8 +256,8 @@ data_source_url: `collection://d8cfb7d5-bf11-4ce3-bed4-37fabdec77e0`
 2. **调用 Drive API** 启动自动调度（需携带 `-H "$AUTH"`）：
    ```bash
    curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' \
-     -d '{"goalName":"<Goal Name>","goalThreadId":"<当前 task 的 thread ID>","baseCwd":"<当前工作目录>","tasks":[解析出的子任务数组],"maxConcurrent":3}' \
-     "$API/api/goals/<page-id>/drive"
+     -d '{"goalName":"<Goal Name>","goalThreadId":"<当前 task 的 thread ID>","baseCwd":"<当前工作目录>","tasks":[子任务数组],"maxConcurrent":3}' \
+     "$API/api/goals/<goal-id>/drive"
    ```
 
 3. **输出启动确认**：
@@ -258,33 +278,36 @@ data_source_url: `collection://d8cfb7d5-bf11-4ce3-bed4-37fabdec77e0`
 等待用户指令，支持以下操作：
 
 **完成子任务：**
-- 用 `mcp__claude_ai_Notion__notion-update-page` 更新页面
+- 用 PATCH API 更新 Goal 的 body：
+  ```bash
+  curl -s -X PATCH -H "$AUTH" -H 'Content-Type: application/json' \
+    -d '{"body":"<更新后的 Markdown>","progress":"<新进度>","next":"<下一步>"}' \
+    "$API/api/goals/<goal-id>"
+  ```
 - 把完成的子任务从"子任务"移到"已完成子任务存档"，标记为 `[x]`
 - 更新"当前状态"区域的进度和下一步
-- 更新数据库字段 Progress 和 Next
 
 **添加子任务：**
-- 在"子任务"区域追加新的 to-do item
+- 在 body 的"子任务"区域追加新的 to-do item，然后 PATCH 更新
 
 **记录决策：**
-- 在"决策记录" toggle 中追加新决策（带日期）
+- 在 body 的"决策记录" toggle 中追加新决策（带日期），然后 PATCH 更新
 
 **方向变更：**
 - 审查每个现有子任务：保留 / 废弃 / 需修改
 - 废弃的子任务移到"已完成子任务存档"，标注 `~~废弃~~` 和原因，**不删除**
 - 在"决策记录"中记录方向变更的原因
+- PATCH 更新 body
 
 **标记完成：**
-- 更新 Status 为 `Done`
-- 更新"当前状态"区域
+- PATCH 更新 status 为 `Done`
 
 **标记废弃：**
-- 更新 Status 为 `Abandoned`
+- PATCH 更新 status 为 `Abandoned`
 - 在"决策记录"中记录废弃原因
 
 **标记暂停：**
-- 更新 Status 为 `Paused`
-- 更新 BlockedBy 字段说明卡点
+- PATCH 更新 status 为 `Paused`、blocked_by 字段说明卡点
 
 ---
 
