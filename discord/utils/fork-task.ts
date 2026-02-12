@@ -5,9 +5,10 @@
 
 import { resolve } from 'path';
 import { mkdir } from 'fs/promises';
-import { ChannelType, type Client } from 'discord.js';
+import { ChannelType, EmbedBuilder, type Client } from 'discord.js';
 import { isGitRepo, getRepoName, createWorktree, removeWorktree } from './git-utils.js';
 import { logger } from './logger.js';
+import { EmbedColors } from '../bot/message-queue.js';
 import type { StateManager } from '../bot/state.js';
 
 export interface ForkTaskDeps {
@@ -71,7 +72,10 @@ export async function forkTaskCore(
     });
 
     // 发送初始消息
-    await textChannel.send(`Task created: \`${branchName}\`\nWorking directory: \`${worktreeDir}\``);
+    const embed = new EmbedBuilder()
+      .setColor(EmbedColors.PURPLE)
+      .setDescription(`[fork] Task created: \`${branchName}\`\nWorking directory: \`${worktreeDir}\``.slice(0, 4096));
+    await textChannel.send({ embeds: [embed] });
   } catch (err) {
     // 回滚 worktree
     logger.warn(`Channel creation failed, rolling back worktree: ${worktreeDir}`);

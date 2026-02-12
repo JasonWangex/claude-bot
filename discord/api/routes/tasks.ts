@@ -10,9 +10,10 @@
  * POST   /api/tasks/:threadId/fork    — Fork
  */
 
-import { ChannelType } from 'discord.js';
+import { ChannelType, EmbedBuilder } from 'discord.js';
 import type { RouteHandler, TaskSummary, CreateTaskRequest, UpdateTaskRequest } from '../types.js';
 import { sendJson, requireAuth, readJsonBody } from '../middleware.js';
+import { EmbedColors } from '../../bot/message-queue.js';
 import type { Session } from '../../types/index.js';
 import { MODEL_OPTIONS } from '../../bot/commands/task.js';
 import {
@@ -134,9 +135,10 @@ export const createTask: RouteHandler = async (req, res, _params, deps) => {
     });
 
     // 发送初始消息
-    await textChannel.send(
-      `Task created: \`${taskName}\`\nWorking directory: \`${cwd}\`${dirCreated ? '\nDirectory auto-created' : ''}`
-    );
+    const initEmbed = new EmbedBuilder()
+      .setColor(EmbedColors.PURPLE)
+      .setDescription(`[task] Task created: \`${taskName}\`\nWorking directory: \`${cwd}\`${dirCreated ? '\nDirectory auto-created' : ''}`.slice(0, 4096));
+    await textChannel.send({ embeds: [initEmbed] });
 
     deps.stateManager.getOrCreateSession(guildId, textChannel.id, { name: taskName, cwd });
 

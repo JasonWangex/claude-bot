@@ -14,7 +14,7 @@ import {
 import { StateManager } from './state.js';
 import { InteractionRegistry } from './interaction-registry.js';
 import { ClaudeClient } from '../claude/client.js';
-import { MessageQueue } from './message-queue.js';
+import { MessageQueue, EmbedColors } from './message-queue.js';
 import { escapeMarkdown, buildChangesHtml } from './message-utils.js';
 import {
   StreamEvent,
@@ -214,7 +214,7 @@ export class MessageHandler {
       .setStyle(ButtonStyle.Danger);
     const stopRow = new ActionRowBuilder<ButtonBuilder>().addComponents(stopButton);
 
-    let progressMsgId = await this.mq.send(threadId, `Thinking${modeLabel}...`, { components: [stopRow as any], priority: 'high' });
+    let progressMsgId = await this.mq.send(threadId, `Thinking${modeLabel}...`, { components: [stopRow as any], priority: 'high', embedColor: EmbedColors.GRAY });
 
     let lastProgressText = `Thinking${modeLabel}...`;
     let toolUseCount = 0;
@@ -247,7 +247,7 @@ export class MessageHandler {
       recreatingProgress = true;
       try {
         mq.delete(threadId, progressMsgId);
-        progressMsgId = await mq.send(threadId, lastProgressText, { components: [stopRow as any] });
+        progressMsgId = await mq.send(threadId, lastProgressText, { components: [stopRow as any], embedColor: EmbedColors.GRAY });
         allProgressMsgIds.add(progressMsgId);
       } finally {
         recreatingProgress = false;
@@ -296,28 +296,28 @@ export class MessageHandler {
       const subtype = (event as any).subtype;
       if (event.type === 'system' && subtype === 'queued') {
         const pos = (event as any).queue_position || '?';
-        mq.edit(threadId, progressMsgId, `Queued (position ${pos})...`, { components: [stopRow as any] });
+        mq.edit(threadId, progressMsgId, `Queued (position ${pos})...`, { components: [stopRow as any], embedColor: EmbedColors.GRAY });
         return;
       }
       if (event.type === 'system' && subtype === 'lock_acquired') {
         const newText = `Thinking... (${elapsed()})`;
         lastProgressText = newText;
-        mq.edit(threadId, progressMsgId, newText, { components: [stopRow as any] });
+        mq.edit(threadId, progressMsgId, newText, { components: [stopRow as any], embedColor: EmbedColors.GRAY });
         return;
       }
       if (event.type === 'system' && subtype === 'session_reset') {
-        mq.edit(threadId, progressMsgId, 'Context too long, auto-reset...', { components: [stopRow as any] });
+        mq.edit(threadId, progressMsgId, 'Context too long, auto-reset...', { components: [stopRow as any], embedColor: EmbedColors.YELLOW });
         this.stateManager.clearSessionClaudeId(guildId, threadId);
         return;
       }
       if (event.type === 'system' && subtype === 'retrying') {
-        mq.edit(threadId, progressMsgId, 'Error, retrying...', { components: [stopRow as any] });
+        mq.edit(threadId, progressMsgId, 'Error, retrying...', { components: [stopRow as any], embedColor: EmbedColors.YELLOW });
         return;
       }
       if (event.type === 'system' && subtype === 'stall_warning') {
         const secs = (event as any).stallSeconds || '?';
         const newText = `${lastProgressText}\n> Stalled ${secs}s (${elapsed()})... may be deep-thinking\n> Use Stop to cancel`;
-        mq.edit(threadId, progressMsgId, newText, { components: [stopRow as any] });
+        mq.edit(threadId, progressMsgId, newText, { components: [stopRow as any], embedColor: EmbedColors.YELLOW });
         return;
       }
       if (event.type === 'system' && subtype === 'reset_state') {
@@ -335,14 +335,14 @@ export class MessageHandler {
       }
 
       if (event.status === 'compacting') {
-        mq.edit(threadId, progressMsgId, `Compacting context... (${elapsed()})`, { components: [stopRow as any] });
+        mq.edit(threadId, progressMsgId, `Compacting context... (${elapsed()})`, { components: [stopRow as any], embedColor: EmbedColors.GRAY });
         return;
       }
       if (event.compact_metadata) {
         compactPreTokens = event.compact_metadata.pre_tokens;
       }
       if (event.subtype === 'compact_boundary') {
-        mq.edit(threadId, progressMsgId, `Context compacted, thinking... (${elapsed()})`, { components: [stopRow as any] });
+        mq.edit(threadId, progressMsgId, `Context compacted, thinking... (${elapsed()})`, { components: [stopRow as any], embedColor: EmbedColors.GRAY });
         return;
       }
 
@@ -403,7 +403,7 @@ export class MessageHandler {
             if (newText !== lastProgressText && now - lastEditTime >= 5000) {
               lastProgressText = newText;
               lastEditTime = now;
-              mq.edit(threadId, progressMsgId, newText, { components: [stopRow as any] });
+              mq.edit(threadId, progressMsgId, newText, { components: [stopRow as any], embedColor: EmbedColors.GRAY });
             }
           } else if (block.type === 'text' && block.text) {
             if (interactiveState.pending) continue;
@@ -557,10 +557,10 @@ export class MessageHandler {
           `Plan generated${summary}\n\n` +
           `Reply "ok" to compact context and execute.\n` +
           `Reply with anything else to continue discussing.`,
-          { priority: 'high' }
+          { priority: 'high', embedColor: EmbedColors.GREEN }
         );
       } else {
-        await mq.send(threadId, `Done${summary}`, { priority: 'high' });
+        await mq.send(threadId, `Done${summary}`, { priority: 'high', embedColor: EmbedColors.GREEN });
       }
 
     } catch (error: any) {
@@ -583,7 +583,7 @@ export class MessageHandler {
 
       if (error instanceof ClaudeExecutionError && error.errorType === ClaudeErrorType.ABORTED) {
         logger.info(`[${session.name}] Task aborted by user`);
-        mq.edit(threadId, progressMsgId, 'Stopped');
+        mq.edit(threadId, progressMsgId, 'Stopped', { embedColor: EmbedColors.YELLOW });
         return;
       }
 
@@ -604,7 +604,7 @@ export class MessageHandler {
         }
       }
 
-      mq.edit(threadId, progressMsgId, `Error:\n${error.message}\n\n${hint}`);
+      mq.edit(threadId, progressMsgId, `Error:\n${error.message}\n\n${hint}`, { embedColor: EmbedColors.RED });
 
       if (this.errorReporter) {
         const sessionInfo = errorSessionId ? ` session=${errorSessionId.slice(0, 8)}` : '';

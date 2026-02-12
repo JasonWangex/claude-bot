@@ -10,9 +10,10 @@
  * 6. 立即返回 202 Accepted
  */
 
-import { ChannelType } from 'discord.js';
+import { ChannelType, EmbedBuilder } from 'discord.js';
 import type { RouteHandler } from '../types.js';
 import { sendJson, requireAuth, readJsonBody } from '../middleware.js';
+import { EmbedColors } from '../../bot/message-queue.js';
 import { forkTaskCore } from '../../utils/fork-task.js';
 import { generateBranchName } from '../../utils/git-utils.js';
 import { generateTopicTitle } from '../../utils/llm.js';
@@ -76,7 +77,10 @@ export const qdev: RouteHandler = async (req, res, params, deps) => {
     // 4. 发送任务描述到新 channel
     const newChannel = await deps.client.channels.fetch(forkResult.threadId);
     if (newChannel && newChannel.isTextBased() && 'send' in newChannel) {
-      await (newChannel as any).send(description);
+      const descEmbed = new EmbedBuilder()
+        .setColor(EmbedColors.PURPLE)
+        .setDescription(`[qdev] ${description}`.slice(0, 4096));
+      await (newChannel as any).send({ embeds: [descEmbed] });
     }
 
     // 5. 立即返回

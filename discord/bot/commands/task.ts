@@ -10,7 +10,9 @@ import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
   ChannelType,
+  EmbedBuilder,
 } from 'discord.js';
+import { EmbedColors } from '../message-queue.js';
 import { resolve } from 'path';
 import { stat } from 'fs/promises';
 import { escapeMarkdown } from '../message-utils.js';
@@ -160,9 +162,10 @@ async function handleTask(
     });
 
     // 发送初始消息
-    await textChannel.send(
-      `Task created: \`${taskName}\`\nWorking directory: \`${cwd}\`${dirCreated ? '\nDirectory auto-created' : ''}`
-    );
+    const initEmbed = new EmbedBuilder()
+      .setColor(EmbedColors.PURPLE)
+      .setDescription(`[task] Task created: \`${taskName}\`\nWorking directory: \`${cwd}\`${dirCreated ? '\nDirectory auto-created' : ''}`.slice(0, 4096));
+    await textChannel.send({ embeds: [initEmbed] });
 
     // 初始化 Session
     stateManager.getOrCreateSession(guildId, textChannel.id, {
