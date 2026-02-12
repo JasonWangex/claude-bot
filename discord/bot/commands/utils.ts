@@ -21,9 +21,10 @@ export function requireAuth(interaction: ChatInputCommandInteraction): boolean {
 }
 
 export function requireThread(interaction: ChatInputCommandInteraction): boolean {
-  if (!interaction.channel?.isThread()) {
+  const channel = interaction.channel;
+  if (!channel || !('parentId' in channel) || !channel.parentId) {
     interaction.reply({
-      content: 'This command must be used inside a Forum Post thread.',
+      content: 'This command must be used inside a task channel (under a Category).',
       ephemeral: true,
     }).catch(() => {});
     return false;

@@ -1,11 +1,11 @@
 /**
  * Fork Task 核心逻辑（供 REST API 和 Bot 命令共用）
- * Discord 版：使用 forum.threads.create() 代替 Telegram createForumTopic()
+ * Discord 版：使用 guild.channels.create() 在 Category 下创建 Text Channel
  */
 
 import { resolve } from 'path';
 import { mkdir } from 'fs/promises';
-import { ChannelType, ForumChannel, type Client } from 'discord.js';
+import { ChannelType, type Client } from 'discord.js';
 import { isGitRepo, getRepoName, createWorktree, removeWorktree } from './git-utils.js';
 import { logger } from './logger.js';
 import type { StateManager } from '../bot/state.js';
@@ -24,13 +24,13 @@ export interface ForkTaskResult {
 }
 
 /**
- * 从指定 thread 创建 fork：创建 worktree → 创建 Forum Post → 创建 session → 设置 fork 关系
+ * 从指定 channel 创建 fork：创建 worktree → 创建 Text Channel → 创建 session → 设置 fork 关系
  */
 export async function forkTaskCore(
   guildId: string,
   parentThreadId: string,
   branchName: string,
-  forumChannelId: string,
+  categoryId: string,
   deps: ForkTaskDeps,
   threadTitle?: string,
 ): Promise<ForkTaskResult> {
@@ -54,36 +54,34 @@ export async function forkTaskCore(
 
   const newThreadName = threadTitle || `${session.name}/${branchName}`;
 
-  // 创建 Discord Forum Post
-  const forumChannel = await client.channels.fetch(forumChannelId);
-  if (!forumChannel || forumChannel.type !== ChannelType.GuildForum) {
-    throw new Error(`Forum channel ${forumChannelId} not found or not a forum`);
+  // 验证 Category 存在
+  const category = await client.channels.fetch(categoryId);
+  if (!category || category.type !== ChannelType.GuildCategory) {
+    throw new Error(`Category ${categoryId} not found or not a category`);
   }
 
-  const forum = forumChannel as ForumChannel;
-
-  // 查找 "developing" tag
-  const developingTag = forum.availableTags.find(t => t.name === 'developing');
-
-  let thread;
+  let textChannel;
   try {
-    thread = await forum.threads.create({
-      name: newThreadName.slice(0, 100), // Discord 限制 100 字符
-      message: {
-        content: `Task created: \`${branchName}\`\nWorking directory: \`${worktreeDir}\``,
-      },
-      appliedTags: developingTag ? [developingTag.id] : [],
+    const guild = await client.guilds.fetch(guildId);
+    textChannel = await guild.channels.create({
+      name: newThreadName.slice(0, 100),
+      type: ChannelType.GuildText,
+      parent: categoryId,
+      reason: `Fork task: ${branchName}`,
     });
+
+    // 发送初始消息
+    await textChannel.send(`Task created: \`${branchName}\`\nWorking directory: \`${worktreeDir}\``);
   } catch (err) {
     // 回滚 worktree
-    logger.warn(`Thread creation failed, rolling back worktree: ${worktreeDir}`);
+    logger.warn(`Channel creation failed, rolling back worktree: ${worktreeDir}`);
     await removeWorktree(session.cwd, worktreeDir).catch(e =>
       logger.error(`Worktree rollback failed: ${e.message}`)
     );
     throw err;
   }
 
-  const newThreadId = thread.id;
+  const newThreadId = textChannel.id;
   stateManager.getOrCreateSession(guildId, newThreadId, {
     name: newThreadName,
     cwd: worktreeDir,

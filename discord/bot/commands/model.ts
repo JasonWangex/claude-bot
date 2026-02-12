@@ -1,6 +1,6 @@
 /**
  * Model 命令: /model
- * 在 General 中切换全局默认模型，在 Thread 中切换当前线程模型
+ * 在 General 中切换全局默认模型，在 task channel 中切换当前 channel 模型
  * 使用 Discord StringSelectMenu 替代 Telegram Inline Keyboard
  */
 
@@ -11,10 +11,9 @@ import {
   ActionRowBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
-import { checkAuth } from '../auth.js';
-import { getAuthorizedGuildId } from '../../utils/env.js';
 import { MODEL_OPTIONS, getModelLabel } from './task.js';
 import type { CommandDeps } from './types.js';
+import { requireAuth } from './utils.js';
 
 export const modelCommands = [
   new SlashCommandBuilder()
@@ -30,9 +29,10 @@ export async function handleModelCommand(
 
   const guildId = interaction.guildId!;
   const { stateManager } = deps;
-  const isThread = interaction.channel?.isThread() ?? false;
+  const channelId = interaction.channelId;
+  const hasSession = !!stateManager.getSession(guildId, channelId);
 
-  if (!isThread) {
+  if (!hasSession) {
     // General: 设置全局默认模型
     const currentModel = stateManager.getGuildDefaultModel(guildId);
     const currentLabel = getModelLabel(currentModel);
@@ -60,11 +60,11 @@ export async function handleModelCommand(
       components: [row],
     });
   } else {
-    // Thread: 设置当前 thread 模型
-    const threadId = interaction.channelId;
-    const threadName = (interaction.channel && 'name' in interaction.channel ? interaction.channel.name : null) ?? `thread-${threadId}`;
+    // Channel: 设置当前 channel 模型
+    const threadId = channelId;
+    const channelName = (interaction.channel && 'name' in interaction.channel ? interaction.channel.name : null) ?? `channel-${threadId}`;
     const session = stateManager.getOrCreateSession(guildId, threadId, {
-      name: threadName,
+      name: channelName,
       cwd: stateManager.getGuildDefaultCwd(guildId),
     });
     const guildModel = stateManager.getGuildDefaultModel(guildId);
@@ -95,18 +95,4 @@ export async function handleModelCommand(
       components: [row],
     });
   }
-}
-
-function requireAuth(interaction: ChatInputCommandInteraction): boolean {
-  if (!checkAuth(interaction.guildId)) {
-    const authorizedGuildId = getAuthorizedGuildId();
-    interaction.reply({
-      content: authorizedGuildId
-        ? 'Unauthorized.'
-        : 'Please use `/login <token>` first.',
-      ephemeral: true,
-    }).catch(() => {});
-    return false;
-  }
-  return true;
 }

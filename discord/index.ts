@@ -2,6 +2,7 @@
  * Discord Bot 入口
  */
 
+import 'dotenv/config';
 import { DiscordBot } from './bot/discord.js';
 import { loadDiscordConfig } from './utils/config.js';
 import { logger } from './utils/logger.js';
@@ -15,7 +16,7 @@ async function main(): Promise<void> {
   try {
     await bot.launch();
   } catch (err: any) {
-    logger.error('Failed to start bot:', err.message);
+    logger.error('Failed to start bot:', err.message || err.code || err);
     process.exit(1);
   }
 }

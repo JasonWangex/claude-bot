@@ -1,7 +1,7 @@
 /**
  * Task 管理命令: /task, /close, /info, /cd
- * /task — 创建 Forum Post
- * /close — 关闭当前 Forum Post 并清理 worktree/分支
+ * /task — 创建 Category + Text Channel
+ * /close — 关闭当前 task channel 并清理 worktree/分支
  * /info — 查看当前线程详情
  * /cd — 切换工作目录
  */
@@ -10,7 +10,6 @@ import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
   ChannelType,
-  ForumChannel,
 } from 'discord.js';
 import { resolve } from 'path';
 import { stat } from 'fs/promises';
@@ -35,7 +34,7 @@ export const MODEL_OPTIONS = [
 export const taskCommands = [
   new SlashCommandBuilder()
     .setName('task')
-    .setDescription('Create a new task (Forum Post)')
+    .setDescription('Create a new task (Text Channel under Category)')
     .addStringOption(opt =>
       opt.setName('name').setDescription('Task name').setRequired(true)
     )
@@ -43,19 +42,19 @@ export const taskCommands = [
       opt.setName('path').setDescription('Custom working directory path').setRequired(false)
     )
     .addStringOption(opt =>
-      opt.setName('forum').setDescription('Forum channel name (defaults to repo name)').setRequired(false)
+      opt.setName('category').setDescription('Category name (defaults to repo name)').setRequired(false)
     ),
 
   new SlashCommandBuilder()
     .setName('close')
-    .setDescription('Close current thread and cleanup worktree/branch')
+    .setDescription('Close current task channel and cleanup worktree/branch')
     .addBooleanOption(opt =>
       opt.setName('force').setDescription('Force close without safety checks').setRequired(false)
     ),
 
   new SlashCommandBuilder()
     .setName('info')
-    .setDescription('View current thread details or server info'),
+    .setDescription('View current channel details or server info'),
 
   new SlashCommandBuilder()
     .setName('cd')
@@ -94,7 +93,7 @@ async function handleTask(
 
   const taskName = interaction.options.getString('name', true);
   const customCwd = interaction.options.getString('path');
-  const forumChannelName = interaction.options.getString('forum');
+  const categoryName = interaction.options.getString('category');
 
   await interaction.deferReply();
 
@@ -136,44 +135,44 @@ async function handleTask(
       }
     }
 
-    // 查找或创建 Forum Channel
+    // 查找或创建 Category
     const guild = await client.guilds.fetch(guildId);
-    const targetForumName = forumChannelName || getForumNameFromCwd(cwd);
-    let forum = guild.channels.cache.find(
-      c => c.type === ChannelType.GuildForum && c.name === targetForumName,
-    ) as ForumChannel | undefined;
+    const targetCategoryName = categoryName || getCategoryNameFromCwd(cwd);
+    let category = guild.channels.cache.find(
+      c => c.type === ChannelType.GuildCategory && c.name === targetCategoryName,
+    );
 
-    if (!forum) {
-      // 自动创建 Forum Channel
-      forum = await guild.channels.create({
-        name: targetForumName,
-        type: ChannelType.GuildForum,
-        reason: `Auto-created by Claude Bot for project: ${targetForumName}`,
-      }) as ForumChannel;
-      logger.info(`Created Forum Channel: ${targetForumName}`);
+    if (!category) {
+      category = await guild.channels.create({
+        name: targetCategoryName,
+        type: ChannelType.GuildCategory,
+        reason: `Auto-created by Claude Bot for project: ${targetCategoryName}`,
+      });
+      logger.info(`Created Category: ${targetCategoryName}`);
     }
 
-    // 查找 "developing" tag
-    const developingTag = forum.availableTags.find(t => t.name === 'developing');
-
-    // 创建 Forum Post (Thread)
-    const thread = await forum.threads.create({
+    // 创建 Text Channel (under Category)
+    const textChannel = await guild.channels.create({
       name: taskName.slice(0, 100),
-      message: {
-        content: `Task created: \`${taskName}\`\nWorking directory: \`${cwd}\`${dirCreated ? '\nDirectory auto-created' : ''}`,
-      },
-      appliedTags: developingTag ? [developingTag.id] : [],
+      type: ChannelType.GuildText,
+      parent: category.id,
+      reason: `Task: ${taskName}`,
     });
 
+    // 发送初始消息
+    await textChannel.send(
+      `Task created: \`${taskName}\`\nWorking directory: \`${cwd}\`${dirCreated ? '\nDirectory auto-created' : ''}`
+    );
+
     // 初始化 Session
-    stateManager.getOrCreateSession(guildId, thread.id, {
+    stateManager.getOrCreateSession(guildId, textChannel.id, {
       name: taskName,
       cwd,
     });
 
     await interaction.editReply(
       `**Task created:** ${taskName}\n` +
-      `Thread: <#${thread.id}>\n` +
+      `Channel: <#${textChannel.id}>\n` +
       `Working directory: \`${cwd}\`${dirCreated ? '\nDirectory auto-created' : ''}`
     );
   } catch (error: any) {
@@ -198,7 +197,7 @@ async function handleClose(
 
   const session = stateManager.getSession(guildId, threadId);
   if (!session) {
-    await interaction.reply({ content: 'No session found for this thread.', ephemeral: true });
+    await interaction.reply({ content: 'No session found for this channel.', ephemeral: true });
     return;
   }
 
@@ -235,10 +234,16 @@ async function handleClose(
         return;
       }
     } catch (err: any) {
-      logger.warn(`Safety check failed (may proceed): ${err.message}`);
+      await interaction.editReply(
+        `Safety check failed: ${err.message}\n\n` +
+        `Cannot verify worktree/branch state. Use \`/close force:True\` to force close.`
+      );
+      return;
     }
+  }
 
-    // 清理 worktree 和分支
+  // 清理 worktree 和分支（force 跳过安全检查但仍执行清理）
+  if (session.worktreeBranch) {
     try {
       const { removeWorktree, deleteBranch } = await import('../../utils/git-utils.js');
       const { resolveMainWorktree } = await import('../../orchestrator/git-ops.js');
@@ -253,25 +258,16 @@ async function handleClose(
   // 归档 session
   stateManager.archiveSession(guildId, threadId);
 
-  // 关闭/锁定 Thread
+  // 先回复再删除 channel
+  await interaction.editReply(`Channel closing: **${escapeMarkdown(session.name)}**`);
+
+  // 延迟后删除 channel（让用户看到回复）
   const channel = interaction.channel;
-  if (channel?.isThread()) {
-    try {
-      // 更新 Forum Tags
-      const parent = channel.parent;
-      if (parent && parent.type === ChannelType.GuildForum) {
-        const closedTag = (parent as ForumChannel).availableTags.find(t => t.name === 'closed');
-        if (closedTag) {
-          await channel.setAppliedTags([closedTag.id]).catch(() => {});
-        }
-      }
-      await interaction.editReply(`Thread closed: **${escapeMarkdown(session.name)}**`);
-      await channel.setArchived(true).catch(() => {});
-    } catch (err: any) {
-      await interaction.editReply(`Thread closed (archive may have failed): ${err.message}`);
-    }
-  } else {
-    await interaction.editReply(`Session archived: **${escapeMarkdown(session.name)}**`);
+  if (channel && 'delete' in channel) {
+    await new Promise(r => setTimeout(r, 1500));
+    await (channel as any).delete('Task closed').catch((err: any) => {
+      logger.warn(`Channel delete failed: ${err.message}`);
+    });
   }
 }
 
@@ -285,15 +281,10 @@ async function handleInfo(
   const { stateManager } = deps;
   const guildId = interaction.guildId!;
 
-  const isThread = interaction.channel?.isThread() ?? false;
+  const channelId = interaction.channelId;
+  const session = stateManager.getSession(guildId, channelId);
 
-  if (isThread) {
-    const threadId = interaction.channelId;
-    const threadName = (interaction.channel && 'name' in interaction.channel ? interaction.channel.name : null) ?? `thread-${threadId}`;
-    const session = stateManager.getOrCreateSession(guildId, threadId, {
-      name: threadName,
-      cwd: stateManager.getGuildDefaultCwd(guildId),
-    });
+  if (session) {
     const created = new Date(session.createdAt).toLocaleString('zh-CN');
     const lastMsgTime = session.lastMessageAt
       ? new Date(session.lastMessageAt).toLocaleString('zh-CN')
@@ -301,8 +292,8 @@ async function handleInfo(
     const modelLabel = getModelLabel(session.model);
 
     await interaction.reply(
-      `**Thread Details**\n\n` +
-      `Thread: \`${escapeMarkdown(session.name)}\`\n` +
+      `**Channel Details**\n\n` +
+      `Channel: \`${escapeMarkdown(session.name)}\`\n` +
       `Working directory: \`${escapeMarkdown(session.cwd)}\`\n` +
       `Model: ${escapeMarkdown(modelLabel)}\n` +
       `Claude context: ${session.claudeSessionId ? `\`${session.claudeSessionId}\`` : '(new session)'}\n` +
@@ -338,10 +329,10 @@ async function handleCd(
   const guildId = interaction.guildId!;
   const threadId = interaction.channelId;
   const { stateManager } = deps;
-  const threadName = (interaction.channel && 'name' in interaction.channel ? interaction.channel.name : null) ?? `thread-${threadId}`;
+  const channelName = (interaction.channel && 'name' in interaction.channel ? interaction.channel.name : null) ?? `channel-${threadId}`;
 
   const session = stateManager.getOrCreateSession(guildId, threadId, {
-    name: threadName,
+    name: channelName,
     cwd: stateManager.getGuildDefaultCwd(guildId),
   });
 
@@ -369,8 +360,7 @@ async function handleCd(
 
 // ========== Helpers ==========
 
-function getForumNameFromCwd(cwd: string): string {
-  // 从 cwd 提取 repo/project 名作为 Forum Channel 名
+function getCategoryNameFromCwd(cwd: string): string {
   const parts = cwd.split('/');
   return parts[parts.length - 1] || 'tasks';
 }

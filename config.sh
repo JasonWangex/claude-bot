@@ -99,29 +99,53 @@ check_deps() {
 # ========== setup_discord ==========
 setup_discord() {
   echo -e "\n${BOLD}==> Discord Configuration${NC}"
-  echo "Get your bot token from https://discord.com/developers/applications"
   echo ""
 
+  echo -e "  ${CYAN}Discord Bot Token${NC}"
+  echo "  Bot 登录 Discord 的凭证。"
+  echo "  获取: https://discord.com/developers/applications → 选择应用 → Bot → Token → Reset/Copy"
+  echo ""
   prompt_secret DISCORD_TOKEN "Discord Bot Token"
   if [ -z "$DISCORD_TOKEN" ]; then
     err "Discord Token is required"
     exit 1
   fi
 
+  echo ""
+  echo -e "  ${CYAN}Discord Application ID${NC}"
+  echo "  Discord 应用的唯一标识。"
+  echo "  获取: 同上 Developer Portal → General Information → Application ID"
+  echo ""
   prompt_value DISCORD_APPLICATION_ID "Discord Application ID"
   if [ -z "$DISCORD_APPLICATION_ID" ]; then
     err "Application ID is required"
     exit 1
   fi
 
-  prompt_secret BOT_ACCESS_TOKEN "Bot Access Token (for API auth)"
+  echo ""
+  echo -e "  ${CYAN}Bot Access Token${NC}"
+  echo "  本地 HTTP API 的鉴权密钥，防止未授权访问。"
+  echo "  直接回车将自动生成一个随机密钥。"
+  echo ""
+  prompt_secret BOT_ACCESS_TOKEN "Bot Access Token (Enter to auto-generate)"
   if [ -z "$BOT_ACCESS_TOKEN" ]; then
-    err "Access Token is required"
-    exit 1
+    BOT_ACCESS_TOKEN="$(openssl rand -hex 32)"
+    ok "Auto-generated: ${BOT_ACCESS_TOKEN:0:8}..."
   fi
 
-  prompt_value AUTHORIZED_GUILD_ID "Authorized Guild ID (optional)" ""
-  prompt_value GENERAL_CHANNEL_ID "General Channel ID (optional)" ""
+  echo ""
+  echo -e "  ${CYAN}Authorized Guild ID${NC} (可选)"
+  echo "  限制 Bot 只在指定服务器工作。留空则不限制。"
+  echo "  获取: Discord 客户端 → 设置 → 高级 → 开启开发者模式 → 右键服务器名 → 复制服务器 ID"
+  echo ""
+  prompt_value AUTHORIZED_GUILD_ID "Authorized Guild ID" ""
+
+  echo ""
+  echo -e "  ${CYAN}General Channel ID${NC} (可选)"
+  echo "  Bot 默认发消息的频道。留空则不设置。"
+  echo "  获取: 同上开发者模式 → 右键频道 → 复制频道 ID"
+  echo ""
+  prompt_value GENERAL_CHANNEL_ID "General Channel ID" ""
 
   ok "Discord configuration done"
 }
@@ -129,9 +153,23 @@ setup_discord() {
 # ========== setup_paths ==========
 setup_paths() {
   echo -e "\n${BOLD}==> Path Configuration${NC}"
+  echo ""
 
+  echo -e "  ${CYAN}Default Working Directory${NC}"
+  echo "  Claude CLI 无项目上下文时的默认工作目录。"
+  echo ""
   prompt_value DEFAULT_WORK_DIR "Default working directory" "$HOME/assistant"
+
+  echo ""
+  echo -e "  ${CYAN}Projects Root${NC}"
+  echo "  项目根目录，Bot 在此目录下查找和管理项目。"
+  echo ""
   prompt_value PROJECTS_ROOT "Projects root" "$HOME/projects"
+
+  echo ""
+  echo -e "  ${CYAN}Worktrees Directory${NC}"
+  echo "  Git worktree 存放目录，/qdev 创建开发分支时使用。"
+  echo ""
   prompt_value WORKTREES_DIR "Worktrees directory" "$HOME/projects/worktrees"
 
   ok "Path configuration done"
@@ -140,21 +178,31 @@ setup_paths() {
 # ========== setup_optional ==========
 setup_optional() {
   echo -e "\n${BOLD}==> Optional Configuration${NC}"
+  echo ""
 
-  prompt_value DEEPSEEK_API_KEY "DeepSeek API Key (for branch name generation, optional)" ""
-  prompt_value API_PORT "Local HTTP API port (0 to disable)" "3456"
-  prompt_value COMMAND_TIMEOUT "Command timeout in ms" "3600000"
-  prompt_value MAX_TURNS "Max execution turns" "500"
+  echo -e "  ${CYAN}DeepSeek API Key${NC} (可选)"
+  echo "  用于调用 DeepSeek 模型生成 git 分支名。留空则使用默认规则。"
+  echo "  获取: https://platform.deepseek.com/ → 注册 → API Keys"
+  echo ""
+  prompt_value DEEPSEEK_API_KEY "DeepSeek API Key" ""
 
   echo ""
-  read -rp "$(echo -e "${BOLD}Configure proxy? (y/N)${NC}: ")" use_proxy
-  if [[ "$use_proxy" =~ ^[Yy] ]]; then
-    prompt_value HTTP_PROXY "HTTP proxy" "http://127.0.0.1:7890"
-    HTTPS_PROXY="$HTTP_PROXY"
-  else
-    HTTP_PROXY=""
-    HTTPS_PROXY=""
-  fi
+  echo -e "  ${CYAN}Local HTTP API Port${NC}"
+  echo "  本地 HTTP API 监听端口，供 skills 和外部工具调用。设为 0 禁用。"
+  echo ""
+  prompt_value API_PORT "Local HTTP API port" "3456"
+
+  echo ""
+  echo -e "  ${CYAN}Command Timeout${NC}"
+  echo "  单次 Claude CLI 命令的超时时间（毫秒）。默认 3600000 = 1 小时。"
+  echo ""
+  prompt_value COMMAND_TIMEOUT "Command timeout in ms" "3600000"
+
+  echo ""
+  echo -e "  ${CYAN}Max Turns${NC}"
+  echo "  Claude CLI 单次任务最大执行轮数。"
+  echo ""
+  prompt_value MAX_TURNS "Max execution turns" "500"
 
   ok "Optional configuration done"
 }
@@ -193,10 +241,6 @@ DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
 
 # Local HTTP API
 API_PORT=${API_PORT:-3456}
-
-# Proxy
-http_proxy=${HTTP_PROXY:-}
-https_proxy=${HTTPS_PROXY:-}
 
 # Monitor
 MONITOR_CHECK_INTERVAL=5000
@@ -473,8 +517,6 @@ case "${1:-init}" in
     API_PORT="${API_PORT:-3456}"
     COMMAND_TIMEOUT="${COMMAND_TIMEOUT:-3600000}"
     MAX_TURNS="${MAX_TURNS:-500}"
-    HTTP_PROXY="${http_proxy:-}"
-    HTTPS_PROXY="${https_proxy:-}"
     if [ -z "$DISCORD_TOKEN" ] || [ -z "$BOT_ACCESS_TOKEN" ]; then
       setup_discord
     fi

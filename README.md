@@ -52,7 +52,7 @@ claude-bot/
 npm install
 
 # Create environment configuration
-cp env.example .env
+cp example.env .env
 
 # Edit .env with your settings
 # Required: DISCORD_TOKEN, DISCORD_APPLICATION_ID, BOT_ACCESS_TOKEN

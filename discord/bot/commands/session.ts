@@ -1,18 +1,17 @@
 /**
  * Session 命令: /clear, /compact, /rewind, /plan, /stop, /attach
- * 这些命令只在 Forum Post Thread 中有效
+ * 这些命令只在 task channel 中有效
  */
 
 import {
   SlashCommandBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
-import { checkAuth } from '../auth.js';
-import { getAuthorizedGuildId } from '../../utils/env.js';
 import { escapeMarkdown } from '../message-utils.js';
 import { StateManager } from '../state.js';
 import { logger } from '../../utils/logger.js';
 import type { CommandDeps } from './types.js';
+import { requireAuth, requireThread } from './utils.js';
 
 export const sessionCommands = [
   new SlashCommandBuilder()
@@ -268,29 +267,3 @@ async function handleAttach(
   await interaction.reply(msg);
 }
 
-// ========== Helpers ==========
-
-function requireAuth(interaction: ChatInputCommandInteraction): boolean {
-  if (!checkAuth(interaction.guildId)) {
-    const authorizedGuildId = getAuthorizedGuildId();
-    interaction.reply({
-      content: authorizedGuildId
-        ? 'Unauthorized.'
-        : 'Please use `/login <token>` first.',
-      ephemeral: true,
-    }).catch(() => {});
-    return false;
-  }
-  return true;
-}
-
-function requireThread(interaction: ChatInputCommandInteraction): boolean {
-  if (!interaction.channel?.isThread()) {
-    interaction.reply({
-      content: 'This command must be used inside a Forum Post thread.',
-      ephemeral: true,
-    }).catch(() => {});
-    return false;
-  }
-  return true;
-}

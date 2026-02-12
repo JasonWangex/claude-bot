@@ -2,13 +2,13 @@
  * GoalOrchestrator — Goal 自动调度引擎（Discord 版）
  *
  * 负责：
- * 1. 启动 Goal drive（创建 goal 分支 + Forum Post）
- * 2. 自动派发子任务到独立 worktree/Forum Post
+ * 1. 启动 Goal drive（创建 goal 分支 + Category Text Channel）
+ * 2. 自动派发子任务到独立 worktree/Text Channel
  * 3. 监控子任务完成 → 自动 merge 到 goal 分支
  * 4. 全程通知用户，异常时暂停等待干预
  */
 
-import { ChannelType, ForumChannel, type Client } from 'discord.js';
+import { ChannelType, type Client } from 'discord.js';
 import type { StateManager } from '../bot/state.js';
 import type { ClaudeClient } from '../claude/client.js';
 import type { MessageHandler } from '../bot/handlers.js';
@@ -315,36 +315,42 @@ export class GoalOrchestrator {
       const guildId = this.getGuildId();
       if (!guildId) throw new Error('Bot not authorized');
 
-      // 查找目标 Forum Channel（从 goal thread 的 parent）
-      let forumChannelId: string | null = null;
+      // 从 goal channel 的 parentId 获取 Category
+      let categoryId: string | null = null;
       try {
         const goalChannel = await this.deps.client.channels.fetch(state.goalThreadId);
-        if (goalChannel?.isThread() && goalChannel.parent?.type === ChannelType.GuildForum) {
-          forumChannelId = goalChannel.parent.id;
+        if (goalChannel && 'parentId' in goalChannel && goalChannel.parentId) {
+          const parent = await this.deps.client.channels.fetch(goalChannel.parentId);
+          if (parent && parent.type === ChannelType.GuildCategory) {
+            categoryId = parent.id;
+          }
         }
       } catch { /* ignore */ }
 
-      if (!forumChannelId) {
-        throw new Error('Cannot find Forum Channel for goal thread');
+      if (!categoryId) {
+        throw new Error('Cannot find Category for goal channel');
       }
 
-      const forum = await this.deps.client.channels.fetch(forumChannelId) as ForumChannel;
+      const guild = await this.deps.client.guilds.fetch(guildId);
       const title = await generateTopicTitle(task.description);
-      const threadName = `${task.id} ${title}`.slice(0, 100);
-      const developingTag = forum.availableTags.find(t => t.name === 'developing');
+      const channelName = `${task.id} ${title}`.slice(0, 100);
 
-      const thread = await forum.threads.create({
-        name: threadName,
-        message: {
-          content: `Task: \`${task.id}\` - ${task.description}\nBranch: \`${branchName}\`\nWorking directory: \`${subtaskDir}\``,
-        },
-        appliedTags: developingTag ? [developingTag.id] : [],
+      const textChannel = await guild.channels.create({
+        name: channelName,
+        type: ChannelType.GuildText,
+        parent: categoryId,
+        reason: `Goal subtask: ${task.id}`,
       });
 
-      const newThreadId = thread.id;
+      // 发送初始消息
+      await textChannel.send(
+        `Task: \`${task.id}\` - ${task.description}\nBranch: \`${branchName}\`\nWorking directory: \`${subtaskDir}\``
+      );
+
+      const newThreadId = textChannel.id;
 
       this.deps.stateManager.getOrCreateSession(guildId, newThreadId, {
-        name: threadName,
+        name: channelName,
         cwd: subtaskDir,
       });
       this.deps.stateManager.setSessionForkInfo(guildId, newThreadId, state.goalThreadId, branchName);
@@ -379,7 +385,7 @@ export class GoalOrchestrator {
   ): void {
     (async () => {
       try {
-        logger.info(`[Orchestrator] Task ${taskId} executing in thread ${threadId}`);
+        logger.info(`[Orchestrator] Task ${taskId} executing in channel ${threadId}`);
         await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, message);
         logger.info(`[Orchestrator] Task ${taskId} completed`);
         await this.onTaskCompleted(goalId, taskId);
@@ -466,15 +472,15 @@ export class GoalOrchestrator {
           await cleanupSubtask(state.baseCwd, subtaskDir, task.branchName);
         }
 
-        // Archive subtask thread
+        // Delete subtask channel
         if (task.threadId) {
           const guildId = this.getGuildId();
           if (guildId) {
             this.deps.stateManager.archiveSession(guildId, task.threadId, undefined, 'merged');
             try {
               const channel = await this.deps.client.channels.fetch(task.threadId);
-              if (channel?.isThread()) {
-                await channel.setArchived(true).catch(() => {});
+              if (channel && 'delete' in channel) {
+                await (channel as any).delete('Task merged and cleaned up').catch(() => {});
               }
             } catch { /* ignore */ }
           }

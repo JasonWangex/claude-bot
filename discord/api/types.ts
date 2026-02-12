@@ -55,7 +55,7 @@ export interface HealthData {
   api_port: number;
 }
 
-// ========== Task (Thread) ==========
+// ========== Task (Channel) ==========
 
 export interface TaskSummary {
   thread_id: string;
@@ -79,7 +79,7 @@ export interface TaskDetail extends TaskSummary {
 export interface CreateTaskRequest {
   name: string;
   cwd?: string;
-  forum?: string;
+  category?: string;
 }
 
 export interface CreateTaskResponse {
@@ -136,7 +136,7 @@ export interface SetDefaultModelRequest {
 
 export interface ForkTaskRequest {
   branch_name: string;
-  forum_channel_id: string;
+  category_id: string;
   thread_title?: string;
 }
 

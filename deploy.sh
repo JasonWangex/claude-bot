@@ -4,14 +4,10 @@ cd "$(dirname "$0")"
 
 SERVICES="claude-discord claude-monitor"
 
-if [ ! -f prd.env ]; then
-  echo "Missing prd.env. Please create it from env.example."
+if [ ! -f .env ]; then
+  echo "Missing .env file. Please create it from example.env."
   exit 1
 fi
-
-link_env() {
-  ln -sf prd.env .env
-}
 
 install_cron() {
   local cron_line="0 9 * * * $(pwd)/scripts/daily-review.sh"
@@ -26,16 +22,15 @@ install_cron() {
 stamp_deploy_time() {
   local ts
   ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  if grep -q '^DEPLOY_TIME=' prd.env 2>/dev/null; then
-    sed -i "s/^DEPLOY_TIME=.*/DEPLOY_TIME=${ts}/" prd.env
+  if grep -q '^DEPLOY_TIME=' .env 2>/dev/null; then
+    sed -i "s/^DEPLOY_TIME=.*/DEPLOY_TIME=${ts}/" .env
   else
-    echo "DEPLOY_TIME=${ts}" >> prd.env
+    echo "DEPLOY_TIME=${ts}" >> .env
   fi
   echo "  DEPLOY_TIME=${ts}"
 }
 
 do_deploy() {
-  link_env
   stamp_deploy_time
 
   echo "==> Installing skills..."
@@ -73,7 +68,6 @@ do_deploy() {
 }
 
 do_start() {
-  link_env
   for svc in $SERVICES; do
     systemctl --user start "$svc"
     echo "$svc started"
@@ -88,7 +82,6 @@ do_stop() {
 }
 
 do_restart() {
-  link_env
   stamp_deploy_time
   for svc in $SERVICES; do
     systemctl --user restart "$svc"

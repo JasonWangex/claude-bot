@@ -10,7 +10,6 @@ import { join } from 'path';
 import {
   SlashCommandBuilder,
   ChannelType,
-  ForumChannel,
   type ChatInputCommandInteraction,
 } from 'discord.js';
 import { generateBranchName } from '../../utils/git-utils.js';
@@ -101,24 +100,22 @@ async function handleQdev(
     const rootSession = stateManager.getRootSession(guildId, threadId);
     const parentThreadId = rootSession?.threadId ?? threadId;
 
-    // 3. 查找当前 thread 所在的 Forum Channel
+    // 3. 从当前 channel 的 parentId 获取 Category
     const channel = interaction.channel;
-    let forumChannelId: string;
-    if (channel?.isThread()) {
-      const parent = channel.parent;
-      if (parent && parent.type === ChannelType.GuildForum) {
-        forumChannelId = parent.id;
-      } else {
-        await interaction.editReply('This command must be used in a Forum Post thread.');
-        return;
+    let categoryId: string | undefined;
+    if (channel && 'parentId' in channel && channel.parentId) {
+      const parent = await client.channels.fetch(channel.parentId);
+      if (parent && parent.type === ChannelType.GuildCategory) {
+        categoryId = parent.id;
       }
-    } else {
-      await interaction.editReply('This command must be used in a Forum Post thread.');
+    }
+    if (!categoryId) {
+      await interaction.editReply('This command must be used in a task channel (under a Category).');
       return;
     }
 
-    // 4. Fork: 创建 worktree + Forum Post + session
-    const forkResult = await forkTaskCore(guildId, parentThreadId, branchName, forumChannelId, {
+    // 4. Fork: 创建 worktree + Text Channel + session
+    const forkResult = await forkTaskCore(guildId, parentThreadId, branchName, categoryId, {
       stateManager,
       client,
       worktreesDir: config.worktreesDir,
@@ -302,8 +299,9 @@ async function handleMerge(
     .replaceAll('{{TARGET_CWD}}', targetSession.cwd)
     .replaceAll('{{MAIN_CWD}}', mainCwd);
 
-  // 确定回复的 thread（优先当前 thread，否则目标 thread）
-  const replyThreadId = interaction.channel?.isThread()
+  // 确定回复的 channel（优先当前 task channel，否则目标 channel）
+  const currentSession = stateManager.getSession(guildId, interaction.channelId);
+  const replyThreadId = currentSession
     ? interaction.channelId
     : targetSession.threadId;
 

@@ -3,9 +3,9 @@
  *
  * 流程:
  * 1. 从 parentThreadId 找到 root session
- * 2. 生成分支名和 thread 标题
- * 3. Fork root task（worktree + Discord Forum Post + session）
- * 4. 发送任务描述到新 thread
+ * 2. 生成分支名和 channel 标题
+ * 3. Fork root task（worktree + Category Text Channel + session）
+ * 4. 发送任务描述到新 channel
  * 5. 后台触发 Claude 处理
  * 6. 立即返回 202 Accepted
  */
@@ -29,7 +29,7 @@ export const qdev: RouteHandler = async (req, res, params, deps) => {
     return;
   }
 
-  const body = await readJsonBody<{ description: string; forum_channel_id?: string }>(req);
+  const body = await readJsonBody<{ description: string; category_id?: string }>(req);
   if (!body?.description || typeof body.description !== 'string') {
     sendJson(res, 400, { ok: false, error: '"description" field is required' });
     return;
@@ -37,23 +37,26 @@ export const qdev: RouteHandler = async (req, res, params, deps) => {
 
   const description = body.description.trim();
 
-  // 需要 forum_channel_id 来创建新 thread
-  let forumChannelId = body.forum_channel_id;
-  if (!forumChannelId) {
+  // 需要 category_id 来创建新 channel
+  let categoryId = body.category_id;
+  if (!categoryId) {
     try {
       const channel = await deps.client.channels.fetch(threadId);
-      if (channel?.isThread() && channel.parent?.type === ChannelType.GuildForum) {
-        forumChannelId = channel.parent.id;
+      if (channel && 'parentId' in channel && channel.parentId) {
+        const parent = await deps.client.channels.fetch(channel.parentId);
+        if (parent && parent.type === ChannelType.GuildCategory) {
+          categoryId = parent.id;
+        }
       }
     } catch { /* ignore */ }
   }
-  if (!forumChannelId) {
-    sendJson(res, 400, { ok: false, error: '"forum_channel_id" required or thread must be in a Forum' });
+  if (!categoryId) {
+    sendJson(res, 400, { ok: false, error: '"category_id" required or channel must be in a Category' });
     return;
   }
 
   try {
-    // 1. 并行生成分支名和 thread 标题
+    // 1. 并行生成分支名和 channel 标题
     const [branchName, threadTitle] = await Promise.all([
       generateBranchName(description),
       generateTopicTitle(description),
@@ -64,13 +67,13 @@ export const qdev: RouteHandler = async (req, res, params, deps) => {
     const parentThreadId = rootSession?.threadId ?? threadId;
 
     // 3. Fork
-    const forkResult = await forkTaskCore(guildId, parentThreadId, branchName, forumChannelId, {
+    const forkResult = await forkTaskCore(guildId, parentThreadId, branchName, categoryId, {
       stateManager: deps.stateManager,
       client: deps.client,
       worktreesDir: deps.config.worktreesDir,
     }, threadTitle);
 
-    // 4. 发送任务描述到新 thread
+    // 4. 发送任务描述到新 channel
     const newChannel = await deps.client.channels.fetch(forkResult.threadId);
     if (newChannel && newChannel.isTextBased() && 'send' in newChannel) {
       await (newChannel as any).send(description);
@@ -92,11 +95,11 @@ export const qdev: RouteHandler = async (req, res, params, deps) => {
     // 6. 后台触发 Claude
     (async () => {
       try {
-        logger.info(`[qdev] Background chat started for thread ${forkResult.threadId}`);
+        logger.info(`[qdev] Background chat started for channel ${forkResult.threadId}`);
         await deps.messageHandler.handleBackgroundChat(guildId, forkResult.threadId, description);
-        logger.info(`[qdev] Background chat completed for thread ${forkResult.threadId}`);
+        logger.info(`[qdev] Background chat completed for channel ${forkResult.threadId}`);
       } catch (error: any) {
-        logger.error(`[qdev] Background chat failed for thread ${forkResult.threadId}:`, error.message);
+        logger.error(`[qdev] Background chat failed for channel ${forkResult.threadId}:`, error.message);
         await deps.mq.sendLong(forkResult.threadId, `Error: ${error.message}`).catch(() => {});
       }
     })();

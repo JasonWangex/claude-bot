@@ -1,6 +1,6 @@
 /**
  * General 命令: /login, /start, /help, /status
- * 可在 #general 或 Forum Post 中使用
+ * 可在 #general 或 task channel 中使用
  */
 
 import {
@@ -9,11 +9,11 @@ import {
   ChannelType,
 } from 'discord.js';
 import { timingSafeEqual } from 'crypto';
-import { checkAuth } from '../auth.js';
 import { getAuthorizedGuildId, updateAuthorizedGuildId, updateGeneralChannelId } from '../../utils/env.js';
 import { escapeMarkdown } from '../message-utils.js';
 import { logger } from '../../utils/logger.js';
 import type { CommandDeps } from './types.js';
+import { requireAuth } from './utils.js';
 
 export const generalCommands = [
   new SlashCommandBuilder()
@@ -95,7 +95,7 @@ async function handleLogin(
       content:
         '**Login successful!**\n\n' +
         `Bot is now bound to this server (ID: \`${guildId}\`).\n` +
-        'Create Forum Posts to start conversations with Claude.\n\n' +
+        'Create task channels to start conversations with Claude.\n\n' +
         'Use `/start` for usage guide.',
       ephemeral: true,
     });
@@ -124,17 +124,10 @@ async function handleStart(
   const { stateManager } = deps;
   const guildId = interaction.guildId!;
 
-  const isThread = interaction.channel?.isThread() ?? false;
+  const channelId = interaction.channelId;
+  const session = stateManager.getSession(guildId, channelId);
 
-  if (isThread) {
-    const threadId = interaction.channelId;
-    const threadName = (interaction.channel && 'name' in interaction.channel ? interaction.channel.name : null) ?? `thread-${threadId}`;
-
-    const session = stateManager.getOrCreateSession(guildId, threadId, {
-      name: threadName,
-      cwd: stateManager.getGuildDefaultCwd(guildId),
-    });
-
+  if (session) {
     await interaction.reply(
       `**Claude Code is ready**\n\n` +
       `Working directory: \`${session.cwd}\`\n\n` +
@@ -150,18 +143,17 @@ async function handleStart(
       `- \`/info\` - View details`
     );
   } else {
-    const defaultCwd = stateManager.getGuildDefaultCwd(guildId);
     const sessionCount = stateManager.getAllSessions(guildId).length;
 
     await interaction.reply(
       `**Welcome to Claude Code Discord Bot!**\n\n` +
-      `Active threads: ${sessionCount}\n\n` +
+      `Active channels: ${sessionCount}\n\n` +
       `**How to use:**\n` +
-      `1. Use \`/tasks\` to manage Forum Posts (create/view/fork/archive/delete)\n` +
-      `2. Send messages in Forum Posts to chat with Claude\n` +
-      `3. Different threads can work simultaneously\n\n` +
+      `1. Use \`/task\` to create task channels\n` +
+      `2. Send messages in task channels to chat with Claude\n` +
+      `3. Different channels can work simultaneously\n\n` +
       `**General commands:**\n` +
-      `- \`/tasks\` - Manage Forum Posts\n` +
+      `- \`/task\` - Create task channel\n` +
       `- \`/status\` - View global status\n` +
       `- \`/model\` - Switch default model\n` +
       `- \`/help\` - Full help`
@@ -179,34 +171,33 @@ async function handleHelp(
 
   await interaction.reply(
     `**Claude Code Discord Bot Help**\n\n` +
-    `**Task Management (General)**\n` +
-    `\`/tasks\` - Manage Forum Posts (create/view/fork/archive/delete)\n` +
-    `\`/task <name> [path]\` - Quick create new task\n\n` +
+    `**Task Management**\n` +
+    `\`/task <name> [path] [category]\` - Create new task channel\n\n` +
     `**General Commands**\n` +
     `\`/login <token>\` - Bind Bot to this Server\n` +
     `\`/start\` - Show welcome info\n` +
     `\`/help\` - Show this help\n` +
     `\`/status\` - Global status overview\n` +
     `\`/model\` - Switch global default model\n\n` +
-    `**Thread Commands** (inside Forum Posts)\n` +
+    `**Channel Commands** (inside task channels)\n` +
     `\`/cd [path]\` - Change working directory\n` +
     `\`/clear\` - Clear Claude context\n` +
     `\`/compact\` - Compact context\n` +
     `\`/rewind\` - Undo last turn\n` +
     `\`/plan <msg>\` - Plan mode (plan only, no execution)\n` +
     `\`/stop\` - Stop current task\n` +
-    `\`/model\` - Switch current thread model\n` +
-    `\`/info\` - View current thread details\n` +
+    `\`/model\` - Switch current channel model\n` +
+    `\`/info\` - View current channel details\n` +
     `\`/attach [session_id]\` - Link to Claude Session\n` +
     `\`/commit [note]\` - Review & commit code changes\n` +
     `\`/merge <branch>\` - Merge worktree branch to main\n` +
-    `\`/close [--force]\` - Close thread & cleanup worktree/branch\n` +
+    `\`/close [--force]\` - Close channel & cleanup worktree/branch\n` +
     `\`/idea [desc]\` - Record an idea or develop existing one\n\n` +
     `**Usage:**\n` +
-    `- Each Forum Post = independent session\n` +
-    `- Send messages in threads to chat with Claude\n` +
-    `- Different threads can run tasks simultaneously\n` +
-    `- Supports Fork (git worktree) for branch threads`
+    `- Each task channel = independent session\n` +
+    `- Send messages in task channels to chat with Claude\n` +
+    `- Different channels can run tasks simultaneously\n` +
+    `- Supports Fork (git worktree) for branch tasks`
   );
 }
 
@@ -231,15 +222,12 @@ async function handleStatus(
     return `${claude} **${escapeMarkdown(s.name)}** (${s.messageHistory.length} msgs)${lastMsg}`;
   });
 
-  const isThread = interaction.channel?.isThread() ?? false;
+  const channelId = interaction.channelId;
   let currentInfo = '';
-  if (isThread) {
-    const threadId = interaction.channelId;
-    const session = stateManager.getSession(guildId, threadId);
-    if (session) {
-      currentInfo = `\nCurrent thread: \`${escapeMarkdown(session.name)}\`\n` +
-        `Working directory: \`${escapeMarkdown(session.cwd)}\`\n`;
-    }
+  const currentSession = stateManager.getSession(guildId, channelId);
+  if (currentSession) {
+    currentInfo = `\nCurrent channel: \`${escapeMarkdown(currentSession.name)}\`\n` +
+      `Working directory: \`${escapeMarkdown(currentSession.cwd)}\`\n`;
   }
 
   await interaction.reply(
@@ -251,18 +239,3 @@ async function handleStatus(
   );
 }
 
-// ========== Helpers ==========
-
-function requireAuth(interaction: ChatInputCommandInteraction): boolean {
-  if (!checkAuth(interaction.guildId)) {
-    const authorizedGuildId = getAuthorizedGuildId();
-    interaction.reply({
-      content: authorizedGuildId
-        ? 'Unauthorized. This bot is bound to another server.'
-        : 'Please use `/login <token>` first.',
-      ephemeral: true,
-    }).catch(() => {});
-    return false;
-  }
-  return true;
-}

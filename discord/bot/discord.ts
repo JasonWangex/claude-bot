@@ -1,12 +1,11 @@
 /**
- * Discord Bot 初始化（Guild + Forum Posts 模式）
+ * Discord Bot 初始化（Guild + Category/Channels 模式）
  */
 
 import {
   Client,
   GatewayIntentBits,
   Events,
-  ChannelType,
 } from 'discord.js';
 import { StateManager } from './state.js';
 import { InteractionRegistry } from './interaction-registry.js';
@@ -16,6 +15,7 @@ import { ClaudeClient } from '../claude/client.js';
 import { DiscordBotConfig } from '../types/index.js';
 import { checkAuth } from './auth.js';
 import { logger } from '../utils/logger.js';
+import { ApiServer } from '../api/server.js';
 import { getAuthorizedGuildId, getGeneralChannelId } from '../utils/env.js';
 import { escapeMarkdown } from './message-utils.js';
 import { registerSlashCommands, routeCommand } from './commands/index.js';
@@ -30,6 +30,7 @@ export class DiscordBot {
   private messageHandler: MessageHandler;
   private claudeClient: ClaudeClient;
   private config: DiscordBotConfig;
+  private apiServer: ApiServer | null = null;
   private cleanupInterval: NodeJS.Timeout | null = null;
 
   constructor(config: DiscordBotConfig) {
@@ -119,20 +120,20 @@ export class DiscordBot {
       }
     });
 
-    // 文字消息 → Claude 对话（仅 Forum Post Threads）
+    // 文字消息 → Claude 对话（仅有 session 的 task channels）
     this.client.on(Events.MessageCreate, async (message) => {
       if (message.author.bot) return;
       if (!message.guildId) return;
       if (!checkAuth(message.guildId)) return;
 
       const channel = message.channel;
-      if (!channel.isThread()) return;
+      const channelId = channel.id;
 
-      const parent = channel.parent;
-      if (!parent || parent.type !== ChannelType.GuildForum) return;
+      // 用 session 存在性判断是否为 task channel
+      if (!this.stateManager.getSession(message.guildId, channelId)) return;
 
       // 检查是否在等待自定义文本输入（Modal 替代方案：直接文本消息）
-      const waitingEntry = this.interactionRegistry.findWaitingCustomText(message.guildId, channel.id);
+      const waitingEntry = this.interactionRegistry.findWaitingCustomText(message.guildId, channelId);
       if (waitingEntry) {
         this.interactionRegistry.resolve(waitingEntry.toolUseId, message.content);
         await message.react('✅').catch(() => {});
@@ -151,9 +152,8 @@ export class DiscordBot {
       // 文字消息 → Claude 对话流
       this.messageHandler.handleText(message).catch((err) => {
         logger.error('Text handler error:', err);
-        const threadId = channel.id;
         channel.send(`Error processing message. Check #general for details.`).catch(() => {});
-        this.sendErrorToGeneral(message.guildId ?? undefined, threadId, 'Text handler', err);
+        this.sendErrorToGeneral(message.guildId ?? undefined, channelId, 'Text handler', err);
       });
     });
 
@@ -339,6 +339,19 @@ export class DiscordBot {
     await this.client.login(this.config.discordToken);
     logger.info('Discord Bot started');
 
+    // 启动 API 服务器
+    if (this.config.apiPort > 0) {
+      this.apiServer = new ApiServer({
+        stateManager: this.stateManager,
+        claudeClient: this.claudeClient,
+        messageHandler: this.messageHandler,
+        client: this.client,
+        mq: this.messageQueue,
+        config: this.config,
+      });
+      await this.apiServer.start();
+    }
+
     process.once('SIGINT', () => this.stop('SIGINT'));
     process.once('SIGTERM', () => this.stop('SIGTERM'));
   }
@@ -378,6 +391,9 @@ export class DiscordBot {
     }
     this.messageQueue.stop();
     await this.messageQueue.drain(10000);
+    if (this.apiServer) {
+      await this.apiServer.stop();
+    }
     this.claudeClient.detachAll();
     await this.stateManager.flush();
     this.client.destroy();

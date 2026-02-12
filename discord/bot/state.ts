@@ -1,6 +1,6 @@
 /**
- * 状态管理（Guild + Forum Threads 模式）
- * 每个 Thread 对应一个独立 Session，不同 thread 并行无干扰
+ * 状态管理（Guild + Category/Channels 模式）
+ * 每个 Text Channel 对应一个独立 Session，不同 channel 并行无干扰
  * ID 全部使用 string (Discord snowflake)
  */
 

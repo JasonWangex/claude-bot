@@ -7,7 +7,7 @@
 export interface Session {
   id: string;                // 本地 UUID
   name: string;              // 用户自定义名称
-  threadId: string;          // Discord thread ID (Forum Post)
+  threadId: string;          // Discord Channel ID (Text Channel under Category)
   guildId: string;           // Discord Guild ID
   claudeSessionId?: string;  // Claude CLI session_id
   prevClaudeSessionId?: string; // 上一轮 session_id（用于 rewind）
@@ -22,10 +22,8 @@ export interface Session {
     text: string;
     timestamp: number;
   }>;
-  parentThreadId?: string;    // 父 Thread ID（fork 产生的子 thread）
+  parentThreadId?: string;    // 父 Channel ID（fork 产生的子 channel）
   worktreeBranch?: string;    // worktree 分支名（fork 创建的）
-  forumChannelId?: string;    // 所属 Forum Channel ID
-  tags?: string[];            // Forum Post tags (developing/merged/closed)
 }
 
 // Guild 状态

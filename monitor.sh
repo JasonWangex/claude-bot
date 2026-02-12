@@ -16,20 +16,15 @@ fi
 echo "=========================================="
 echo "  Claude Process Monitor"
 echo "=========================================="
-echo "Environment: $(basename "$(readlink -f .env)")"
+echo "Environment: .env"
 echo "Check Interval: ${MONITOR_CHECK_INTERVAL:-5000}ms"
 echo "Cooldown Period: ${MONITOR_COOLDOWN:-180000}ms"
 echo "=========================================="
 echo ""
 
 # 检查必需的环境变量
-if [ -z "$TELEGRAM_BOT_TOKEN" ]; then
-  echo "❌ Error: TELEGRAM_BOT_TOKEN not set"
-  exit 1
-fi
-
-if [ -z "$AUTHORIZED_CHAT_ID" ]; then
-  echo "❌ Error: AUTHORIZED_CHAT_ID not set"
+if [ -z "$DISCORD_TOKEN" ]; then
+  echo "❌ Error: DISCORD_TOKEN not set"
   exit 1
 fi
 

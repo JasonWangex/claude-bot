@@ -1,8 +1,8 @@
 /**
- * Task (Thread) CRUD 路由
+ * Task (Channel) CRUD 路由
  *
  * GET    /api/tasks              — 列出所有 Task
- * POST   /api/tasks              — 创建 Task (Forum Post)
+ * POST   /api/tasks              — 创建 Task (Category + Text Channel)
  * GET    /api/tasks/:threadId    — Task 详情
  * PATCH  /api/tasks/:threadId    — 更新 Task
  * DELETE /api/tasks/:threadId    — 删除 Task (?cascade=true 级联删子)
@@ -10,7 +10,7 @@
  * POST   /api/tasks/:threadId/fork    — Fork
  */
 
-import { ChannelType, ForumChannel } from 'discord.js';
+import { ChannelType } from 'discord.js';
 import type { RouteHandler, TaskSummary, CreateTaskRequest, UpdateTaskRequest } from '../types.js';
 import { sendJson, requireAuth, readJsonBody } from '../middleware.js';
 import type { Session } from '../../types/index.js';
@@ -109,39 +109,40 @@ export const createTask: RouteHandler = async (req, res, _params, deps) => {
       }
     }
 
-    // 查找或创建 Forum Channel
+    // 查找或创建 Category
     const guild = await deps.client.guilds.fetch(guildId);
-    const forumName = body.forum || getForumNameFromCwd(cwd);
-    let forum = guild.channels.cache.find(
-      c => c.type === ChannelType.GuildForum && c.name === forumName,
-    ) as ForumChannel | undefined;
+    const categoryName = body.category || getCategoryNameFromCwd(cwd);
+    let category = guild.channels.cache.find(
+      c => c.type === ChannelType.GuildCategory && c.name === categoryName,
+    );
 
-    if (!forum) {
-      forum = await guild.channels.create({
-        name: forumName,
-        type: ChannelType.GuildForum,
-        reason: `Auto-created by Claude Bot for project: ${forumName}`,
-      }) as ForumChannel;
-      logger.info(`Created Forum Channel: ${forumName}`);
+    if (!category) {
+      category = await guild.channels.create({
+        name: categoryName,
+        type: ChannelType.GuildCategory,
+        reason: `Auto-created by Claude Bot for project: ${categoryName}`,
+      });
+      logger.info(`Created Category: ${categoryName}`);
     }
 
-    // 查找 "developing" tag
-    const developingTag = forum.availableTags.find(t => t.name === 'developing');
-
-    // 创建 Forum Post (Thread)
-    const thread = await forum.threads.create({
+    // 创建 Text Channel (under Category)
+    const textChannel = await guild.channels.create({
       name: taskName.slice(0, 100),
-      message: {
-        content: `Task created: \`${taskName}\`\nWorking directory: \`${cwd}\`${dirCreated ? '\nDirectory auto-created' : ''}`,
-      },
-      appliedTags: developingTag ? [developingTag.id] : [],
+      type: ChannelType.GuildText,
+      parent: category.id,
+      reason: `Task: ${taskName}`,
     });
 
-    deps.stateManager.getOrCreateSession(guildId, thread.id, { name: taskName, cwd });
+    // 发送初始消息
+    await textChannel.send(
+      `Task created: \`${taskName}\`\nWorking directory: \`${cwd}\`${dirCreated ? '\nDirectory auto-created' : ''}`
+    );
+
+    deps.stateManager.getOrCreateSession(guildId, textChannel.id, { name: taskName, cwd });
 
     sendJson(res, 201, {
       ok: true,
-      data: { thread_id: thread.id, name: taskName, cwd, dir_created: dirCreated },
+      data: { thread_id: textChannel.id, name: taskName, cwd, dir_created: dirCreated },
     });
   } catch (error: any) {
     sendJson(res, 500, { ok: false, error: `Failed to create task: ${error.message}` });
@@ -199,14 +200,14 @@ export const updateTask: RouteHandler = async (req, res, params, deps) => {
       sendJson(res, 400, { ok: false, error: 'Name must be 1-100 characters' });
       return;
     }
-    // 尝试更新 Discord Thread 名
+    // 尝试更新 Discord Channel 名
     try {
       const channel = await deps.client.channels.fetch(threadId);
-      if (channel?.isThread()) {
-        await channel.setName(newName.slice(0, 100));
+      if (channel && 'setName' in channel) {
+        await (channel as any).setName(newName.slice(0, 100));
       }
     } catch (error: any) {
-      sendJson(res, 500, { ok: false, error: `Thread rename failed: ${error.message}` });
+      sendJson(res, 500, { ok: false, error: `Channel rename failed: ${error.message}` });
       return;
     }
     deps.stateManager.setSessionName(guildId, threadId, newName);
@@ -273,19 +274,19 @@ export const deleteTask: RouteHandler = async (req, res, params, deps) => {
     if (cascade) {
       for (const child of children) {
         deps.stateManager.deleteSession(guildId, child.threadId);
-        // Archive child threads
+        // Delete child channels
         const childChannel = await deps.client.channels.fetch(child.threadId).catch(() => null);
-        if (childChannel?.isThread()) {
-          await childChannel.setArchived(true).catch(() => {});
+        if (childChannel && 'delete' in childChannel) {
+          await (childChannel as any).delete('Task cascade delete').catch(() => {});
         }
       }
     }
 
     deps.stateManager.deleteSession(guildId, threadId);
-    // Archive the thread
+    // Delete the channel
     const channel = await deps.client.channels.fetch(threadId).catch(() => null);
-    if (channel?.isThread()) {
-      await channel.setArchived(true).catch(() => {});
+    if (channel && 'delete' in channel) {
+      await (channel as any).delete('Task deleted').catch(() => {});
     }
 
     sendJson(res, 200, {
@@ -314,8 +315,8 @@ export const archiveTask: RouteHandler = async (_req, res, params, deps) => {
   try {
     deps.stateManager.archiveSession(guildId, threadId, undefined, 'API archive');
     const channel = await deps.client.channels.fetch(threadId).catch(() => null);
-    if (channel?.isThread()) {
-      await channel.setArchived(true).catch(() => {});
+    if (channel && 'delete' in channel) {
+      await (channel as any).delete('Task archived').catch(() => {});
     }
 
     sendJson(res, 200, {
@@ -339,7 +340,7 @@ export const forkTask: RouteHandler = async (req, res, params, deps) => {
     return;
   }
 
-  const body = await readJsonBody<{ branch: string; forum_channel_id?: string }>(req);
+  const body = await readJsonBody<{ branch: string; category_id?: string }>(req);
   if (!body?.branch || typeof body.branch !== 'string') {
     sendJson(res, 400, { ok: false, error: '"branch" field is required' });
     return;
@@ -351,24 +352,27 @@ export const forkTask: RouteHandler = async (req, res, params, deps) => {
     return;
   }
 
-  // 需要 forum_channel_id 来创建新 thread
-  let forumChannelId = body.forum_channel_id;
-  if (!forumChannelId) {
-    // 尝试从当前 thread 的 parent 获取
+  // 需要 category_id 来创建新 channel
+  let categoryId = body.category_id;
+  if (!categoryId) {
+    // 尝试从当前 channel 的 parentId 获取 Category
     try {
       const channel = await deps.client.channels.fetch(threadId);
-      if (channel?.isThread() && channel.parent?.type === ChannelType.GuildForum) {
-        forumChannelId = channel.parent.id;
+      if (channel && 'parentId' in channel && channel.parentId) {
+        const parent = await deps.client.channels.fetch(channel.parentId);
+        if (parent && parent.type === ChannelType.GuildCategory) {
+          categoryId = parent.id;
+        }
       }
     } catch { /* ignore */ }
   }
-  if (!forumChannelId) {
-    sendJson(res, 400, { ok: false, error: '"forum_channel_id" required or thread must be in a Forum' });
+  if (!categoryId) {
+    sendJson(res, 400, { ok: false, error: '"category_id" required or channel must be in a Category' });
     return;
   }
 
   try {
-    const result = await forkTaskCore(guildId, threadId, branchName, forumChannelId, {
+    const result = await forkTaskCore(guildId, threadId, branchName, categoryId, {
       stateManager: deps.stateManager,
       client: deps.client,
       worktreesDir: deps.config.worktreesDir,
@@ -391,7 +395,7 @@ export const forkTask: RouteHandler = async (req, res, params, deps) => {
 
 // ========== Helpers ==========
 
-function getForumNameFromCwd(cwd: string): string {
+function getCategoryNameFromCwd(cwd: string): string {
   const parts = cwd.split('/');
   return parts[parts.length - 1] || 'tasks';
 }
