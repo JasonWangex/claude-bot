@@ -321,14 +321,19 @@ export class GoalOrchestrator {
       const guildId = this.getGuildId();
       if (!guildId) throw new Error('Bot not authorized');
 
-      // 从 goal channel 的 parentId 获取 Category
+      // 从 goal channel 向上查找 Category（支持 Thread → Channel → Category）
       let categoryId: string | null = null;
       try {
-        const goalChannel = await this.deps.client.channels.fetch(state.goalThreadId);
-        if (goalChannel && 'parentId' in goalChannel && goalChannel.parentId) {
-          const parent = await this.deps.client.channels.fetch(goalChannel.parentId);
-          if (parent && parent.type === ChannelType.GuildCategory) {
-            categoryId = parent.id;
+        let channel = await this.deps.client.channels.fetch(state.goalThreadId);
+        for (let i = 0; i < 3 && channel; i++) {
+          if (channel.type === ChannelType.GuildCategory) {
+            categoryId = channel.id;
+            break;
+          }
+          if ('parentId' in channel && channel.parentId) {
+            channel = await this.deps.client.channels.fetch(channel.parentId);
+          } else {
+            break;
           }
         }
       } catch { /* ignore */ }
