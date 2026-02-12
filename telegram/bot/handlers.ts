@@ -595,6 +595,11 @@ export class MessageHandler {
           await mq.sendLong(chatId, session.topicId, response.result, { priority: 'high' });
         }
 
+        // Plan 文件已发送时，跳过 changes.html（plan md 本身就是完整内容，diff 无额外价值）
+        if (planSent) {
+          fileChanges.length = 0;
+        }
+
         // 无 ctx 时无法显示 Inline Keyboard，跳过交互
         if (!ctx) {
           if (fileChanges.length > 0) {
@@ -698,7 +703,10 @@ export class MessageHandler {
       const summary = parts.length > 0 ? ` (${parts.join(', ')})` : '';
 
       // 发送 changes.html（有文件变更时）
-      if (fileChanges.length > 0) {
+      // Plan mode 下 plan md 文件已通过流式文本发送，跳过 changes.html
+      const skipChangesHtml = mode === 'plan'
+        && fileChanges.every(fc => fc.filePath.includes('.claude/plans/') && fc.filePath.endsWith('.md'));
+      if (fileChanges.length > 0 && !skipChangesHtml) {
         const html = buildChangesHtml(fileChanges);
         await mq.sendDocument(chatId, session.topicId, html, 'changes.html',
           `📄 ${fileChanges.length} 个文件变更`, { silent: true });
