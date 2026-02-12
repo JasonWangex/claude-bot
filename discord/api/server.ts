@@ -20,6 +20,7 @@ import { sendMessage } from './routes/messages.js';
 import { clearSession, compactSession, rewindSession, stopSession } from './routes/session-ops.js';
 import { getModels, setDefaultModel } from './routes/models.js';
 import { startDrive, getDriveStatus, pauseDrive, resumeDrive, skipTask, markTaskDone, retryTask } from './routes/goals.js';
+import { listGoals, createGoal, getGoal, updateGoal } from './routes/goals-crud.js';
 import { qdev } from './routes/qdev.js';
 
 function defineRoutes(): Route[] {
@@ -57,6 +58,12 @@ function defineRoutes(): Route[] {
     r('POST', '/api/tasks/:threadId/compact', compactSession),
     r('POST', '/api/tasks/:threadId/rewind', rewindSession),
     r('POST', '/api/tasks/:threadId/stop', stopSession),
+
+    // Goal CRUD
+    r('GET',    '/api/goals', listGoals),
+    r('POST',   '/api/goals', createGoal),
+    r('GET',    '/api/goals/:goalId', getGoal),
+    r('PATCH',  '/api/goals/:goalId', updateGoal),
 
     // Goal Drive
     r('POST', '/api/goals/:goalId/drive', startDrive),
