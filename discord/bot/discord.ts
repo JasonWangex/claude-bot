@@ -237,6 +237,18 @@ export class DiscordBot {
       return;
     }
 
+    // Interrupt button: interrupt:<lockKeyPrefix>
+    // 只杀运行中的进程，队列中的消息自然获得锁继续执行
+    if (customId.startsWith('interrupt:')) {
+      const lockKeyPrefix = customId.slice('interrupt:'.length);
+      const result = this.claudeClient.abortRunning(lockKeyPrefix);
+      await interaction.reply({
+        content: result.aborted ? 'Interrupting current task...' : 'No running task to interrupt.',
+        ephemeral: true,
+      }).catch(() => {});
+      return;
+    }
+
     // AskUserQuestion / ExitPlanMode buttons: input:<prefix>:<selection>
     if (customId.startsWith('input:')) {
       const parts = customId.split(':');

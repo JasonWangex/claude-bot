@@ -298,11 +298,26 @@ export class MessageHandler {
       const subtype = (event as any).subtype;
       if (event.type === 'system' && subtype === 'queued') {
         const pos = (event as any).queue_position || '?';
-        mq.edit(threadId, progressMsgId, `Queued (position ${pos})...`, { components: [stopRow as any] });
+        // 显示 Interrupt & Send Now 按钮，让用户可以中断当前任务
+        const interruptButton = new ButtonBuilder()
+          .setCustomId(`interrupt:${lockKey.slice(0, 20)}`)
+          .setLabel('Interrupt & Send Now')
+          .setStyle(ButtonStyle.Primary);
+        const cancelButton = new ButtonBuilder()
+          .setCustomId(`stop:${lockKey.slice(0, 20)}`)
+          .setLabel('Cancel')
+          .setStyle(ButtonStyle.Secondary);
+        const queuedRow = new ActionRowBuilder<ButtonBuilder>().addComponents(interruptButton, cancelButton);
+        mq.edit(threadId, progressMsgId, `Queued (position ${pos})...`, { components: [queuedRow as any] });
         return;
       }
       if (event.type === 'system' && subtype === 'lock_acquired') {
-        const newText = `Thinking... (${elapsed()})`;
+        // 检查中断上下文
+        const interruptCtx = this.claudeClient.consumeInterruptContext(lockKey);
+        const prefix = interruptCtx
+          ? `Interrupted after ${interruptCtx.lastProgressText}. Resuming`
+          : 'Thinking';
+        const newText = `${prefix}... (${elapsed()})`;
         lastProgressText = newText;
         mq.edit(threadId, progressMsgId, newText, { components: [stopRow as any] });
         return;
@@ -406,6 +421,8 @@ export class MessageHandler {
               lastProgressText = newText;
               lastEditTime = now;
               mq.edit(threadId, progressMsgId, newText, { components: [stopRow as any] });
+              // 回写进度到 executor，用于中断上下文保存
+              this.claudeClient.updateProgressInfo(lockKey, newText, toolUseCount);
             }
           } else if (block.type === 'text' && block.text) {
             if (interactiveState.pending) continue;
@@ -585,7 +602,10 @@ export class MessageHandler {
 
       if (error instanceof ClaudeExecutionError && error.errorType === ClaudeErrorType.ABORTED) {
         logger.info(`[${session.name}] Task aborted by user`);
-        mq.edit(threadId, progressMsgId, 'Stopped');
+        const stoppedText = lastProgressText && lastProgressText !== `Thinking${modeLabel}...`
+          ? `Stopped (after ${lastProgressText})`
+          : 'Stopped';
+        mq.edit(threadId, progressMsgId, stoppedText);
         return;
       }
 
