@@ -54,7 +54,7 @@ export const sendMessage: RouteHandler = async (req, res, params, deps) => {
       logger.info(`[API] Background chat completed for thread ${threadId}`);
     } catch (error: any) {
       logger.error(`[API] Background chat failed for thread ${threadId}:`, error.message);
-      await deps.mq.sendLong(threadId, `Error: ${error.message}`).catch(() => {});
+      await deps.mq.sendLong(threadId, `Error: ${error.message}`, { silent: true }).catch(() => {});
     }
   })();
 };

@@ -100,7 +100,7 @@ export const qdev: RouteHandler = async (req, res, params, deps) => {
         logger.info(`[qdev] Background chat completed for channel ${forkResult.threadId}`);
       } catch (error: any) {
         logger.error(`[qdev] Background chat failed for channel ${forkResult.threadId}:`, error.message);
-        await deps.mq.sendLong(forkResult.threadId, `Error: ${error.message}`).catch(() => {});
+        await deps.mq.sendLong(forkResult.threadId, `Error: ${error.message}`, { silent: true }).catch(() => {});
       }
     })();
   } catch (error: any) {
