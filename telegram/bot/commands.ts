@@ -277,7 +277,8 @@ export class CommandHandler {
         `/info - 查看当前 Topic 详情\n` +
         `/attach [session_id] - 链接到指定 Claude Session\n` +
         `/commit [备注] - 审查代码变更后自动提交\n` +
-        `/merge &lt;topic或分支名&gt; - 合并 worktree 分支到 main 并清理\n\n` +
+        `/merge &lt;topic或分支名&gt; - 合并 worktree 分支到 main 并清理\n` +
+        `/idea [描述] - 记录想法或推进已有想法到开发\n\n` +
         `<b>使用方法</b>\n` +
         `• /topics 统一管理所有 Topic（每个 Topic = 独立会话）\n` +
         `• 在 Topic 中直接发消息即可对话\n` +
@@ -1812,13 +1813,13 @@ export class CommandHandler {
     cwd: string,
     chatId: number,
     topicId: number,
-    options?: { maxTurns?: number },
+    options?: { maxTurns?: number; allowedTools?: string },
   ): void {
     const child = spawn('claude', [
       '-p', prompt,
       '--output-format', 'json',
       '--dangerously-skip-permissions',
-      '--allowedTools', 'Bash',
+      '--allowedTools', options?.allowedTools ?? 'Bash',
       '--max-turns', String(options?.maxTurns ?? 15),
       '--no-session-persistence',
     ], {
@@ -1915,6 +1916,50 @@ export class CommandHandler {
         );
       } catch (error: any) {
         await editProgress(`❌ qdev 失败: ${error.message}`);
+      }
+    });
+  }
+
+  /**
+   * /idea - 记录想法或推进已有想法到开发
+   * 有参数：直接记录到 Notion（独立进程）
+   * 无参数：列出 Ideas 并交互选择（占用当前 session）
+   */
+  async handleIdea(ctx: Context): Promise<void> {
+    await this.requireTopic(ctx, async (session, topicId) => {
+      const text = (ctx.message as any)?.text || '';
+      const args = text.replace(/^\/idea\s*/, '').trim();
+
+      const chatId = ctx.chat!.id;
+
+      // 加载 skill 文件
+      const skillPath = join(homedir(), '.claude/skills/idea/SKILL.md');
+      let skillContent: string;
+      try {
+        skillContent = await readFile(skillPath, 'utf-8');
+      } catch {
+        await ctx.reply('❌ 未找到 idea skill 文件: ~/.claude/skills/idea/SKILL.md');
+        return;
+      }
+
+      // 提取 frontmatter 之后的内容
+      const bodyMatch = skillContent.match(/^---[\s\S]*?---\s*([\s\S]*)$/);
+      const prompt = (bodyMatch ? bodyMatch[1] : skillContent)
+        .replace('{{SKILL_ARGS}}', args);
+
+      if (args) {
+        // 记录模式：独立进程，不占用 session
+        await ctx.reply(`💡 正在记录想法...`);
+        this.spawnSkillProcess('idea', prompt, session.cwd, chatId, topicId, {
+          allowedTools: 'Bash,mcp__claude_ai_Notion__notion-create-pages,mcp__claude_ai_Notion__notion-search',
+        });
+      } else {
+        // 列表模式：通过当前 session 交互（支持用户选择）
+        await ctx.reply('💡 正在查询未开发的 Ideas...');
+        this.messageHandler.handleBackgroundChat(chatId, topicId, prompt).catch((err) => {
+          logger.error('idea list mode failed:', err.message);
+          this.mq.send(chatId, topicId, `❌ idea 查询失败: ${err.message}`).catch(() => {});
+        });
       }
     });
   }
