@@ -48,6 +48,21 @@ version: 1.0.0
 | POST | `/api/tasks/:threadId/stop` | 停止当前任务 |
 | POST | `/api/tasks/:threadId/qdev` | 快速创建开发子任务 — `{"description": "..."}` |
 
+### DevLog
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/devlogs` | 列出 DevLog — `?project=&date=&start=&end=` |
+| POST | `/api/devlogs` | 创建 DevLog — `{"name", "date", "project", ...}` |
+| GET | `/api/devlogs/:id` | DevLog 详情 |
+
+### Idea
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/ideas` | 列出 Idea — `?project=&status=` |
+| POST | `/api/ideas` | 创建 Idea — `{"name", "project", "status?"}` |
+| GET | `/api/ideas/:id` | Idea 详情 |
+| PATCH | `/api/ideas/:id` | 更新 Idea — `{"name?", "status?", "project?"}` |
+
 ## 响应格式
 
 所有端点返回统一的 JSON 格式：
