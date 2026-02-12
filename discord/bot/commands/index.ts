@@ -15,6 +15,7 @@ import { taskCommands, handleTaskCommand } from './task.js';
 import { sessionCommands, handleSessionCommand } from './session.js';
 import { modelCommands, handleModelCommand } from './model.js';
 import { devCommands, handleDevCommand } from './dev.js';
+import { goalCommands, handleGoalCommand } from './goal.js';
 import type { CommandDeps } from './types.js';
 
 // 所有命令定义
@@ -24,6 +25,7 @@ const allCommands: (SlashCommandBuilder | SlashCommandOptionsOnlyBuilder)[] = [
   ...sessionCommands,
   ...modelCommands,
   ...devCommands,
+  ...goalCommands,
 ];
 
 /**
@@ -49,6 +51,7 @@ const TASK_CMDS = new Set(['task', 'close', 'info', 'cd']);
 const SESSION_CMDS = new Set(['clear', 'compact', 'rewind', 'plan', 'stop', 'attach']);
 const MODEL_CMDS = new Set(['model']);
 const DEV_CMDS = new Set(['qdev', 'idea', 'commit', 'merge']);
+const GOAL_CMDS = new Set(['goal']);
 
 /**
  * 路由 Slash Command 到对应处理器
@@ -78,6 +81,11 @@ export async function routeCommand(interaction: ChatInputCommandInteraction, dep
 
   if (DEV_CMDS.has(commandName)) {
     await handleDevCommand(interaction, deps);
+    return;
+  }
+
+  if (GOAL_CMDS.has(commandName)) {
+    await handleGoalCommand(interaction, deps);
     return;
   }
 
