@@ -16,6 +16,7 @@ import { DiscordBotConfig } from '../types/index.js';
 import { checkAuth } from './auth.js';
 import { logger } from '../utils/logger.js';
 import { ApiServer } from '../api/server.js';
+import { GoalOrchestrator } from '../orchestrator/index.js';
 import { getAuthorizedGuildId, getGeneralChannelId } from '../utils/env.js';
 import { escapeMarkdown } from './message-utils.js';
 import { registerSlashCommands, routeCommand } from './commands/index.js';
@@ -351,6 +352,17 @@ export class DiscordBot {
     await this.client.login(this.config.discordToken);
     logger.info('Discord Bot started');
 
+    // 启动 Orchestrator
+    const orchestrator = new GoalOrchestrator({
+      stateManager: this.stateManager,
+      claudeClient: this.claudeClient,
+      messageHandler: this.messageHandler,
+      client: this.client,
+      mq: this.messageQueue,
+      config: this.config,
+    });
+    await orchestrator.restoreRunningDrives();
+
     // 启动 API 服务器
     if (this.config.apiPort > 0) {
       this.apiServer = new ApiServer({
@@ -360,6 +372,7 @@ export class DiscordBot {
         client: this.client,
         mq: this.messageQueue,
         config: this.config,
+        orchestrator,
       });
       await this.apiServer.start();
     }
