@@ -4,12 +4,16 @@
 
 // Re-export repository interfaces and related types
 export type {
+  Goal,
+  GoalStatus,
+  GoalType,
   DevLog,
   Idea,
   IdeaStatus,
   ISessionRepo,
   IGuildRepo,
   IGoalRepo,
+  IGoalMetaRepo,
   IGoalTaskRepo,
   IDevLogRepo,
   IIdeaRepo,

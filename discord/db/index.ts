@@ -104,5 +104,6 @@ export type { Migration } from './migrate.js';
 // Re-export Repository 实现
 export { DevLogRepository } from './devlog-repo.js';
 export { IdeaRepository } from './idea-repo.js';
+export { GoalMetaRepo } from './goal-meta-repo.js';
 export { GoalRepo, GoalTaskRepo } from './repo/index.js';
 export { SessionRepository, GuildRepository } from './repo/index.js';

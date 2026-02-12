@@ -38,13 +38,11 @@ export class GoalRepo implements IGoalRepo {
 
       upsertGoal: this.db.prepare(`
         INSERT INTO goals (
-          id, name, status, type, project, date, completion, progress,
-          next, blocked_by, body,
+          id, name, status,
           drive_status, drive_branch, drive_thread_id, drive_base_cwd,
           drive_max_concurrent, drive_created_at, drive_updated_at
         ) VALUES (
-          @id, @name, @status, @type, @project, @date, @completion, @progress,
-          @next, @blocked_by, @body,
+          @id, @name, @status,
           @drive_status, @drive_branch, @drive_thread_id, @drive_base_cwd,
           @drive_max_concurrent, @drive_created_at, @drive_updated_at
         )
@@ -166,14 +164,6 @@ function goalDriveStateToGoalRow(state: GoalDriveState): Record<string, unknown>
     id: state.goalId,
     name: state.goalName,
     status: 'Active',
-    type: null,
-    project: null,
-    date: null,
-    completion: null,
-    progress: null,
-    next: null,
-    blocked_by: null,
-    body: null,
     drive_status: state.status,
     drive_branch: state.goalBranch,
     drive_thread_id: state.goalThreadId,

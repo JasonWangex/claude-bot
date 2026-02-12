@@ -16,7 +16,27 @@ import type {
 } from './index.js';
 
 // ==================== 新增实体类型 ====================
-// DevLog 和 Idea 目前只存在于 Notion，迁移到 SQLite 需要本地实体定义
+
+/** Goal 状态 */
+export type GoalStatus = 'Idea' | 'Processing' | 'Active' | 'Paused' | 'Done' | 'Abandoned';
+
+/** Goal 类型 */
+export type GoalType = '探索型' | '交付型';
+
+/** 开发目标（元数据视图，对应 goals 表的完整行） */
+export interface Goal {
+  id: string;
+  name: string;
+  status: GoalStatus;
+  type: GoalType | null;
+  project: string | null;
+  date: string | null;           // ISO-8601 日期 (yyyy-MM-dd)
+  completion: string | null;     // 完成标准
+  progress: string | null;       // "X/N 子任务完成"
+  next: string | null;           // 下一步
+  blockedBy: string | null;      // 卡点说明
+  body: string | null;           // 页面正文 Markdown
+}
 
 /** 开发日志 */
 export interface DevLog {
@@ -102,6 +122,25 @@ export interface IGoalRepo {
 
   // —— 查询 ——
   findByStatus(status: GoalDriveStatus): Promise<GoalDriveState[]>;
+}
+
+/**
+ * Goal 元数据仓库
+ *
+ * 管理 Goal 的完整元数据（name, status, body 等），
+ * 与 IGoalRepo（仅管理 Drive 状态）互补。
+ * 主键: id
+ */
+export interface IGoalMetaRepo {
+  get(id: string): Promise<Goal | null>;
+  getAll(): Promise<Goal[]>;
+  save(goal: Goal): Promise<void>;
+  delete(id: string): Promise<boolean>;
+
+  // —— 查询 ——
+  findByStatus(status: GoalStatus): Promise<Goal[]>;
+  findByProject(project: string): Promise<Goal[]>;
+  search(query: string): Promise<Goal[]>;
 }
 
 /**

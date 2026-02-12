@@ -1,9 +1,9 @@
 ---
 name: idea
 description: >
-  快速记录想法或推进已有想法到开发。有参数时直接记录到 Notion（Status=Idea）；
+  快速记录想法或推进已有想法到开发。有参数时直接记录（Status=Idea）；
   无参数时列出当前项目的未开发 Ideas，选中后标记 Processing 并走 qdev 流程。
-version: 3.0.0
+version: 4.0.0
 ---
 
 # Idea - 想法管理
@@ -15,20 +15,32 @@ version: 3.0.0
 - **不为空** → 记录模式（写入新 Idea）
 - **为空** → 列表模式（查看并推进已有 Idea）
 
+**Bot API 鉴权**:
+
+```bash
+API="http://127.0.0.1:3456"
+BOT_TOKEN=$(grep '^BOT_ACCESS_TOKEN=' /home/jason/projects/claude-bot/.env 2>/dev/null | cut -d= -f2-)
+AUTH="Authorization: Bearer $BOT_TOKEN"
+```
+
 ---
 
 ## 记录模式（有参数）
 
-将一句话想法直接写入 Notion Goals database，Status 设为 Idea。
+将一句话想法直接写入数据库，Status 设为 Idea。
 
-**不讨论、不确认、不追问**，直接调用 `mcp__claude_ai_Notion__notion-create-pages` 写入：
+**不讨论、不确认、不追问**，直接调用 API 写入：
 
-- **data_source_id**: `d8cfb7d5-bf11-4ce3-bed4-37fabdec77e0`
-- **Name**: 用户的原始输入（`{{SKILL_ARGS}}`）
-- **Status**: `Idea`
-- **Project**: 根据当前工作目录判断（`claude-bot` / `LearnFlashy` / 目录名）
-- **date:Date:start**: 今天的日期（ISO-8601）
-- **date:Date:is_datetime**: 0
+```bash
+curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{
+    "name": "<用户的原始输入>",
+    "status": "Idea",
+    "project": "<根据当前工作目录判断>",
+    "date": "<今天 ISO-8601>"
+  }' \
+  "$API/api/goals"
+```
 
 写入成功后，简短确认：
 
@@ -42,11 +54,11 @@ version: 3.0.0
 
 ### 1. 查询未开发的 Ideas
 
-用 `mcp__claude_ai_Notion__notion-search` 在 Goals database 中查询：
+```bash
+curl -s -H "$AUTH" "$API/api/goals?status=Idea&project=<根据 cwd 判断的项目名>"
+```
 
-- data_source_url: `collection://d8cfb7d5-bf11-4ce3-bed4-37fabdec77e0`
-- 筛选 **Status = Idea**
-- 只显示当前项目的 Ideas（根据 cwd 判断 Project: `claude-bot` / `LearnFlashy` / 目录名）
+只显示当前项目的 Ideas（根据 cwd 判断 Project: `claude-bot` / `LearnFlashy` / 目录名）。
 
 ### 2. 展示列表
 
@@ -71,9 +83,13 @@ version: 3.0.0
 
 用户输入编号后：
 
-#### 3.1 更新 Notion 状态
+#### 3.1 更新状态
 
-用 `mcp__claude_ai_Notion__notion-update-page` 将选中 Idea 的 Status 改为 `Processing`。
+```bash
+curl -s -X PATCH -H "$AUTH" -H 'Content-Type: application/json' \
+  -d '{"status":"Processing"}' \
+  "$API/api/goals/<idea-id>"
+```
 
 #### 3.2 执行 qdev 流程
 
@@ -89,10 +105,6 @@ version: 3.0.0
 **查找 root task：**
 
 ```bash
-API="http://127.0.0.1:3456"
-BOT_TOKEN=$(grep '^BOT_ACCESS_TOKEN=' /home/jason/projects/claude-bot/.env 2>/dev/null | cut -d= -f2-)
-AUTH="Authorization: Bearer $BOT_TOKEN"
-
 curl -s -H "$AUTH" $API/api/tasks
 ```
 
@@ -127,7 +139,7 @@ Idea 已推进到开发
 - Root Task: <root task name>
 - Fork Task: <fork task name>
 - 分支: `<branch>`
-- Notion 状态: Processing
+- 状态: Processing
 
 已在 fork task 中发送任务，Claude 正在处理！
 ```
