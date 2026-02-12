@@ -17,6 +17,9 @@ import { checkAuth } from './auth.js';
 import { logger } from '../utils/logger.js';
 import { ApiServer } from '../api/server.js';
 import { GoalOrchestrator } from '../orchestrator/index.js';
+import { initDb, closeDb } from '../db/index.js';
+import { SessionRepository } from '../db/repo/session-repo.js';
+import { GuildRepository } from '../db/repo/guild-repo.js';
 import { getAuthorizedGuildId, getGeneralChannelId } from '../utils/env.js';
 import { escapeMarkdown } from './message-utils.js';
 import { registerSlashCommands, routeCommand } from './commands/index.js';
@@ -46,7 +49,10 @@ export class DiscordBot {
       ],
     });
 
-    this.stateManager = new StateManager(config.defaultWorkDir);
+    const db = initDb();
+    const sessionRepo = new SessionRepository(db);
+    const guildRepo = new GuildRepository(db);
+    this.stateManager = new StateManager(config.defaultWorkDir, sessionRepo, guildRepo);
     this.interactionRegistry = new InteractionRegistry();
     this.claudeClient = new ClaudeClient(
       config.claudeCliPath,
@@ -415,6 +421,7 @@ export class DiscordBot {
     }
     this.claudeClient.detachAll();
     await this.stateManager.flush();
+    closeDb();
     this.client.destroy();
     process.exit(0);
   }
