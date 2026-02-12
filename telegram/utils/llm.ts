@@ -76,3 +76,15 @@ export async function chatCompletion(
   }
   return null;
 }
+
+/**
+ * 从描述生成简短中文 Topic 标题（≤20字）
+ * 失败时截取描述前 20 字符作为 fallback
+ */
+export async function generateTopicTitle(description: string): Promise<string> {
+  const fallback = description.slice(0, 20);
+  const result = await chatCompletion(
+    `将以下内容压缩为一个简短的中文标题（不超过20字，只输出标题，不要任何其他内容）:\n${description}`,
+  );
+  return result?.slice(0, 20) || fallback;
+}

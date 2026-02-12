@@ -16,6 +16,7 @@ import type { TelegramBotConfig, GoalDriveState, GoalTask } from '../types/index
 import type { Telegram } from 'telegraf';
 import { stat } from 'fs/promises';
 import { getAuthorizedChatId } from '../utils/env.js';
+import { generateTopicTitle } from '../utils/llm.js';
 import { execGit, resolveMainWorktree } from './git-ops.js';
 import { loadState, saveState, loadAllRunningStates, parseTasks, goalNameToBranch, translateToBranchName } from './goal-state.js';
 import { getNextBatch, isGoalComplete, isGoalStuck, getProgressSummary } from './task-scheduler.js';
@@ -343,7 +344,8 @@ export class GoalOrchestrator {
         iconOpts.icon_color = 0x6FB9F0;
       }
 
-      const topicName = `${state.goalName}/${task.id}`;
+      const title = await generateTopicTitle(task.description);
+      const topicName = `${task.id} ${title}`;
       const forumTopic = await this.deps.telegram.createForumTopic(groupId, topicName, iconOpts);
       const newTopicId = forumTopic.message_thread_id;
 

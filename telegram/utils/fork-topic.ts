@@ -29,6 +29,7 @@ export async function forkTopicCore(
   parentTopicId: number,
   branchName: string,
   deps: ForkTopicDeps,
+  topicTitle?: string,
 ): Promise<ForkTopicResult> {
   const { stateManager, telegram, worktreesDir } = deps;
 
@@ -47,7 +48,7 @@ export async function forkTopicCore(
   await mkdir(worktreesDir, { recursive: true });
   await createWorktree(session.cwd, worktreeDir, branchName);
 
-  const newTopicName = `${session.name}/${branchName}`;
+  const newTopicName = topicTitle || `${session.name}/${branchName}`;
   const rootSession = stateManager.getRootSession(groupId, parentTopicId);
   const iconOpts: Record<string, any> = {};
   if (rootSession?.iconCustomEmojiId) {
