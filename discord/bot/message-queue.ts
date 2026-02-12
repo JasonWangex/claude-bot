@@ -23,6 +23,7 @@ import {
   type MessageActionRowComponentBuilder,
 } from 'discord.js';
 import { logger } from '../utils/logger.js';
+import { isOssEnabled, uploadToOss } from '../utils/oss.js';
 
 // --- 操作类型 ---
 
@@ -456,6 +457,37 @@ export class MessageQueue {
     if (!channel || !('send' in channel)) {
       op.reject(new Error(`Channel ${op.channelId} not found or not sendable`));
       return;
+    }
+
+    // OSS 上传分支：上传文件并发送签名链接
+    if (isOssEnabled()) {
+      try {
+        const signedUrl = await uploadToOss(op.content, op.filename);
+        const maxCaptionLen = this.MAX_MESSAGE_LENGTH - signedUrl.length - 4;
+        const text = op.caption && maxCaptionLen > 0
+          ? `${op.caption.slice(0, maxCaptionLen)}\n\n${signedUrl}`
+          : signedUrl;
+        const msgOpts: MessageCreateOptions = {
+          content: text,
+          ...(op.silent && { flags: MessageFlags.SuppressNotifications }),
+        };
+        for (let attempt = 0; attempt <= this.MAX_RETRY; attempt++) {
+          try {
+            const msg = await (channel as any).send(msgOpts);
+            op.resolve(msg.id);
+            return;
+          } catch (sendError: any) {
+            if (this.isRateLimit(sendError) && attempt < this.MAX_RETRY) {
+              await this.backoffRateLimit(sendError);
+              continue;
+            }
+            throw sendError; // 非 rate limit → 外层 catch → fall through
+          }
+        }
+      } catch (error: any) {
+        logger.warn('OSS upload/send failed, falling back to attachment:', error.message);
+        // fall through 到原有附件逻辑
+      }
     }
 
     for (let attempt = 0; attempt <= this.MAX_RETRY; attempt++) {

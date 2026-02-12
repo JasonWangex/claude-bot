@@ -12,6 +12,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 import { markdownToHtml } from './message-utils.js';
 import { logger } from '../utils/logger.js';
+import { isOssEnabled, uploadToOss } from '../utils/oss.js';
 
 // --- 操作类型 ---
 
@@ -480,6 +481,37 @@ export class MessageQueue {
 
   private async executeSendDocument(op: SendDocumentOp): Promise<void> {
     const disableNotification = op.silent !== false;  // 默认静默
+
+    // OSS 上传分支：上传文件并发送签名链接
+    if (isOssEnabled()) {
+      try {
+        const signedUrl = await uploadToOss(op.content, op.filename);
+        const maxCaptionLen = 4096 - signedUrl.length - 4;
+        const text = op.caption && maxCaptionLen > 0
+          ? `${op.caption.slice(0, maxCaptionLen)}\n\n${signedUrl}`
+          : signedUrl;
+        for (let attempt = 0; attempt <= this.MAX_RETRY; attempt++) {
+          try {
+            const msg = await this.telegram.sendMessage(op.chatId, text, {
+              message_thread_id: op.topicId,
+              disable_notification: disableNotification,
+            });
+            op.resolve(msg.message_id);
+            return;
+          } catch (sendError: any) {
+            if (this.is429(sendError) && attempt < this.MAX_RETRY) {
+              await this.backoff429(sendError, op.chatId);
+              continue;
+            }
+            throw sendError; // 非 429 → 外层 catch → fall through
+          }
+        }
+      } catch (error: any) {
+        logger.warn('OSS upload/send failed, falling back to attachment:', error.message);
+        // fall through 到原有附件逻辑
+      }
+    }
+
     const tmpFile = join(tmpdir(), `claude-mq-${Date.now()}-${op.filename}`);
     try {
       writeFileSync(tmpFile, op.content, 'utf-8');
