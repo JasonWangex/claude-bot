@@ -257,7 +257,7 @@ async function handleMerge(
 
   const guildId = interaction.guildId!;
   const target = interaction.options.getString('target', true);
-  const { stateManager, messageQueue } = deps;
+  const { stateManager, messageHandler, messageQueue } = deps;
 
   // 查找匹配的 session
   const allSessions = stateManager.getAllSessions(guildId);
@@ -310,19 +310,17 @@ async function handleMerge(
     .replaceAll('{{TARGET_CWD}}', targetSession.cwd)
     .replaceAll('{{MAIN_CWD}}', mainCwd);
 
-  // 确定回复的 channel（优先当前 task channel，否则目标 channel）
-  const currentSession = stateManager.getSession(guildId, interaction.channelId);
-  const replyThreadId = currentSession
-    ? interaction.channelId
-    : targetSession.threadId;
-
   await interaction.editReply(
     `Merging: **${targetSession.name}**\n` +
     `Branch: \`${targetSession.worktreeBranch}\`\n` +
     `Working directory: \`${targetSession.cwd}\``
   );
 
-  spawnSkillProcess('merge', prompt, mainCwd, replyThreadId, messageQueue, { maxTurns: 5 });
+  // 在目标 session 中执行 merge（而非开独立 claude -p 进程）
+  messageHandler.handleBackgroundChat(guildId, targetSession.threadId, prompt).catch((err) => {
+    logger.error('merge failed:', err.message);
+    messageQueue.sendLong(targetSession.threadId, `merge failed: ${err.message}`).catch(() => {});
+  });
 }
 
 // ========== spawnSkillProcess ==========
