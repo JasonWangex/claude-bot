@@ -158,6 +158,22 @@ export class ClaudeClient {
     return this.executor.abort(lockKey);
   }
 
+  abortRunning(lockKey: string): { aborted: boolean; queueLength: number } {
+    return this.executor.abortRunning(lockKey);
+  }
+
+  updateProgressInfo(lockKey: string, text: string, toolUseCount: number): void {
+    this.executor.updateProgressInfo(lockKey, text, toolUseCount);
+  }
+
+  consumeInterruptContext(lockKey: string): { lastProgressText: string; toolUseCount: number } | null {
+    return this.executor.consumeInterruptContext(lockKey);
+  }
+
+  getQueueLength(lockKey: string): number {
+    return this.executor.getQueueLength(lockKey);
+  }
+
   isRunning(lockKey: string): boolean {
     return this.executor.isRunning(lockKey);
   }

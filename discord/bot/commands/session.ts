@@ -35,7 +35,12 @@ export const sessionCommands = [
 
   new SlashCommandBuilder()
     .setName('stop')
-    .setDescription('Stop the currently running Claude task'),
+    .setDescription('Stop the currently running Claude task')
+    .addStringOption(opt =>
+      opt.setName('message')
+        .setDescription('Follow-up message to send after stopping (interrupt & resume)')
+        .setRequired(false)
+    ),
 
   new SlashCommandBuilder()
     .setName('attach')
@@ -183,7 +188,7 @@ async function handleStop(
 
   const guildId = interaction.guildId!;
   const threadId = interaction.channelId;
-  const { stateManager, claudeClient } = deps;
+  const { stateManager, claudeClient, messageHandler } = deps;
 
   const session = stateManager.getSession(guildId, threadId);
   if (!session) {
@@ -192,10 +197,27 @@ async function handleStop(
   }
 
   const lockKey = StateManager.threadLockKey(guildId, threadId);
-  const wasRunning = claudeClient.abort(lockKey);
-  await interaction.reply(wasRunning
-    ? 'Stopping task...'
-    : 'No running task to stop.');
+  const followUpMessage = interaction.options.getString('message');
+
+  if (followUpMessage) {
+    // 有 follow-up message: 只杀进程，不排空队列，然后发送新消息
+    const result = claudeClient.abortRunning(lockKey);
+    if (!result.aborted) {
+      await interaction.reply({ content: 'No running task to interrupt.', ephemeral: true });
+      return;
+    }
+    await interaction.reply(`Interrupting and sending: ${followUpMessage.slice(0, 100)}...`);
+    // 新消息通过正常流程发送，会自动 acquireLock 等待进程退出后执行
+    messageHandler.sendChatByIds(guildId, threadId, followUpMessage).catch(err => {
+      logger.error(`[/stop follow-up] error:`, err.message);
+    });
+  } else {
+    // 无 message: 原有行为，全停
+    const wasRunning = claudeClient.abort(lockKey);
+    await interaction.reply(wasRunning
+      ? 'Stopping task...'
+      : 'No running task to stop.');
+  }
 }
 
 // ========== /attach ==========

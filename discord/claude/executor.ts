@@ -28,6 +28,8 @@ interface ActiveProcess {
   threadId?: string;
   claudeSessionId?: string;
   cwd?: string;
+  lastProgressText?: string;
+  toolUseCount?: number;
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -45,6 +47,7 @@ export class ClaudeExecutor {
   private stallTimeout: number;
   private locks: Map<string, LockEntry> = new Map();
   private activeProcesses: Map<string, ActiveProcess> = new Map();
+  private interruptContext: Map<string, { lastProgressText: string; toolUseCount: number }> = new Map();
   private processDir: string;
   private registryFile: string;
 
@@ -502,33 +505,37 @@ export class ClaudeExecutor {
   }
 
   /**
+   * 解析 lockKey 前缀，返回所有匹配的完整 key
+   */
+  private resolveKeys(lockKeyOrPrefix: string): string[] {
+    // 尝试精确匹配
+    if (this.locks.has(lockKeyOrPrefix) || this.activeProcesses.has(lockKeyOrPrefix)) {
+      return [lockKeyOrPrefix];
+    }
+
+    // 前缀匹配
+    const matched: string[] = [];
+    for (const key of this.locks.keys()) {
+      if (key.startsWith(lockKeyOrPrefix)) {
+        matched.push(key);
+      }
+    }
+    for (const key of this.activeProcesses.keys()) {
+      if (key.startsWith(lockKeyOrPrefix) && !matched.includes(key)) {
+        matched.push(key);
+      }
+    }
+    return matched;
+  }
+
+  /**
    * 中止指定 lockKey 的运行中进程 + 排空等待队列
    * 支持前缀匹配（用于按钮的截断 lockKey）
    */
   abort(lockKeyOrPrefix: string): boolean {
     let aborted = false;
+    const matchedKeys = this.resolveKeys(lockKeyOrPrefix);
 
-    // 尝试精确匹配
-    let matchedKeys = [lockKeyOrPrefix];
-
-    // 如果精确匹配失败，尝试前缀匹配
-    if (!this.locks.has(lockKeyOrPrefix) && !this.activeProcesses.has(lockKeyOrPrefix)) {
-      matchedKeys = [];
-      // 在 locks 中查找
-      for (const key of this.locks.keys()) {
-        if (key.startsWith(lockKeyOrPrefix)) {
-          matchedKeys.push(key);
-        }
-      }
-      // 在 activeProcesses 中查找
-      for (const key of this.activeProcesses.keys()) {
-        if (key.startsWith(lockKeyOrPrefix) && !matchedKeys.includes(key)) {
-          matchedKeys.push(key);
-        }
-      }
-    }
-
-    // 对所有匹配的 key 执行 abort
     for (const lockKey of matchedKeys) {
       // 1. 先排空队列（reject 所有等待中的请求），防止 releaseLock 时 dequeue
       const entry = this.locks.get(lockKey);
@@ -553,6 +560,80 @@ export class ClaudeExecutor {
     }
 
     return aborted;
+  }
+
+  /**
+   * 只杀运行中的进程，不排空队列
+   * 队列中的消息会在进程退出后自然获得锁并继续执行
+   */
+  abortRunning(lockKeyOrPrefix: string): { aborted: boolean; queueLength: number } {
+    const matchedKeys = this.resolveKeys(lockKeyOrPrefix);
+    let aborted = false;
+    let queueLength = 0;
+
+    for (const lockKey of matchedKeys) {
+      const entry = this.locks.get(lockKey);
+      if (entry) queueLength += entry.queue.length;
+
+      const active = this.activeProcesses.get(lockKey);
+      if (active) {
+        // 保存中断上下文
+        if (active.lastProgressText) {
+          this.interruptContext.set(lockKey, {
+            lastProgressText: active.lastProgressText,
+            toolUseCount: active.toolUseCount || 0,
+          });
+          // 30 秒后自动清理防止内存泄漏
+          setTimeout(() => this.interruptContext.delete(lockKey), 30000);
+        }
+
+        active.flags.aborted = true;
+        if (active.timeoutHandle) clearTimeout(active.timeoutHandle);
+        active.child.kill('SIGTERM');
+        active.killTimer = setTimeout(() => {
+          if (active.child.exitCode === null) active.child.kill('SIGKILL');
+        }, 3000);
+        aborted = true;
+      }
+    }
+
+    return { aborted, queueLength };
+  }
+
+  /**
+   * 更新活跃进程的进度信息（供 handler 回写）
+   */
+  updateProgressInfo(lockKey: string, text: string, toolUseCount: number): void {
+    const active = this.activeProcesses.get(lockKey);
+    if (active) {
+      active.lastProgressText = text;
+      active.toolUseCount = toolUseCount;
+    }
+  }
+
+  /**
+   * 消费中断上下文（一次性读取后删除）
+   */
+  consumeInterruptContext(lockKey: string): { lastProgressText: string; toolUseCount: number } | null {
+    const ctx = this.interruptContext.get(lockKey);
+    if (ctx) {
+      this.interruptContext.delete(lockKey);
+      return ctx;
+    }
+    return null;
+  }
+
+  /**
+   * 查询指定 lockKey 的队列长度
+   */
+  getQueueLength(lockKeyOrPrefix: string): number {
+    const matchedKeys = this.resolveKeys(lockKeyOrPrefix);
+    let total = 0;
+    for (const key of matchedKeys) {
+      const entry = this.locks.get(key);
+      if (entry) total += entry.queue.length;
+    }
+    return total;
   }
 
   /**
