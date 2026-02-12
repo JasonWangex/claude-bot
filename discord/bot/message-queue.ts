@@ -2,7 +2,7 @@
  * Discord 消息队列：生产者-消费者模型
  * 解耦 Claude 输出与 Discord API 调用，统一 rate limiting 和错误处理
  *
- * Per-Thread 节流：普通消息在 ThreadBuffer 中缓冲 10 秒后合并发送，
+ * Per-Thread 节流：普通消息在 ThreadBuffer 中缓冲 3 秒后合并发送，
  * 高优先级消息和每个 thread 的第一条消息立即发送。
  *
  * 消息长度策略：
@@ -97,9 +97,9 @@ export class MessageQueue {
 
   // 配置（Discord rate limit: 5 messages per 5 seconds per channel）
   private readonly FLUSH_INTERVAL = 100;
-  private readonly MIN_OP_INTERVAL = 1100;     // Discord 速率限制更严格
+  private readonly MIN_OP_INTERVAL = 300;
   private readonly MAX_RETRY = 2;
-  private readonly THREAD_BUFFER_WINDOW = 10000;  // 10s 缓冲窗口
+  private readonly THREAD_BUFFER_WINDOW = 3000;   // 3s 缓冲窗口
   private readonly MERGE_SEPARATOR = '\n\n───\n\n';
   private readonly MAX_MERGE_LENGTH = 1800;        // Discord 2000 字符限制，留余量
   private readonly MAX_MESSAGE_LENGTH = 2000;
