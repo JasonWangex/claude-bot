@@ -6,8 +6,8 @@
 
 **项目名称**: claude-bot
 **项目位置**: `/home/jason/projects/claude-bot`
-**项目类型**: Discord Bot + REST API
-**主要功能**: 通过 Discord 和本地 API 与 Claude Code CLI 交互，支持多 Forum Post 并行开发、Goal 自动调度、Notion 集成
+**项目类型**: Discord Bot + REST API + Local Skills
+**主要功能**: 通过 Discord 和本地 API 与 Claude Code CLI 交互，支持多 Task 并行开发、Goal 自动调度、Notion 集成、本地 Skill 工作流
 
 ## 技术栈
 
@@ -15,6 +15,9 @@
 - **语言**: TypeScript 5.9 (strict mode)
 - **Discord**: discord.js 14.x
 - **Claude**: Claude Code CLI (stream-json 解析)
+- **LLM**: DeepSeek API (轻量任务：分支名/标题生成)
+- **图片处理**: sharp (压缩、缩放)
+- **云存储**: ali-oss (阿里云 OSS，可选)
 - **监控**: 独立 ProcessMonitor 守护进程 (Discord REST API 通知)
 
 ## 项目结构
@@ -22,7 +25,7 @@
 ```
 claude-bot/
 ├── discord/                 # 主应用
-│   ├── index.ts             # 入口：加载配置、启动 Bot
+│   ├── index.ts             # 入口：加载配置、初始化 OSS、启动 Bot
 │   ├── bot/
 │   │   ├── discord.ts       # DiscordBot 主类：组件初始化、Handler 注册、生命周期
 │   │   ├── handlers.ts      # MessageHandler：文本消息处理、Claude 流式执行
@@ -42,7 +45,7 @@ claude-bot/
 │   ├── claude/
 │   │   ├── client.ts        # ClaudeClient：封装 executor
 │   │   └── executor.ts      # ClaudeExecutor：进程管理、流解析、stall 检测
-│   ├── orchestrator/         # Goal 自动调度引擎
+│   ├── orchestrator/        # Goal 自动调度引擎
 │   │   ├── index.ts         # GoalOrchestrator：drive 生命周期、任务派发、merge
 │   │   ├── goal-state.ts    # 状态持久化：读写 data/goals/<id>.json
 │   │   ├── goal-branch.ts   # Git 分支操作：创建/合并/清理 goal 和子任务分支
@@ -50,7 +53,15 @@ claude-bot/
 │   │   └── task-scheduler.ts # 调度算法：依赖分析、并发控制、进度统计
 │   ├── api/
 │   │   ├── server.ts        # HTTP API 服务器 (127.0.0.1:3456)
-│   │   ├── routes/          # RESTful 路由（tasks, goals, messages 等）
+│   │   ├── routes/          # RESTful 路由
+│   │   │   ├── health.ts    # 健康检查
+│   │   │   ├── status.ts    # 全局状态
+│   │   │   ├── tasks.ts     # Task CRUD
+│   │   │   ├── goals.ts     # Goal Drive API
+│   │   │   ├── qdev.ts      # 快速开发 API
+│   │   │   ├── messages.ts  # 消息发送
+│   │   │   ├── models.ts    # 模型管理
+│   │   │   └── session-ops.ts # 会话操作 (clear/compact/rewind/stop)
 │   │   ├── types.ts         # API 类型定义
 │   │   └── middleware.ts    # JSON 响应工具
 │   ├── utils/
@@ -58,10 +69,11 @@ claude-bot/
 │   │   ├── env.ts           # AUTHORIZED_GUILD_ID / GENERAL_CHANNEL_ID 读写
 │   │   ├── logger.ts        # 日志工具
 │   │   ├── git-utils.ts     # Git 操作：worktree、merge、分支名生成
-│   │   ├── llm.ts           # LLM 工具（标题生成等）
-│   │   ├── fork-task.ts     # Fork 核心：创建 worktree + Forum Post + session
+│   │   ├── llm.ts           # DeepSeek API：分支名/标题生成
+│   │   ├── fork-task.ts     # Fork 核心：创建 worktree + Thread + session
 │   │   ├── topic-path.ts    # 目录命名
-│   │   └── image-processor.ts # Discord 附件图片处理
+│   │   ├── image-processor.ts # 图片下载、压缩、base64 编码
+│   │   └── oss.ts           # 阿里云 OSS 文件上传（可选）
 │   └── types/index.ts       # 全局类型：Session, StreamEvent, GoalDriveState 等
 │
 ├── monitor/                  # 进程监控守护进程
@@ -69,34 +81,54 @@ claude-bot/
 │   ├── process-monitor.ts   # 崩溃检测 + Discord REST API 通知
 │   └── types.ts             # 监控类型
 │
-├── data/                     # 持久化数据
+├── skills/                   # 本地 Claude Code Skills
+│   ├── commit/              # 代码审查与提交
+│   ├── qdev/                # 快速创建开发任务
+│   ├── goal/                # 目标管理
+│   ├── merge/               # 分支合并与清理
+│   ├── idea/                # 想法记录与推进
+│   ├── devlog/              # 开发日志（写入 Notion）
+│   ├── review/              # 日报/周报生成
+│   └── dc/                  # Discord Bot 远程控制
+│
+├── scripts/                  # 自动化脚本
+│   ├── install-skills.sh    # 安装 skills 符号链接到 ~/.claude/skills/
+│   ├── daily-review.sh      # 每日自动发送日报（cron）
+│   └── debug-session.sh     # 会话调试工具
+│
+├── data/                     # 持久化数据（运行时创建）
 │   ├── discord-states.json  # Bot 状态（sessions + guilds）
 │   ├── goals/               # Goal Drive 状态文件（<goalId>.json）
 │   └── processes/           # Claude 进程输出临时文件
 │
-├── deploy.sh                # 生产部署 (systemd)
-└── package.json             # 依赖配置
+├── docs/
+│   └── CLAUDE.md            # 项目文档
+├── deploy.sh                # 生产部署 (systemd + cron + skills)
+├── package.json             # 依赖配置
+├── tsconfig.json            # TypeScript 配置
+└── example.env              # 环境变量模板
 ```
 
 ## 核心架构
 
-### Discord Bot (Guild + Forum Posts)
+### Discord Bot (Category + Text Channels)
 
 ```
 Discord Server (授权的 Guild ID)
 ├── #general              → 全局命令: /login, /status, /model
-├── Forum: claude-bot     → Project Forum Channel
-│   ├── [Post] feat/task-a → Session A (独立 cwd、Claude 上下文)
-│   └── [Post] fix/task-b  → Session B (并行执行)
-└── Forum: another-project
-    └── [Post] feat/feature → Session C
+├── Category: claude-bot  → 项目 Category
+│   ├── [Channel] feat/task-a → Session A (独立 cwd、Claude 上下文)
+│   └── [Channel] fix/task-b  → Session B (并行执行)
+└── Category: another-project
+    └── [Channel] feat/feature → Session C
 ```
 
-每个 Forum Post (Thread) 是独立的开发会话，支持：
+每个 Task (Text Channel) 是独立的开发会话，支持：
 - 独立工作目录和 Claude session
 - Git worktree 分支隔离
 - 并行执行互不干扰
-- Forum Tags 状态追踪 (developing/merged/closed)
+- 父子 Task 通过 `parentThreadId` 关联
+- Fork 支持（创建 worktree 子 Task）
 
 ### 消息队列 (MessageQueue)
 
@@ -105,7 +137,7 @@ Discord Server (授权的 Guild ID)
 - **Per-thread 节流**: 普通消息缓冲 10s 后合并发送
 - **优先级**: high（立即发送）/ normal（走缓冲区）
 - **Rate limiting**: 100ms flush 间隔，1100ms 操作间隔
-- **消息长度策略**: < 2000 原生 Markdown, 2000-4096 Embed, > 4096 文件附件
+- **消息长度策略**: < 2000 原生 Markdown, 2000-4096 Embed, > 4096 文件附件/OSS
 - **Edit 合并**: 连续同 messageId 的 edit 只保留最后一个
 - **串行 Promise 链**: 文本发送 + 进度重建严格串行
 
@@ -116,75 +148,216 @@ Discord Server (授权的 Guild ID)
 - Model Switch → StringSelectMenu
 - 自动检测 CLI auto-denial，显示 Discord UI 收集用户输入
 
+### Goal 自动调度引擎 (Orchestrator)
+
+自动化多任务开发流程：
+
+1. 启动 Goal drive（创建 goal 分支 + worktree）
+2. 解析子任务依赖关系（支持 Phase 分组）
+3. 自动派发可执行任务到独立 worktree/Discord Thread
+4. 监控子任务完成 → 自动 merge 到 goal 分支
+5. 异常时暂停等待用户干预
+
+关键特性：
+- **依赖分析**: DAG 拓扑排序
+- **Phase 分组**: Phase N 在 Phase N-1 全部完成后执行
+- **并发控制**: 最大并发数可配置
+- **自动 merge**: 子任务完成后自动合并到 goal 分支
+
+### 阿里云 OSS (可选)
+
+- 配置后文件自动上传到 OSS 并发送签名链接（24h 有效）
+- 未配置时静默降级为 Discord 附件
+- 文件路径: `bot-files/YYYY/MM/DD/<timestamp>-<random>-<filename>`
+
+### 图片处理
+
+- 从 Discord CDN 下载图片并智能压缩
+- 小 PNG（< 200KB）保持原格式，大图压缩为 JPEG（quality=80）
+- 超过 1568px 的图片按比例缩放
+- 最大下载限制 20MB，返回 base64 供 Claude API 使用
+
 ### REST API (127.0.0.1:3456)
 
+#### 系统
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | GET | /api/health | 健康检查 |
 | GET | /api/status | 全局状态 |
-| GET/POST | /api/tasks | 列出/创建 Task |
-| GET/PATCH/DELETE | /api/tasks/:threadId | Task CRUD |
-| POST | /api/tasks/:threadId/fork | Fork（创建 worktree 子 Task） |
-| POST | /api/tasks/:threadId/qdev | 快速创建开发任务 |
+
+#### 模型
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /api/models | 可用模型列表 |
+| PUT | /api/models/default | 设置全局默认模型 |
+
+#### Task
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /api/tasks | 列出所有 Task（树形结构） |
+| POST | /api/tasks | 创建 Task |
+| GET | /api/tasks/:threadId | Task 详情 |
+| PATCH | /api/tasks/:threadId | 更新 Task (name/model/cwd) |
+| DELETE | /api/tasks/:threadId | 删除（归档 Thread） |
+| POST | /api/tasks/:threadId/archive | 归档 Task |
+| POST | /api/tasks/:threadId/fork | Fork Task（创建 worktree） |
+| POST | /api/tasks/:threadId/qdev | 快速创建开发子任务 |
 | POST | /api/tasks/:threadId/message | 发消息（触发 Claude 执行） |
-| POST | /api/tasks/:threadId/clear\|compact\|rewind\|stop | 会话操作 |
-| GET/PUT | /api/models | 模型管理 |
+| POST | /api/tasks/:threadId/clear | 清空上下文 |
+| POST | /api/tasks/:threadId/compact | 压缩上下文 |
+| POST | /api/tasks/:threadId/rewind | 撤销最后一轮 |
+| POST | /api/tasks/:threadId/stop | 停止任务 |
+
+#### Goal Drive
+| 方法 | 路径 | 说明 |
+|------|------|------|
 | POST | /api/goals/:id/drive | 启动 Goal 自动驱动 |
 | GET | /api/goals/:id/status | 查看 Drive 状态 |
-| POST | /api/goals/:id/pause\|resume | 暂停/恢复 Drive |
-| POST | /api/goals/:id/tasks/:taskId/skip\|done\|retry | 子任务操作 |
+| POST | /api/goals/:id/pause | 暂停 Drive |
+| POST | /api/goals/:id/resume | 恢复 Drive |
+| POST | /api/goals/:id/tasks/:taskId/skip | 跳过子任务 |
+| POST | /api/goals/:id/tasks/:taskId/done | 标记手动任务完成 |
+| POST | /api/goals/:id/tasks/:taskId/retry | 重试失败任务 |
 
 ## Slash Commands
 
 ### #general (Text Channel)
-- `/login <token>` - 绑定 Bot
+- `/login <token>` - 绑定 Bot 到 Server
+- `/start` - 显示欢迎信息
 - `/status` - 所有 Task 状态
 - `/model` - 全局默认模型
 - `/help` - 命令列表
 
-### Forum Post (Thread) 内
+### Task (Text Channel) 内
+
+**Session 管理**:
 - `/plan <msg>` - Plan 模式
-- `/cd <path>` - 切换工作目录
 - `/clear` - 清空上下文
 - `/compact` - 压缩上下文
 - `/rewind` - 撤销最后一轮
-- `/stop` - 停止任务
+- `/stop [msg]` - 停止任务（可选：interrupt & resume）
+- `/attach [id]` - 接管其他 Claude session
+
+**Task 管理**:
+- `/task <name>` - 创建新 Task（Category 下 Text Channel）
+- `/close [force]` - 关闭 Thread 并清理 worktree/分支
 - `/info` - 会话详情
-- `/close` - 关闭 Thread 并清理
-- `/qdev <描述>` - 快速创建开发分支
-- `/idea <描述>` - 记录/推进想法
-- `/commit` - 审查并提交代码
-- `/merge <target>` - 合并分支并清理
+- `/cd [path]` - 切换/查看工作目录
 - `/model` - 切换 Thread 模型
-- `/attach <session_id>` - 接管其他会话
+
+**开发工作流**:
+- `/qdev <描述>` - 快速创建开发分支 + Task
+- `/idea [内容]` - 记录想法或推进已有 Idea
+- `/commit [msg]` - 审查并提交代码
+- `/merge <target>` - 合并分支并清理
+
+## Local Skills
+
+项目包含 8 个本地 Claude Code Skills（通过 `scripts/install-skills.sh` 安装到 `~/.claude/skills/`）：
+
+| Skill | 说明 |
+|-------|------|
+| `/commit` | 代码审查 + 提交（先 audit 再 commit，Conventional Commits 格式） |
+| `/qdev` | 快速创建开发任务（通过 Bot API fork root task + 发送描述） |
+| `/goal` | 目标管理（列表/搜索/创建/批量 drive all，Notion Goals 集成） |
+| `/merge` | 分支合并与清理（merge → 删 worktree → 删分支 → 删 Thread → devlog） |
+| `/idea` | 想法记录（写入 Notion Status=Idea）或推进已有 Idea（→ qdev） |
+| `/devlog` | 开发日志（收集 git 信息 → 生成 Notion 页面，tag 追踪进度） |
+| `/review` | 日报/周报（从 Notion Dev Log + Goals 收集数据，生成结构化报告） |
+| `/dc` | Discord Bot 远程控制（通过本地 HTTP API 操作 Bot 所有功能） |
+
+## Notion 集成
+
+通过 Claude AI Notion MCP 深度集成：
+- **Goals Database** - 目标管理、子任务拆解、进度跟踪
+- **Dev Log Database** - 开发日志、合并记录、变更历史
 
 ## 环境变量
 
+### 必填
+| 变量 | 说明 |
+|------|------|
+| DISCORD_TOKEN | Discord Bot Token |
+| DISCORD_APPLICATION_ID | Discord Application ID |
+| BOT_ACCESS_TOKEN | 认证 Token |
+
+### 自动填充
+| 变量 | 说明 |
+|------|------|
+| AUTHORIZED_GUILD_ID | /login 后自动写入 |
+| GENERAL_CHANNEL_ID | /login 后自动写入 |
+
+### 工作目录
 | 变量 | 默认值 | 说明 |
 |------|--------|------|
-| DISCORD_TOKEN | 必填 | Discord Bot Token |
-| DISCORD_APPLICATION_ID | 必填 | Discord Application ID |
-| BOT_ACCESS_TOKEN | 必填 | 认证 Token |
-| AUTHORIZED_GUILD_ID | /login 后填充 | 授权 Guild ID |
-| GENERAL_CHANNEL_ID | /login 后填充 | #general 频道 ID |
 | DEFAULT_WORK_DIR | ~/ | 默认工作目录 |
-| MAX_TURNS | 20 | Claude 最大轮次 |
-| COMMAND_TIMEOUT | 300000 | 命令超时 (5min) |
-| STALL_TIMEOUT | 60000 | 无输出超时 (1min) |
-| API_PORT | 3456 | API 端口 (0=禁用) |
+| PROJECTS_ROOT | - | 项目根目录 |
 | WORKTREES_DIR | ${PROJECTS_ROOT}/worktrees | Worktree 目录 |
+
+### Claude CLI
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| COMMAND_TIMEOUT | 3600000 | 命令超时 (1h) |
+| MAX_TURNS | 500 | Claude 最大轮次 |
+| STALL_TIMEOUT | 60000 | 无输出超时 (1min) |
+
+### LLM
+| 变量 | 说明 |
+|------|------|
+| DEEPSEEK_API_KEY | DeepSeek API Key（轻量 LLM 任务） |
+| DEEPSEEK_BASE_URL | 可选，默认 https://api.deepseek.com |
+
+### API
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| API_PORT | 3456 | 本地 HTTP API 端口 (0=禁用) |
+
+### 进程监控
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| MONITOR_CHECK_INTERVAL | 5000 | 进程检查间隔 (5s) |
+| MONITOR_COOLDOWN | 180000 | 通知冷却期 (3min) |
+| MONITOR_MIN_RUNTIME | 2 | 最小运行时间 (秒) |
+| MONITOR_MAX_RUNTIME | 3600 | 最大运行时间 (秒) |
+| MONITOR_SERVICES | claude-discord | 要监控的服务 |
+
+### 阿里云 OSS (可选)
+| 变量 | 说明 |
+|------|------|
+| OSS_REGION | 地域 (如 oss-cn-hangzhou) |
+| OSS_BUCKET | Bucket 名称 |
+| OSS_ACCESS_KEY_ID | Access Key ID |
+| OSS_ACCESS_KEY_SECRET | Access Key Secret |
+| OSS_ENDPOINT | 自定义 Endpoint (可选) |
 
 ## 部署
 
+### 开发模式
 ```bash
-./deploy.sh deploy   # 完整部署（systemd reload + restart）
+npm run dev          # Discord Bot
+npm run dev:monitor  # Process Monitor
+```
+
+### 生产部署
+```bash
+./deploy.sh deploy   # 完整部署（install skills + cron + systemd）
 ./deploy.sh status   # 查看服务状态
 ./deploy.sh logs     # 查看日志
+./deploy.sh restart  # 重启服务
+./deploy.sh stop     # 停止服务
 ```
 
 **systemd 服务**:
 - `claude-discord.service` - Discord Bot
 - `claude-monitor.service` - 进程监控
+
+**Cron 任务**:
+- `daily-review.sh` - 每天 09:00 自动发送日报
+
+**Skills 安装**:
+```bash
+./scripts/install-skills.sh  # 符号链接到 ~/.claude/skills/
+```
 
 ## 可用模型
 
