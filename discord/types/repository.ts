@@ -222,3 +222,36 @@ export interface IIdeaRepo {
   findByProject(project: string): Promise<Idea[]>;
   findByProjectAndStatus(project: string, status: IdeaStatus): Promise<Idea[]>;
 }
+
+// ==================== 知识库 ====================
+
+/** 知识库条目 */
+export interface KnowledgeBase {
+  id: string;
+  title: string;
+  content: string;             // Markdown 正文
+  category: string | null;     // 分类
+  tags: string[];              // 标签数组
+  project: string;
+  source: string | null;       // 来源（关联 Goal / 任务等）
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * 知识库仓库
+ *
+ * 管理项目经验和教训。
+ * 主键: id
+ */
+export interface IKnowledgeBaseRepo {
+  get(id: string): Promise<KnowledgeBase | null>;
+  getAll(): Promise<KnowledgeBase[]>;
+  save(kb: KnowledgeBase): Promise<void>;
+  delete(id: string): Promise<boolean>;
+
+  // —— 查询 ——
+  findByProject(project: string): Promise<KnowledgeBase[]>;
+  findByCategory(category: string): Promise<KnowledgeBase[]>;
+  search(query: string): Promise<KnowledgeBase[]>;
+}
