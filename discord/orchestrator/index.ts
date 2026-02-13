@@ -17,7 +17,7 @@ import type { DiscordBotConfig, GoalDriveState, GoalTask, GoalTaskFeedback, Goal
 import type { IGoalRepo } from '../types/repository.js';
 import { stat, readFile, access } from 'fs/promises';
 import { join } from 'path';
-import { getAuthorizedGuildId } from '../utils/env.js';
+import { getAuthorizedGuildId, getGoalLogChannelId } from '../utils/env.js';
 import { generateTopicTitle } from '../utils/llm.js';
 import { execGit, resolveMainWorktree } from './git-ops.js';
 import { parseTasks, goalNameToBranch, translateToBranchName } from './goal-state.js';
@@ -790,7 +790,7 @@ export class GoalOrchestrator {
 
     await this.notify(state.goalThreadId,
       `[Pipeline] ${taskId}: 调研路径 → Opus 执行`,
-      'info',
+      'pipeline',
     );
 
     const taskPrompt = this.buildTaskPrompt(task, state);
@@ -823,7 +823,7 @@ export class GoalOrchestrator {
 
     await this.notify(state.goalThreadId,
       `[Pipeline] ${taskId}: 简单代码 → Sonnet 执行`,
-      'info',
+      'pipeline',
     );
 
     const taskPrompt = this.buildTaskPrompt(task, state);
@@ -867,7 +867,7 @@ export class GoalOrchestrator {
 
     await this.notify(state.goalThreadId,
       `[Pipeline] ${taskId}: 复杂代码 → Opus 规划`,
-      'info',
+      'pipeline',
     );
 
     const planPrompt = this.buildPlanPrompt(task, state);
@@ -895,7 +895,7 @@ export class GoalOrchestrator {
 
     await this.notify(state.goalThreadId,
       `[Pipeline] ${taskId}: 复杂代码 → Sonnet 执行${planExists ? '（按 plan）' : '（无 plan fallback）'}`,
-      'info',
+      'pipeline',
     );
 
     // 根据 plan 是否存在选择不同的 prompt
@@ -951,7 +951,7 @@ export class GoalOrchestrator {
 
       await this.notify(state.goalThreadId,
         `[Pipeline] ${taskId}: Audit 失败 → Sonnet 修复 (${retry}/${maxRetries})`,
-        'warning',
+        'pipeline',
       );
 
       const fixPrompt = this.buildFixPrompt(task, state, issues);
@@ -990,7 +990,7 @@ export class GoalOrchestrator {
 
     await this.notify(state.goalThreadId,
       `[Pipeline] ${taskId}: Opus 审查中...`,
-      'info',
+      'pipeline',
     );
 
     const auditPrompt = this.buildAuditPrompt(task, state);
@@ -2292,10 +2292,20 @@ export class GoalOrchestrator {
     return null;
   }
 
+  /**
+   * 发送通知到 goal thread 和/或日志 channel
+   *
+   * type 说明：
+   * - success/error/warning/info: 发到 goal thread（同时也发日志 channel）
+   * - pipeline: 仅发到日志 channel（如未配置则 fallback 到 goal thread）
+   *
+   * 颜色映射：
+   * - success → GREEN, error → RED, warning → YELLOW, info → GRAY, pipeline → BLUE
+   */
   private async notify(
     threadId: string,
     message: string,
-    type?: 'success' | 'error' | 'warning' | 'info',
+    type?: 'success' | 'error' | 'warning' | 'info' | 'pipeline',
     options?: { components?: import('discord.js').ActionRowBuilder<import('discord.js').MessageActionRowComponentBuilder>[] },
   ): Promise<void> {
     try {
@@ -2304,12 +2314,32 @@ export class GoalOrchestrator {
         error: EmbedColors.RED,
         warning: EmbedColors.YELLOW,
         info: EmbedColors.GRAY,
+        pipeline: EmbedColors.BLUE,
       };
       const embedColor = type ? colorMap[type] : undefined;
-      await this.deps.mq.sendLong(threadId, message, {
-        embedColor,
-        components: options?.components,
-      });
+      const logChannelId = getGoalLogChannelId();
+
+      if (type === 'pipeline') {
+        // pipeline 类型：仅发日志 channel（未配置则 fallback 到 goal thread）
+        const targetId = logChannelId || threadId;
+        await this.deps.mq.sendLong(targetId, message, {
+          embedColor,
+          components: options?.components,
+        });
+      } else {
+        // 其他类型：发到 goal thread
+        await this.deps.mq.sendLong(threadId, message, {
+          embedColor,
+          components: options?.components,
+        });
+        // 同时发到日志 channel（如已配置，且目标不同）
+        if (logChannelId && logChannelId !== threadId) {
+          await this.deps.mq.sendLong(logChannelId, message, {
+            embedColor,
+            silent: true,
+          });
+        }
+      }
     } catch (err: any) {
       logger.error(`[Orchestrator] Failed to send notification: ${err.message}`);
     }

@@ -33,6 +33,7 @@ export const EmbedColors = {
   RED: 0xED4245,      // 错误
   YELLOW: 0xFEE75C,   // 警告
   PURPLE: 0x9B59B6,   // 系统/API 来源消息
+  BLUE: 0x3498DB,     // Pipeline 阶段变化
 } as const;
 
 export type EmbedColor = typeof EmbedColors[keyof typeof EmbedColors] | number;

@@ -52,7 +52,7 @@ export interface HandleReplanDeps extends ApplyChangesDeps {
   notify: (
     threadId: string,
     message: string,
-    type?: 'success' | 'error' | 'warning' | 'info',
+    type?: 'success' | 'error' | 'warning' | 'info' | 'pipeline',
     options?: { components?: import('discord.js').ActionRowBuilder<import('discord.js').MessageActionRowComponentBuilder>[] },
   ) => Promise<void>;
 }
