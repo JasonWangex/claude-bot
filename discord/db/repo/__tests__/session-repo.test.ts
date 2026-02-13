@@ -87,15 +87,28 @@ describe('SessionRepository', () => {
   });
 
   describe('message history', () => {
-    it('should save and retrieve message history', async () => {
-      const now = Date.now();
+    it('should persist messageCount via save()', async () => {
       const session = makeSession({
         messageHistory: [
-          { role: 'user', text: 'Hi', timestamp: now },
-          { role: 'assistant', text: 'Hello!', timestamp: now + 1 },
+          { role: 'user', text: 'Hi', timestamp: Date.now() },
+          { role: 'assistant', text: 'Hello!', timestamp: Date.now() + 1 },
         ],
+        messageCount: 2,
       });
       await repo.save(session);
+
+      const result = await repo.get('guild-1', 'thread-1');
+      expect(result!.messageCount).toBe(2);
+      // save() no longer writes message_history rows — use addMessageAndTrim() for that
+      expect(result!.messageHistory).toHaveLength(0);
+    });
+
+    it('should add messages via addMessageAndTrim()', async () => {
+      await repo.save(makeSession());
+
+      const now = Date.now();
+      repo.addMessageAndTrim('sess-001', { role: 'user', text: 'Hi', timestamp: now }, undefined, undefined);
+      repo.addMessageAndTrim('sess-001', { role: 'assistant', text: 'Hello!', timestamp: now + 1 }, 'Hello!', now + 1);
 
       const result = await repo.get('guild-1', 'thread-1');
       expect(result!.messageHistory).toHaveLength(2);
@@ -103,23 +116,8 @@ describe('SessionRepository', () => {
       expect(result!.messageHistory[0].text).toBe('Hi');
       expect(result!.messageHistory[1].role).toBe('assistant');
       expect(result!.messageHistory[1].text).toBe('Hello!');
-    });
-
-    it('should replace message history on save', async () => {
-      const now = Date.now();
-      await repo.save(makeSession({
-        messageHistory: [{ role: 'user', text: 'old', timestamp: now }],
-      }));
-      await repo.save(makeSession({
-        messageHistory: [
-          { role: 'user', text: 'new1', timestamp: now + 1 },
-          { role: 'assistant', text: 'new2', timestamp: now + 2 },
-        ],
-      }));
-
-      const result = await repo.get('guild-1', 'thread-1');
-      expect(result!.messageHistory).toHaveLength(2);
-      expect(result!.messageHistory[0].text).toBe('new1');
+      expect(result!.messageCount).toBe(2);
+      expect(result!.lastMessage).toBe('Hello!');
     });
   });
 
