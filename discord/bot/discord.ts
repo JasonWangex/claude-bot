@@ -17,7 +17,7 @@ import { checkAuth } from './auth.js';
 import { logger } from '../utils/logger.js';
 import { ApiServer } from '../api/server.js';
 import { GoalOrchestrator } from '../orchestrator/index.js';
-import { parseGoalButtonId } from '../orchestrator/goal-buttons.js';
+import { parseGoalButtonId, GOAL_MODAL_PREFIX, buildApproveWithModsModal } from '../orchestrator/goal-buttons.js';
 import { initDb, getDb, closeDb } from '../db/index.js';
 import { GoalRepo, GoalTaskRepo, CheckpointRepo } from '../db/repo/index.js';
 import { GoalMetaRepo } from '../db/goal-meta-repo.js';
@@ -354,6 +354,18 @@ export class DiscordBot {
           break;
         }
 
+        case 'approve_with_mods': {
+          // 获取当前待审批变更的 JSON，预填到 Modal 中
+          const pendingChangesJson = await this.orchestrator.getPendingReplanChangesJson(goalId);
+          if (!pendingChangesJson) {
+            await interaction.reply({ content: '没有待审批的计划变更', ephemeral: true }).catch(() => {});
+            return;
+          }
+          const modal = buildApproveWithModsModal(goalId, pendingChangesJson);
+          await interaction.showModal(modal);
+          break;
+        }
+
         case 'rollback': {
           if (!extra) {
             await interaction.reply({ content: '缺少检查点 ID', ephemeral: true }).catch(() => {});
@@ -401,6 +413,12 @@ export class DiscordBot {
 
     const customId = interaction.customId;
 
+    // Goal orchestrator modal: goal_modal:<action>:<goalId>
+    if (customId.startsWith(GOAL_MODAL_PREFIX)) {
+      await this.handleGoalModalSubmit(interaction);
+      return;
+    }
+
     // Modal for custom text: modal:<prefix>
     if (customId.startsWith('modal:')) {
       const prefix = customId.slice('modal:'.length);
@@ -413,6 +431,57 @@ export class DiscordBot {
       const text = interaction.fields.getTextInputValue('custom_text');
       this.interactionRegistry.resolve(entry.toolUseId, text);
       await interaction.reply({ content: `Submitted: ${text.slice(0, 100)}...`, ephemeral: true }).catch(() => {});
+    }
+  }
+
+  /**
+   * 处理 Goal orchestrator modal 提交
+   * customId 格式: goal_modal:<action>:<goalId>
+   */
+  private async handleGoalModalSubmit(interaction: any): Promise<void> {
+    if (!this.orchestrator) {
+      await interaction.reply({ content: 'Orchestrator not available', ephemeral: true }).catch(() => {});
+      return;
+    }
+
+    const customId = interaction.customId as string;
+    const parts = customId.slice(GOAL_MODAL_PREFIX.length).split(':');
+    const action = parts[0];
+    const goalId = parts[1];
+
+    if (!goalId) {
+      await interaction.reply({ content: 'Invalid modal submission', ephemeral: true }).catch(() => {});
+      return;
+    }
+
+    try {
+      switch (action) {
+        case 'approve_with_mods': {
+          const changesJson = interaction.fields.getTextInputValue('changes_json');
+          await interaction.deferReply().catch(() => {});
+          const result = await this.orchestrator.approveReplanWithModifications(goalId, changesJson);
+          if (result.success) {
+            await interaction.editReply({
+              content: `✅ 修改后的计划已执行\n已应用 ${result.applied} 项变更` +
+                (result.rejected > 0 ? `，${result.rejected} 项被拒绝` : ''),
+            }).catch(() => {});
+          } else {
+            await interaction.editReply({
+              content: `❌ 执行失败: ${result.error}`,
+            }).catch(() => {});
+          }
+          break;
+        }
+
+        default:
+          await interaction.reply({ content: `Unknown goal modal action: ${action}`, ephemeral: true }).catch(() => {});
+      }
+    } catch (err: any) {
+      logger.error(`[DiscordBot] handleGoalModalSubmit error: ${err.message}`);
+      const reply = interaction.replied || interaction.deferred
+        ? interaction.editReply.bind(interaction)
+        : interaction.reply.bind(interaction);
+      await reply({ content: `操作失败: ${err.message}`, ephemeral: true }).catch(() => {});
     }
   }
 

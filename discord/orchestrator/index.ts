@@ -867,6 +867,77 @@ export class GoalOrchestrator {
   }
 
   /**
+   * 获取待审批 replan 变更的 JSON 文本（用于预填 Modal）
+   */
+  async getPendingReplanChangesJson(goalId: string): Promise<string | null> {
+    const state = await this.getState(goalId);
+    if (!state?.pendingReplan) return null;
+    return JSON.stringify(state.pendingReplan.changes, null, 2);
+  }
+
+  /**
+   * 用户修改后批准 replan（approve with modifications）
+   * 解析用户修改后的变更 JSON 并应用
+   */
+  async approveReplanWithModifications(
+    goalId: string,
+    modifiedChangesJson: string,
+  ): Promise<{ success: boolean; applied: number; rejected: number; error?: string }> {
+    const state = await this.getState(goalId);
+    if (!state) return { success: false, applied: 0, rejected: 0, error: 'Goal not found' };
+
+    if (!state.pendingReplan) {
+      return { success: false, applied: 0, rejected: 0, error: '没有待审批的计划变更' };
+    }
+
+    // 解析用户修改后的 JSON
+    let modifiedChanges: ReplanChange[];
+    try {
+      const parsed = JSON.parse(modifiedChangesJson);
+      if (!Array.isArray(parsed)) {
+        return { success: false, applied: 0, rejected: 0, error: 'JSON 必须是数组格式' };
+      }
+      modifiedChanges = parsed;
+    } catch (err: any) {
+      return { success: false, applied: 0, rejected: 0, error: `JSON 解析失败: ${err.message}` };
+    }
+
+    const pending = state.pendingReplan;
+
+    // 应用修改后的变更
+    const applyResult = await applyChanges(state, modifiedChanges, {
+      goalTaskRepo: this.deps.goalTaskRepo,
+      goalMetaRepo: this.deps.goalMetaRepo,
+    });
+
+    // 清除 pending 状态
+    delete state.pendingReplan;
+    await this.saveState(state);
+
+    await this.notify(state.goalThreadId,
+      `✅ **修改后的计划已批准并执行**\n` +
+      `已应用 ${applyResult.applied.length} 项变更` +
+      (applyResult.rejected.length > 0
+        ? `，${applyResult.rejected.length} 项被拒绝`
+        : '') +
+      `\n快照 ID: \`${pending.checkpointId}\``,
+      'success',
+      { components: buildReplanRollbackButton(goalId, pending.checkpointId) },
+    );
+
+    // 恢复调度
+    if (state.status === 'running') {
+      await this.reviewAndDispatch(state);
+    }
+
+    return {
+      success: true,
+      applied: applyResult.applied.length,
+      rejected: applyResult.rejected.length,
+    };
+  }
+
+  /**
    * 用户拒绝 replan（reject replan）
    * 丢弃待审批的变更，恢复调度
    */
