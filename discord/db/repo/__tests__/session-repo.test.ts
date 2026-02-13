@@ -86,7 +86,7 @@ describe('SessionRepository', () => {
   });
 
   describe('message history', () => {
-    it('should save and retrieve message history', async () => {
+    it('should not persist message history (table dropped in migration 005)', async () => {
       const now = Date.now();
       const session = makeSession({
         messageHistory: [
@@ -97,14 +97,11 @@ describe('SessionRepository', () => {
       await repo.save(session);
 
       const result = await repo.get('guild-1', 'thread-1');
-      expect(result!.messageHistory).toHaveLength(2);
-      expect(result!.messageHistory[0].role).toBe('user');
-      expect(result!.messageHistory[0].text).toBe('Hi');
-      expect(result!.messageHistory[1].role).toBe('assistant');
-      expect(result!.messageHistory[1].text).toBe('Hello!');
+      // messageHistory は常に空配列（message_history テーブル廃止後）
+      expect(result!.messageHistory).toHaveLength(0);
     });
 
-    it('should replace message history on save', async () => {
+    it('should always return empty message history', async () => {
       const now = Date.now();
       await repo.save(makeSession({
         messageHistory: [{ role: 'user', text: 'old', timestamp: now }],
@@ -117,8 +114,8 @@ describe('SessionRepository', () => {
       }));
 
       const result = await repo.get('guild-1', 'thread-1');
-      expect(result!.messageHistory).toHaveLength(2);
-      expect(result!.messageHistory[0].text).toBe('new1');
+      // messageHistory は常に空配列（message_history テーブル廃止後）
+      expect(result!.messageHistory).toHaveLength(0);
     });
   });
 
