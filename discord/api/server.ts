@@ -170,6 +170,23 @@ export class ApiServer {
     const pathname = url.pathname;
     const method = req.method || 'GET';
 
+    // CORS: allow web dashboard (restrict to known origins)
+    const allowedOrigin = process.env.CORS_ORIGIN || 'http://localhost:3000';
+    const requestOrigin = req.headers.origin;
+    if (allowedOrigin === '*') {
+      res.setHeader('Access-Control-Allow-Origin', '*');
+    } else if (requestOrigin && allowedOrigin.split(',').includes(requestOrigin)) {
+      res.setHeader('Access-Control-Allow-Origin', requestOrigin);
+    }
+    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+
+    if (method === 'OPTIONS') {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
     // 来源分类：localhost 免鉴权，Tailscale 需 token，其他拒绝
     const source = this.classifyRequest(req);
     if (source === 'denied') {

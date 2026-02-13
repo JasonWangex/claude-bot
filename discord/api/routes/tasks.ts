@@ -33,7 +33,9 @@ function sessionToSummary(s: Session, children: TaskSummary[]): TaskSummary {
     model: s.model || null,
     has_session: !!s.claudeSessionId,
     message_count: s.messageHistory.length,
-    last_active: s.lastMessageAt ? new Date(s.lastMessageAt).toISOString() : null,
+    created_at: s.createdAt,
+    last_message: s.lastMessage || null,
+    last_message_at: s.lastMessageAt || null,
     parent_thread_id: s.parentThreadId || null,
     worktree_branch: s.worktreeBranch || null,
     children,
@@ -171,8 +173,8 @@ export const getTask: RouteHandler = async (_req, res, params, deps) => {
     data: {
       ...sessionToSummary(session, childSummaries),
       claude_session_id: session.claudeSessionId || null,
-      created_at: new Date(session.createdAt).toISOString(),
       plan_mode: !!session.planMode,
+      message_history: session.messageHistory,
     },
   });
 };
@@ -242,8 +244,8 @@ export const updateTask: RouteHandler = async (req, res, params, deps) => {
     data: {
       ...sessionToSummary(updated, childSummaries),
       claude_session_id: updated.claudeSessionId || null,
-      created_at: new Date(updated.createdAt).toISOString(),
       plan_mode: !!updated.planMode,
+      message_history: updated.messageHistory,
     },
   });
 };
