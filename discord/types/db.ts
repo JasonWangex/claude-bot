@@ -150,6 +150,8 @@ export interface GoalRow {
   drive_created_at: number | null;
   /** Drive 最近更新时间 (Unix ms) */
   drive_updated_at: number | null;
+  /** JSON: pendingReplan + pendingRollback（重启恢复用） */
+  drive_pending_json: string | null;
 }
 
 // ================================================================
@@ -164,11 +166,11 @@ export interface GoalTaskRow {
   /** 任务描述 */
   description: string;
   /** 任务类型 */
-  type: '代码' | '手动' | '调研';
+  type: '代码' | '手动' | '调研' | '占位';
   /** 阶段编号 */
   phase: number | null;
   /** 执行状态 */
-  status: 'pending' | 'dispatched' | 'running' | 'completed' | 'failed' | 'blocked' | 'skipped';
+  status: 'pending' | 'dispatched' | 'running' | 'completed' | 'failed' | 'blocked' | 'blocked_feedback' | 'paused' | 'cancelled' | 'skipped';
   /** git 分支名 */
   branch_name: string | null;
   /** 对应的 Discord Thread ID */
@@ -183,6 +185,8 @@ export interface GoalTaskRow {
   merged: number;
   /** 是否已通知阻塞 (0/1) */
   notified_blocked: number;
+  /** JSON: GoalTaskFeedback（feedback/<taskId>.json 的内容） */
+  feedback_json: string | null;
 }
 
 // ================================================================
@@ -246,6 +250,31 @@ export interface IdeaRow {
   created_at: number;
   /** 更新时间 (Unix ms) */
   updated_at: number;
+}
+
+// ================================================================
+// goal_checkpoints 表 — 对应 GoalCheckpoint 接口
+// ================================================================
+
+export interface GoalCheckpointRow {
+  /** UUID (PRIMARY KEY) */
+  id: string;
+  /** 所属 Goal ID (FOREIGN KEY → goals.id) */
+  goal_id: string;
+  /** 触发方式，如 'task_complete' | 'manual' | 'phase_change' */
+  trigger: string;
+  /** 触发任务 ID（可选） */
+  trigger_task_id: string | null;
+  /** 触发原因 */
+  reason: string | null;
+  /** 任务列表快照 (JSON) */
+  tasks_snapshot: string | null;
+  /** git 引用（commit hash 或 branch） */
+  git_ref: string | null;
+  /** 变更摘要 */
+  change_summary: string | null;
+  /** 创建时间 (Unix ms) */
+  created_at: number;
 }
 
 // ================================================================

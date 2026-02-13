@@ -14,9 +14,11 @@ import type { Migration } from './migrate.js';
 
 // Migration 注册表 — 新增 migration 只需在此追加导入
 import migration001 from './migrations/001_initial_schema.js';
+import migration002 from './migrations/002_add_goal_checkpoints.js';
 
 const allMigrations: Migration[] = [
   migration001,
+  migration002,
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -105,5 +107,5 @@ export type { Migration } from './migrate.js';
 export { DevLogRepository } from './devlog-repo.js';
 export { IdeaRepository } from './idea-repo.js';
 export { GoalMetaRepo } from './goal-meta-repo.js';
-export { GoalRepo, GoalTaskRepo } from './repo/index.js';
+export { GoalRepo, GoalTaskRepo, CheckpointRepo } from './repo/index.js';
 export { SessionRepository, GuildRepository } from './repo/index.js';

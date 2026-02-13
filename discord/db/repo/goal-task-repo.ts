@@ -48,11 +48,11 @@ export class GoalTaskRepo implements IGoalTaskRepo {
         INSERT INTO goal_tasks (
           id, goal_id, description, type, phase, status,
           branch_name, thread_id, dispatched_at, completed_at,
-          error, merged, notified_blocked
+          error, merged, notified_blocked, feedback_json
         ) VALUES (
           @id, @goal_id, @description, @type, @phase, @status,
           @branch_name, @thread_id, @dispatched_at, @completed_at,
-          @error, @merged, @notified_blocked
+          @error, @merged, @notified_blocked, @feedback_json
         )
         ON CONFLICT(goal_id, id) DO UPDATE SET
           description = @description,
@@ -65,7 +65,8 @@ export class GoalTaskRepo implements IGoalTaskRepo {
           completed_at = @completed_at,
           error = @error,
           merged = @merged,
-          notified_blocked = @notified_blocked
+          notified_blocked = @notified_blocked,
+          feedback_json = @feedback_json
       `),
 
       deleteTask: this.db.prepare(
@@ -205,6 +206,7 @@ function goalTaskToRow(goalId: string, task: GoalTask): Record<string, unknown> 
     error: task.error ?? null,
     merged: task.merged ? 1 : 0,
     notified_blocked: task.notifiedBlocked ? 1 : 0,
+    feedback_json: task.feedback ? JSON.stringify(task.feedback) : null,
   };
 }
 
@@ -236,6 +238,7 @@ function taskRowToGoalTask(
     error: row.error ?? undefined,
     merged: row.merged === 1,
     notifiedBlocked: row.notified_blocked === 1,
+    feedback: row.feedback_json ? JSON.parse(row.feedback_json) : undefined,
   };
 }
 

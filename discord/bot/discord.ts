@@ -17,8 +17,10 @@ import { checkAuth } from './auth.js';
 import { logger } from '../utils/logger.js';
 import { ApiServer } from '../api/server.js';
 import { GoalOrchestrator } from '../orchestrator/index.js';
+import { parseGoalButtonId, GOAL_MODAL_PREFIX, buildApproveWithModsModal } from '../orchestrator/goal-buttons.js';
 import { initDb, getDb, closeDb } from '../db/index.js';
-import { GoalRepo } from '../db/repo/index.js';
+import { GoalRepo, GoalTaskRepo, CheckpointRepo } from '../db/repo/index.js';
+import { GoalMetaRepo } from '../db/goal-meta-repo.js';
 import { SessionRepository } from '../db/repo/session-repo.js';
 import { GuildRepository } from '../db/repo/guild-repo.js';
 import { getAuthorizedGuildId, getGeneralChannelId } from '../utils/env.js';
@@ -36,6 +38,7 @@ export class DiscordBot {
   private claudeClient: ClaudeClient;
   private config: DiscordBotConfig;
   private apiServer: ApiServer | null = null;
+  private orchestrator: GoalOrchestrator | null = null;
   private cleanupInterval: NodeJS.Timeout | null = null;
 
   constructor(config: DiscordBotConfig) {
@@ -257,6 +260,12 @@ export class DiscordBot {
       return;
     }
 
+    // Goal orchestrator buttons: goal:<action>:<goalId>[:<extra>]
+    if (customId.startsWith('goal:')) {
+      await this.handleGoalButton(interaction);
+      return;
+    }
+
     // AskUserQuestion / ExitPlanMode buttons: input:<prefix>:<selection>
     if (customId.startsWith('input:')) {
       const parts = customId.split(':');
@@ -313,11 +322,102 @@ export class DiscordBot {
     }
   }
 
+  /**
+   * 处理 Goal orchestrator 按钮交互
+   * customId 格式: goal:<action>:<goalId>[:<extra>]
+   */
+  private async handleGoalButton(interaction: any): Promise<void> {
+    const parsed = parseGoalButtonId(interaction.customId);
+    if (!parsed) return;
+
+    if (!this.orchestrator) {
+      await interaction.reply({ content: 'Orchestrator not available', ephemeral: true }).catch(() => {});
+      return;
+    }
+
+    const { action, goalId, extra } = parsed;
+
+    try {
+      switch (action) {
+        case 'approve_replan': {
+          await interaction.update({ content: '⏳ 正在执行计划变更...', components: [] }).catch(() => {});
+          const ok = await this.orchestrator.approveReplan(goalId);
+          if (!ok) {
+            await interaction.followUp({ content: '没有待审批的计划变更', ephemeral: true }).catch(() => {});
+          }
+          break;
+        }
+
+        case 'reject_replan': {
+          await interaction.update({ content: '🚫 已拒绝计划变更', components: [] }).catch(() => {});
+          await this.orchestrator.rejectReplan(goalId);
+          break;
+        }
+
+        case 'approve_with_mods': {
+          // 获取当前待审批变更的 JSON，预填到 Modal 中
+          const pendingChangesJson = await this.orchestrator.getPendingReplanChangesJson(goalId);
+          if (!pendingChangesJson) {
+            await interaction.reply({ content: '没有待审批的计划变更', ephemeral: true }).catch(() => {});
+            return;
+          }
+          const modal = buildApproveWithModsModal(goalId, pendingChangesJson);
+          await interaction.showModal(modal);
+          break;
+        }
+
+        case 'rollback': {
+          if (!extra) {
+            await interaction.reply({ content: '缺少检查点 ID', ephemeral: true }).catch(() => {});
+            return;
+          }
+          await interaction.update({ content: '⏳ 正在评估回滚成本...', components: [] }).catch(() => {});
+          const pending = await this.orchestrator.rollback(goalId, extra);
+          if (!pending) {
+            await interaction.followUp({ content: '回滚评估失败，请查看 Goal thread', ephemeral: true }).catch(() => {});
+          }
+          break;
+        }
+
+        case 'confirm_rollback': {
+          await interaction.update({ content: '⏳ 正在执行回滚...', components: [] }).catch(() => {});
+          const ok = await this.orchestrator.confirmRollback(goalId);
+          if (!ok) {
+            await interaction.followUp({ content: '回滚执行失败', ephemeral: true }).catch(() => {});
+          }
+          break;
+        }
+
+        case 'cancel_rollback': {
+          await interaction.update({ content: '🚫 已取消回滚', components: [] }).catch(() => {});
+          await this.orchestrator.cancelRollback(goalId);
+          break;
+        }
+
+        default:
+          await interaction.reply({ content: `Unknown goal action: ${action}`, ephemeral: true }).catch(() => {});
+      }
+    } catch (err: any) {
+      logger.error(`[DiscordBot] handleGoalButton error: ${err.message}`);
+      // 尽量回复用户，避免 Discord 显示 "interaction failed"
+      const reply = interaction.replied || interaction.deferred
+        ? interaction.followUp.bind(interaction)
+        : interaction.reply.bind(interaction);
+      await reply({ content: `操作失败: ${err.message}`, ephemeral: true }).catch(() => {});
+    }
+  }
+
   private async handleModalSubmit(interaction: any): Promise<void> {
     const guildId = interaction.guildId;
     if (!guildId || !checkAuth(guildId)) return;
 
     const customId = interaction.customId;
+
+    // Goal orchestrator modal: goal_modal:<action>:<goalId>
+    if (customId.startsWith(GOAL_MODAL_PREFIX)) {
+      await this.handleGoalModalSubmit(interaction);
+      return;
+    }
 
     // Modal for custom text: modal:<prefix>
     if (customId.startsWith('modal:')) {
@@ -331,6 +431,57 @@ export class DiscordBot {
       const text = interaction.fields.getTextInputValue('custom_text');
       this.interactionRegistry.resolve(entry.toolUseId, text);
       await interaction.reply({ content: `Submitted: ${text.slice(0, 100)}...`, ephemeral: true }).catch(() => {});
+    }
+  }
+
+  /**
+   * 处理 Goal orchestrator modal 提交
+   * customId 格式: goal_modal:<action>:<goalId>
+   */
+  private async handleGoalModalSubmit(interaction: any): Promise<void> {
+    if (!this.orchestrator) {
+      await interaction.reply({ content: 'Orchestrator not available', ephemeral: true }).catch(() => {});
+      return;
+    }
+
+    const customId = interaction.customId as string;
+    const parts = customId.slice(GOAL_MODAL_PREFIX.length).split(':');
+    const action = parts[0];
+    const goalId = parts[1];
+
+    if (!goalId) {
+      await interaction.reply({ content: 'Invalid modal submission', ephemeral: true }).catch(() => {});
+      return;
+    }
+
+    try {
+      switch (action) {
+        case 'approve_with_mods': {
+          const changesJson = interaction.fields.getTextInputValue('changes_json');
+          await interaction.deferReply().catch(() => {});
+          const result = await this.orchestrator.approveReplanWithModifications(goalId, changesJson);
+          if (result.success) {
+            await interaction.editReply({
+              content: `✅ 修改后的计划已执行\n已应用 ${result.applied} 项变更` +
+                (result.rejected > 0 ? `，${result.rejected} 项被拒绝` : ''),
+            }).catch(() => {});
+          } else {
+            await interaction.editReply({
+              content: `❌ 执行失败: ${result.error}`,
+            }).catch(() => {});
+          }
+          break;
+        }
+
+        default:
+          await interaction.reply({ content: `Unknown goal modal action: ${action}`, ephemeral: true }).catch(() => {});
+      }
+    } catch (err: any) {
+      logger.error(`[DiscordBot] handleGoalModalSubmit error: ${err.message}`);
+      const reply = interaction.replied || interaction.deferred
+        ? interaction.editReply.bind(interaction)
+        : interaction.reply.bind(interaction);
+      await reply({ content: `操作失败: ${err.message}`, ephemeral: true }).catch(() => {});
     }
   }
 
@@ -360,7 +511,11 @@ export class DiscordBot {
     logger.info('Discord Bot started');
 
     // 启动 Orchestrator
-    const goalRepo = new GoalRepo(getDb());
+    const db = getDb();
+    const goalRepo = new GoalRepo(db);
+    const goalMetaRepo = new GoalMetaRepo(db);
+    const goalTaskRepo = new GoalTaskRepo(db);
+    const checkpointRepo = new CheckpointRepo(db);
     const orchestrator = new GoalOrchestrator({
       stateManager: this.stateManager,
       claudeClient: this.claudeClient,
@@ -369,7 +524,11 @@ export class DiscordBot {
       mq: this.messageQueue,
       config: this.config,
       goalRepo,
+      goalMetaRepo,
+      goalTaskRepo,
+      checkpointRepo,
     });
+    this.orchestrator = orchestrator;
     await orchestrator.restoreRunningDrives();
 
     // 启动 API 服务器

@@ -15,6 +15,7 @@ export type {
   IGoalRepo,
   IGoalMetaRepo,
   IGoalTaskRepo,
+  IGoalCheckpointRepo,
   IDevLogRepo,
   IIdeaRepo,
 } from './repository.js';
@@ -265,8 +266,15 @@ export interface DiscordBotConfig {
 // ========== Goal Orchestrator ==========
 
 export type GoalDriveStatus = 'running' | 'paused' | 'completed' | 'failed';
-export type GoalTaskStatus = 'pending' | 'dispatched' | 'running' | 'completed' | 'failed' | 'blocked' | 'skipped';
-export type GoalTaskType = '代码' | '手动' | '调研';
+export type GoalTaskStatus = 'pending' | 'dispatched' | 'running' | 'completed' | 'failed' | 'blocked' | 'blocked_feedback' | 'paused' | 'cancelled' | 'skipped';
+export type GoalTaskType = '代码' | '手动' | '调研' | '占位';
+
+/** Feedback 文件内容结构（feedback/<taskId>.json） */
+export interface GoalTaskFeedback {
+  type: string;        // e.g. 'needs_revision' | 'question' | 'blocked'
+  reason: string;      // 简短原因
+  details?: string;    // 详细说明
+}
 
 export interface GoalTask {
   id: string;
@@ -284,6 +292,33 @@ export interface GoalTask {
   error?: string;
   merged?: boolean;
   notifiedBlocked?: boolean;
+  feedback?: GoalTaskFeedback; // 来自 feedback/<taskId>.json 的反馈内容
+}
+
+/** 待审批的 Replan 变更 */
+export interface PendingReplan {
+  changes: Array<Record<string, any>>;  // ReplanChange[] — 避免循环依赖用 Record
+  reasoning: string;
+  impactLevel: 'low' | 'medium' | 'high';
+  checkpointId: string;
+}
+
+/** 待用户确认的回滚操作 */
+export interface PendingRollback {
+  checkpointId: string;
+  /** 被暂停的受影响任务（回滚前状态为 running/dispatched 的任务） */
+  pausedTaskIds: string[];
+  /** 成本评估摘要 */
+  costSummary: string;
+  /** 受影响任务详情 */
+  affectedTasks: Array<{
+    id: string;
+    description: string;
+    previousStatus: GoalTaskStatus;
+    runtime?: number;        // 运行时长 ms
+    diffStat?: string;       // git diff --stat 输出
+  }>;
+  createdAt: number;
 }
 
 export interface GoalDriveState {
@@ -298,6 +333,25 @@ export interface GoalDriveState {
   maxConcurrent: number;
 
   tasks: GoalTask[];
+
+  /** 待用户审批的高影响 replan 变更（仅 impactLevel=high 时有值） */
+  pendingReplan?: PendingReplan;
+
+  /** 待用户确认的回滚操作 */
+  pendingRollback?: PendingRollback;
+}
+
+// Goal 快照检查点
+export interface GoalCheckpoint {
+  id: string;
+  goalId: string;
+  trigger: string;
+  triggerTaskId?: string;
+  reason?: string;
+  tasksSnapshot?: GoalTask[];
+  gitRef?: string;
+  changeSummary?: string;
+  createdAt: number;
 }
 
 // Thread 归档会话
