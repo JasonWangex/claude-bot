@@ -1,11 +1,13 @@
+import { useMemo, useState } from 'react';
 import { useParams, Navigate } from 'react-router';
-import { Typography, Breadcrumb, Tabs, Tag, Card, Space, Spin, Alert } from 'antd';
+import { Typography, Breadcrumb, Tabs, Tag, Card, Space, Spin, Alert, Select } from 'antd';
 import { Link } from 'react-router';
 import { GoalDAG } from '@/components/goals/GoalDAG';
 import { TaskPanel } from '@/components/goals/TaskPanel';
 import { DriveControls } from '@/components/goals/DriveControls';
-import { GoalStatusBadge } from '@/components/goals/StatusBadge';
+import { GoalStatusBadge, taskStatusLabels } from '@/components/goals/StatusBadge';
 import { useGoal, useGoalDrive } from '@/lib/hooks/use-goals';
+import type { GoalTaskStatus } from '@/lib/types';
 
 const { Title, Text } = Typography;
 
@@ -13,6 +15,16 @@ export default function GoalDetail() {
   const { goalId } = useParams<{ goalId: string }>();
   const { data: goal, error: goalError } = useGoal(goalId ?? null);
   const { data: drive, error: driveError, mutate: mutateDrive } = useGoalDrive(goalId ?? null);
+
+  const [dagStatusFilter, setDagStatusFilter] = useState<GoalTaskStatus[]>([]);
+
+  const tasks = drive?.tasks ?? [];
+
+  const dagStatusOptions = useMemo(() => {
+    if (!tasks.length) return [];
+    const statuses = [...new Set(tasks.map(t => t.status))];
+    return statuses.map(s => ({ value: s, label: taskStatusLabels[s] }));
+  }, [tasks]);
 
   if (!goalId) return <Navigate to="/goals" replace />;
 
@@ -28,7 +40,6 @@ export default function GoalDetail() {
     );
   }
 
-  const tasks = drive?.tasks ?? [];
   const completed = tasks.filter(t => t.status === 'completed').length;
   const running = tasks.filter(t => t.status === 'running').length;
   const failed = tasks.filter(t => t.status === 'failed').length;
@@ -37,7 +48,26 @@ export default function GoalDetail() {
     {
       key: 'dag',
       label: 'DAG 依赖图',
-      children: <GoalDAG tasks={tasks} />,
+      children: (
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+            <Select
+              mode="multiple"
+              allowClear
+              placeholder="按状态高亮"
+              value={dagStatusFilter}
+              onChange={setDagStatusFilter}
+              options={dagStatusOptions}
+              style={{ minWidth: 200 }}
+              maxTagCount="responsive"
+            />
+          </div>
+          <GoalDAG
+            tasks={tasks}
+            highlightStatuses={dagStatusFilter.length > 0 ? dagStatusFilter : undefined}
+          />
+        </Space>
+      ),
     },
     {
       key: 'tasks',
