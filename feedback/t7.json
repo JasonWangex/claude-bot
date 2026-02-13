@@ -1,0 +1,9 @@
+{
+  "type": "blocked",
+  "reason": "依赖任务 g7t6 未完成 — sessions 表缺少 message_count 字段",
+  "details": {
+    "dependencyId": "g7t6",
+    "issue": "任务描述中声明 g7t6 已完成（sessions 表新增 message_count 字段），但实际检查发现：\n1. migrations/ 目录下没有 005_*.ts 文件来添加 message_count 字段\n2. 代码中虽有 message_count 类型定义（discord/api/types.ts:67, web/src/lib/types.ts:90），但实际引用仍在使用 messageHistory.length（discord/api/routes/status.ts:16, discord/api/routes/tasks.ts:45）\n3. SessionRepository 尚未实现基于 message_count 的逻辑\n\n当前任务 g7t7 的目标是删除 message_history 表和相关代码，但前置条件（用 message_count 替代 messageHistory.length）尚未就绪。",
+    "resolution": "需要先完成 g7t6 的所有步骤：\n1. 创建 migration 005 添加 message_count 字段\n2. 修改 SessionRepository 的 save() 方法更新 message_count\n3. 替换所有 messageHistory.length 引用为 message_count\n4. 修改 state.ts 中的 updateSessionMessage() 和 rewindSession()\n\n或者重新评估任务依赖关系，将 g7t6 和 g7t7 合并为一个原子性迁移任务。"
+  }
+}
