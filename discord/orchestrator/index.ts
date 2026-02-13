@@ -41,6 +41,11 @@ import {
   type ReplanContext,
   type ReplanChange,
 } from './replanner.js';
+import {
+  buildReplanApprovalButtons,
+  buildReplanRollbackButton,
+  buildRollbackConfirmButtons,
+} from './goal-buttons.js';
 import type { IGoalMetaRepo, IGoalTaskRepo, IGoalCheckpointRepo } from '../types/repository.js';
 
 interface OrchestratorDeps {
@@ -794,7 +799,7 @@ export class GoalOrchestrator {
         goalTaskRepo: this.deps.goalTaskRepo,
         goalMetaRepo: this.deps.goalMetaRepo,
         checkpointRepo: this.deps.checkpointRepo,
-        notify: (threadId, message, type) => this.notify(threadId, message, type),
+        notify: (threadId, message, type, options) => this.notify(threadId, message, type, options),
       });
 
       if (handleResult.autoApplied) {
@@ -848,8 +853,9 @@ export class GoalOrchestrator {
       (applyResult.rejected.length > 0
         ? `，${applyResult.rejected.length} 项被拒绝`
         : '') +
-      `\n快照 ID: \`${pending.checkpointId}\`（可用于回滚）`,
+      `\n快照 ID: \`${pending.checkpointId}\``,
       'success',
+      { components: buildReplanRollbackButton(goalId, pending.checkpointId) },
     );
 
     // 恢复调度（经过审查层，replan 后可能引入新占位任务）
@@ -1034,15 +1040,14 @@ export class GoalOrchestrator {
       state.pendingRollback = pendingRollback;
       await this.saveState(state);
 
-      // 7. 通知用户确认
+      // 7. 通知用户确认（含确认/取消按钮）
       const confirmMessage =
         `⏪ **回滚评估：检查点 \`${checkpointId}\`**\n\n` +
-        costSummary + '\n\n' +
-        `── 操作 ──\n` +
-        `回复 \`confirm rollback\` 确认执行回滚\n` +
-        `回复 \`cancel rollback\` 取消并恢复已暂停的任务`;
+        costSummary;
 
-      await this.notify(state.goalThreadId, confirmMessage, 'warning');
+      await this.notify(state.goalThreadId, confirmMessage, 'warning', {
+        components: buildRollbackConfirmButtons(goalId),
+      });
 
       return pendingRollback;
     });
@@ -1592,7 +1597,12 @@ export class GoalOrchestrator {
     return null;
   }
 
-  private async notify(threadId: string, message: string, type?: 'success' | 'error' | 'warning' | 'info'): Promise<void> {
+  private async notify(
+    threadId: string,
+    message: string,
+    type?: 'success' | 'error' | 'warning' | 'info',
+    options?: { components?: import('discord.js').ActionRowBuilder<import('discord.js').ButtonBuilder>[] },
+  ): Promise<void> {
     try {
       const colorMap: Record<string, EmbedColor> = {
         success: EmbedColors.GREEN,
@@ -1601,7 +1611,10 @@ export class GoalOrchestrator {
         info: EmbedColors.GRAY,
       };
       const embedColor = type ? colorMap[type] : undefined;
-      await this.deps.mq.sendLong(threadId, message, { embedColor });
+      await this.deps.mq.sendLong(threadId, message, {
+        embedColor,
+        components: options?.components as any,
+      });
     } catch (err: any) {
       logger.error(`[Orchestrator] Failed to send notification: ${err.message}`);
     }

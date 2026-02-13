@@ -12,6 +12,7 @@ import type { Goal, IGoalTaskRepo, IGoalMetaRepo, IGoalCheckpointRepo } from '..
 import { chatCompletion } from '../utils/llm.js';
 import { execGit } from './git-ops.js';
 import { logger } from '../utils/logger.js';
+import { buildReplanApprovalButtons, buildReplanRollbackButton } from './goal-buttons.js';
 
 // ==================== 类型定义 ====================
 
@@ -48,7 +49,12 @@ export interface ApplyResult {
 /** 分级自治处理的依赖 */
 export interface HandleReplanDeps extends ApplyChangesDeps {
   checkpointRepo: IGoalCheckpointRepo;
-  notify: (threadId: string, message: string, type?: 'success' | 'error' | 'warning' | 'info') => Promise<void>;
+  notify: (
+    threadId: string,
+    message: string,
+    type?: 'success' | 'error' | 'warning' | 'info',
+    options?: { components?: import('discord.js').ActionRowBuilder<import('discord.js').ButtonBuilder>[] },
+  ) => Promise<void>;
 }
 
 /** 分级自治处理结果 */
@@ -616,12 +622,11 @@ export async function handleReplanByImpact(
     const approvalMessage =
       `🔴 **需要审批：高影响计划变更**\n\n` +
       changeDiff + '\n\n' +
-      `── 操作 ──\n` +
-      `回复 \`approve replan\` 确认执行\n` +
-      `回复 \`reject replan\` 拒绝变更\n` +
       `快照 ID: \`${checkpointId}\``;
 
-    await deps.notify(state.goalThreadId, approvalMessage, 'warning');
+    await deps.notify(state.goalThreadId, approvalMessage, 'warning', {
+      components: buildReplanApprovalButtons(state.goalId, checkpointId),
+    });
 
     // 将 pending replan 信息存入 state，供后续审批时使用
     // 使用 state 上的临时字段（通过 GoalDriveState 扩展）
@@ -645,7 +650,7 @@ export async function handleReplanByImpact(
 
   const applyResult = await applyChanges(state, result.changes, deps);
 
-  // 发送通知
+  // 发送通知（含回滚按钮）
   const levelLabel = assessed === 'low' ? '🟢 低影响' : '🟡 中影响';
   const notifyMessage =
     `${levelLabel} 计划已自动更新\n\n` +
@@ -657,9 +662,11 @@ export async function handleReplanByImpact(
     (applyResult.validationErrors.length > 0
       ? `\n⚠️ 验证警告: ${applyResult.validationErrors.join('; ')}`
       : '') +
-    `\n快照 ID: \`${checkpointId}\`（可用于回滚）`;
+    `\n快照 ID: \`${checkpointId}\``;
 
-  await deps.notify(state.goalThreadId, notifyMessage, assessed === 'low' ? 'info' : 'warning');
+  await deps.notify(state.goalThreadId, notifyMessage, assessed === 'low' ? 'info' : 'warning', {
+    components: buildReplanRollbackButton(state.goalId, checkpointId),
+  });
 
   return {
     impactLevel: assessed,

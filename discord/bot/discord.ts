@@ -17,6 +17,7 @@ import { checkAuth } from './auth.js';
 import { logger } from '../utils/logger.js';
 import { ApiServer } from '../api/server.js';
 import { GoalOrchestrator } from '../orchestrator/index.js';
+import { parseGoalButtonId } from '../orchestrator/goal-buttons.js';
 import { initDb, getDb, closeDb } from '../db/index.js';
 import { GoalRepo, GoalTaskRepo, CheckpointRepo } from '../db/repo/index.js';
 import { GoalMetaRepo } from '../db/goal-meta-repo.js';
@@ -37,6 +38,7 @@ export class DiscordBot {
   private claudeClient: ClaudeClient;
   private config: DiscordBotConfig;
   private apiServer: ApiServer | null = null;
+  private orchestrator: GoalOrchestrator | null = null;
   private cleanupInterval: NodeJS.Timeout | null = null;
 
   constructor(config: DiscordBotConfig) {
@@ -258,6 +260,12 @@ export class DiscordBot {
       return;
     }
 
+    // Goal orchestrator buttons: goal:<action>:<goalId>[:<extra>]
+    if (customId.startsWith('goal:')) {
+      await this.handleGoalButton(interaction);
+      return;
+    }
+
     // AskUserQuestion / ExitPlanMode buttons: input:<prefix>:<selection>
     if (customId.startsWith('input:')) {
       const parts = customId.split(':');
@@ -311,6 +319,79 @@ export class DiscordBot {
         }).catch(() => {});
         return;
       }
+    }
+  }
+
+  /**
+   * 处理 Goal orchestrator 按钮交互
+   * customId 格式: goal:<action>:<goalId>[:<extra>]
+   */
+  private async handleGoalButton(interaction: any): Promise<void> {
+    const parsed = parseGoalButtonId(interaction.customId);
+    if (!parsed) return;
+
+    if (!this.orchestrator) {
+      await interaction.reply({ content: 'Orchestrator not available', ephemeral: true }).catch(() => {});
+      return;
+    }
+
+    const { action, goalId, extra } = parsed;
+
+    try {
+      switch (action) {
+        case 'approve_replan': {
+          await interaction.update({ content: '⏳ 正在执行计划变更...', components: [] }).catch(() => {});
+          const ok = await this.orchestrator.approveReplan(goalId);
+          if (!ok) {
+            await interaction.followUp({ content: '没有待审批的计划变更', ephemeral: true }).catch(() => {});
+          }
+          break;
+        }
+
+        case 'reject_replan': {
+          await interaction.update({ content: '🚫 已拒绝计划变更', components: [] }).catch(() => {});
+          await this.orchestrator.rejectReplan(goalId);
+          break;
+        }
+
+        case 'rollback': {
+          if (!extra) {
+            await interaction.reply({ content: '缺少检查点 ID', ephemeral: true }).catch(() => {});
+            return;
+          }
+          await interaction.update({ content: '⏳ 正在评估回滚成本...', components: [] }).catch(() => {});
+          const pending = await this.orchestrator.rollback(goalId, extra);
+          if (!pending) {
+            await interaction.followUp({ content: '回滚评估失败，请查看 Goal thread', ephemeral: true }).catch(() => {});
+          }
+          break;
+        }
+
+        case 'confirm_rollback': {
+          await interaction.update({ content: '⏳ 正在执行回滚...', components: [] }).catch(() => {});
+          const ok = await this.orchestrator.confirmRollback(goalId);
+          if (!ok) {
+            await interaction.followUp({ content: '回滚执行失败', ephemeral: true }).catch(() => {});
+          }
+          break;
+        }
+
+        case 'cancel_rollback': {
+          await interaction.update({ content: '🚫 已取消回滚', components: [] }).catch(() => {});
+          await this.orchestrator.cancelRollback(goalId);
+          break;
+        }
+
+        default:
+          await interaction.reply({ content: `Unknown goal action: ${action}`, ephemeral: true }).catch(() => {});
+      }
+    } catch (err: any) {
+      logger.error(`[DiscordBot] handleGoalButton error: ${err.message}`);
+      // 尽量回复用户，避免 Discord 显示 "interaction failed"
+      const reply = interaction.replied || interaction.deferred
+        ? interaction.followUp.bind(interaction)
+        : interaction.reply.bind(interaction);
+      await reply({ content: `操作失败: ${err.message}`, ephemeral: true }).catch(() => {});
     }
   }
 
@@ -378,6 +459,7 @@ export class DiscordBot {
       goalTaskRepo,
       checkpointRepo,
     });
+    this.orchestrator = orchestrator;
     await orchestrator.restoreRunningDrives();
 
     // 启动 API 服务器
