@@ -5,10 +5,12 @@
 import { spawn, ChildProcess, execFile } from 'child_process';
 import { promisify } from 'util';
 import { openSync, closeSync, readSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, statSync, renameSync } from 'fs';
-import { join, dirname, basename } from 'path';
+import { join, dirname, basename, relative } from 'path';
 import { fileURLToPath } from 'url';
 import { ClaudeResponse, ClaudeOptions, StreamEvent, ProgressCallback, ClaudeErrorType, ClaudeExecutionError, ProcessRegistryEntry, ReconnectedResult } from '../types/index.js';
 import { logger } from '../utils/logger.js';
+import { parseJsonlFile } from './jsonl-parser.js';
+import { getDb, InteractionLogRepository } from '../db/index.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -446,7 +448,12 @@ export class ClaudeExecutor {
         try { stderr = readFileSync(stderrFile, 'utf-8'); } catch {}
 
         // 归档输出文件到 data/sessions/<session_id>/ 目录
-        this.archiveOutputFiles(outputFile, stderrFile, lastSessionId);
+        const archivedJsonlPath = this.archiveOutputFiles(outputFile, stderrFile, lastSessionId);
+
+        // 解析 JSONL 写入 interaction_log
+        if (archivedJsonlPath && lastSessionId) {
+          this.processInteractionLog(archivedJsonlPath, lastSessionId);
+        }
 
         if (flags.aborted) {
           reject(new ClaudeExecutionError(
@@ -921,16 +928,37 @@ export class ClaudeExecutor {
   }
 
   /**
-   * 归档输出文件到 data/sessions/<session_id>/ 目录
+   * 解析 JSONL 文件并写入 interaction_log 表
    */
-  private archiveOutputFiles(outputFile: string, stderrFile: string, sessionId: string): void {
+  private processInteractionLog(jsonlPath: string, sessionId: string): void {
+    try {
+      const db = getDb();
+      const repo = new InteractionLogRepository(db);
+      const thisDir = dirname(fileURLToPath(import.meta.url));
+      const relativePath = relative(join(thisDir, '../..'), jsonlPath);
+      const rows = parseJsonlFile(jsonlPath, relativePath, sessionId);
+      if (rows.length > 0) {
+        repo.insertBatch(rows);
+        logger.debug(`Saved ${rows.length} interaction_log rows for session ${sessionId}`);
+      }
+    } catch (e: any) {
+      logger.warn(`Failed to process interaction log: ${e.message}`);
+    }
+  }
+
+  /**
+   * 归档输出文件到 data/sessions/<session_id>/ 目录
+   * @returns 归档后的 JSONL 文件路径（绝对路径），失败时返回 null
+   */
+  private archiveOutputFiles(outputFile: string, stderrFile: string, sessionId: string): string | null {
     if (!sessionId) {
       logger.warn('No session ID, skipping archive');
-      return;
+      return null;
     }
 
     const thisDir = dirname(fileURLToPath(import.meta.url));
     const archiveDir = join(thisDir, '../../data/sessions', sessionId);
+    let archivedJsonlPath: string | null = null;
 
     try {
       mkdirSync(archiveDir, { recursive: true });
@@ -940,6 +968,7 @@ export class ClaudeExecutor {
         try {
           const archivePath = join(archiveDir, basename(outputFile));
           renameSync(outputFile, archivePath);
+          archivedJsonlPath = archivePath;
           logger.debug(`Archived output file to ${archivePath}`);
         } catch (e: any) {
           logger.warn(`Failed to archive output file: ${e.message}`);
@@ -959,11 +988,19 @@ export class ClaudeExecutor {
     } catch (e: any) {
       logger.error(`Failed to create archive directory: ${e.message}`);
     }
+
+    return archivedJsonlPath;
   }
 
   private cleanupOutputFiles(entry: ProcessRegistryEntry): void {
     // 改用归档而非删除
-    this.archiveOutputFiles(entry.outputFile, entry.stderrFile, entry.claudeSessionId || '');
+    const sessionId = entry.claudeSessionId || '';
+    const archivedJsonlPath = this.archiveOutputFiles(entry.outputFile, entry.stderrFile, sessionId);
+
+    // 解析 JSONL 写入 interaction_log
+    if (archivedJsonlPath && sessionId) {
+      this.processInteractionLog(archivedJsonlPath, sessionId);
+    }
   }
 
   async verify(): Promise<boolean> {

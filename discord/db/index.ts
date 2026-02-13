@@ -113,3 +113,4 @@ export { IdeaRepository } from './idea-repo.js';
 export { GoalMetaRepo } from './goal-meta-repo.js';
 export { GoalRepo, GoalTaskRepo, CheckpointRepo } from './repo/index.js';
 export { SessionRepository, GuildRepository } from './repo/index.js';
+export { InteractionLogRepository } from './interaction-log-repo.js';
