@@ -203,6 +203,7 @@ export class StateManager {
         createdAt: Date.now(),
         model: guildModel,
         messageHistory: [],
+        messageCount: 0,
       };
       this.sessions.set(key, session);
       this.persistSession(guildId, threadId);
@@ -246,18 +247,16 @@ export class StateManager {
       session.messageHistory = session.messageHistory.slice(-MAX_HISTORY);
     }
 
-    let lastMessage: string | undefined;
-    let lastMessageAt: number | undefined;
+    // 同步更新内存中的 messageCount
+    session.messageCount = session.messageHistory.length;
+
     if (role === 'assistant') {
       session.lastMessage = text.slice(0, 500);
       session.lastMessageAt = Date.now();
-      lastMessage = session.lastMessage;
-      lastMessageAt = session.lastMessageAt;
-    }
-
-    // 使用优化的消息追加方法，而非全量 save
-    if (this.sessionRepo) {
-      this.sessionRepo.addMessageAndTrim(session.id, entry, lastMessage, lastMessageAt);
+      // 更新 sessions 表的 last_message 字段
+      if (this.sessionRepo) {
+        this.persistSession(guildId, threadId);
+      }
     }
   }
 

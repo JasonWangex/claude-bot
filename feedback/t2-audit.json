@@ -1,0 +1,18 @@
+{
+  "verdict": "pass",
+  "summary": "Migration 004 正确创建 interaction_log 表，包含所有需求字段，类型定义与 SQL schema 完全匹配，索引和唯一约束合理，migration 注册到 allMigrations 数组，版本号连续。tokens 拆分为 input/output 是合理的增强。",
+  "issues": [
+    {
+      "severity": "warning",
+      "file": "discord/db/migrations/004_add_interaction_log.ts",
+      "line": 22,
+      "description": "UNIQUE(session_id, turn_index, role) 约束假设每个 turn 中同一 role 只出现一次。如果 assistant 在同一 turn 中产生多条记录（如多个 tool_use），需要在插入层做合并或调整约束。当前作为 migration 是合理的，但上层写入逻辑需注意。"
+    },
+    {
+      "severity": "warning",
+      "file": "discord/types/db.ts",
+      "line": 299,
+      "description": "role 类型限定为 'user' | 'assistant'，如果后续需要支持 'system' 角色则需扩展。当前需求范围内没问题。"
+    }
+  ]
+}

@@ -1,9 +1,10 @@
 import { useParams, Navigate } from 'react-router';
-import { Typography, Breadcrumb, Card, Descriptions, Spin, Space, Alert } from 'antd';
+import { Typography, Breadcrumb, Card, Descriptions, Spin, Space, Alert, Tabs } from 'antd';
 import { BranchesOutlined, FolderOutlined, ClockCircleOutlined, RobotOutlined } from '@ant-design/icons';
 import { Link } from 'react-router';
 import { TaskTree } from '@/components/tasks/TaskTree';
 import { MessageHistory } from '@/components/tasks/MessageHistory';
+import { InteractionLog } from '@/components/tasks/InteractionLog';
 import { useTask } from '@/lib/hooks/use-tasks';
 import { formatDistanceToNow } from '@/lib/format';
 
@@ -57,15 +58,26 @@ export default function TaskDetail() {
         </Descriptions>
       </Card>
 
-      {task.children && task.children.length > 0 && (
-        <Card title={`子任务 (${task.children.length})`} size="small">
-          <TaskTree tasks={task.children} />
-        </Card>
-      )}
-
-      <Card title={`消息历史 (${task.message_history.length})`} size="small">
-        <MessageHistory messages={task.message_history} />
-      </Card>
+      <Tabs
+        defaultActiveKey="interactions"
+        items={[
+          {
+            key: 'interactions',
+            label: '交互日志',
+            children: <InteractionLog threadId={threadId} />,
+          },
+          {
+            key: 'messages',
+            label: `消息历史 (${task.message_history.length})`,
+            children: <MessageHistory messages={task.message_history} />,
+          },
+          ...(task.children?.length ? [{
+            key: 'children',
+            label: `子任务 (${task.children.length})`,
+            children: <TaskTree tasks={task.children} />,
+          }] : []),
+        ]}
+      />
     </Space>
   );
 }

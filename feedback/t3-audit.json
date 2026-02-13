@@ -1,0 +1,24 @@
+{
+  "verdict": "pass",
+  "summary": "JSONL 解析器实现完整且正确。解析逻辑按 message.id 正确分组 turn，过滤子代理事件，生成结构化摘要写入 interaction_log 表。DB 层使用事务批量插入 + INSERT OR IGNORE 保证幂等性。executor 集成在归档后同步调用，异常被 catch 不影响主流程。",
+  "issues": [
+    {
+      "severity": "warning",
+      "file": "discord/claude/jsonl-parser.ts",
+      "line": 85,
+      "description": "使用 console.warn 而非项目统一的 logger。其他模块都用 import { logger } from '../utils/logger.js'，此处应保持一致。"
+    },
+    {
+      "severity": "warning",
+      "file": "discord/claude/jsonl-parser.ts",
+      "line": 195,
+      "description": "assistant 行的 tokens_input/tokens_output 取的是最后一个事件的 usage（注释说「因为它是累积的」），但实际 Claude CLI 每个 streaming assistant 事件的 usage 是该事件自身的值，不一定是累积的。如果同一 turn 有多个 assistant 事件（text + tool_use），可能只记录了最后一个事件的 token，丢失了前面事件的。建议验证实际 JSONL 输出确认累积行为，或改为求和。"
+    },
+    {
+      "severity": "warning",
+      "file": "discord/claude/executor.ts",
+      "line": 937,
+      "description": "processInteractionLog 内每次都 new InteractionLogRepository(db)，会重复 prepare 语句。在高频场景下（多进程快速结束）会有轻微性能开销。可考虑复用实例或延迟创建。当前场景可接受。"
+    }
+  ]
+}

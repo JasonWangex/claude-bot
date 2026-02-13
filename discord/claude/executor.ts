@@ -4,11 +4,13 @@
 
 import { spawn, ChildProcess, execFile } from 'child_process';
 import { promisify } from 'util';
-import { openSync, closeSync, readSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, statSync } from 'fs';
-import { join, dirname } from 'path';
+import { openSync, closeSync, readSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, statSync, renameSync } from 'fs';
+import { join, dirname, basename, relative } from 'path';
 import { fileURLToPath } from 'url';
 import { ClaudeResponse, ClaudeOptions, StreamEvent, ProgressCallback, ClaudeErrorType, ClaudeExecutionError, ProcessRegistryEntry, ReconnectedResult } from '../types/index.js';
 import { logger } from '../utils/logger.js';
+import { parseJsonlFile } from './jsonl-parser.js';
+import { getDb, InteractionLogRepository } from '../db/index.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -441,13 +443,17 @@ export class ClaudeExecutor {
 
         updateSessionId();
 
-        // 读取 stderr（在清理文件前）
+        // 读取 stderr（在归档文件前）
         let stderr = '';
         try { stderr = readFileSync(stderrFile, 'utf-8'); } catch {}
 
-        // 清理输出文件
-        try { unlinkSync(outputFile); } catch {}
-        try { unlinkSync(stderrFile); } catch {}
+        // 归档输出文件到 data/sessions/<session_id>/ 目录
+        const archivedJsonlPath = this.archiveOutputFiles(outputFile, stderrFile, lastSessionId);
+
+        // 解析 JSONL 写入 interaction_log
+        if (archivedJsonlPath && lastSessionId) {
+          this.processInteractionLog(archivedJsonlPath, lastSessionId);
+        }
 
         if (flags.aborted) {
           reject(new ClaudeExecutionError(
@@ -921,9 +927,80 @@ export class ClaudeExecutor {
     }
   }
 
+  /**
+   * 解析 JSONL 文件并写入 interaction_log 表
+   */
+  private processInteractionLog(jsonlPath: string, sessionId: string): void {
+    try {
+      const db = getDb();
+      const repo = new InteractionLogRepository(db);
+      const thisDir = dirname(fileURLToPath(import.meta.url));
+      const relativePath = relative(join(thisDir, '../..'), jsonlPath);
+      const rows = parseJsonlFile(jsonlPath, relativePath, sessionId);
+      if (rows.length > 0) {
+        repo.insertBatch(rows);
+        logger.debug(`Saved ${rows.length} interaction_log rows for session ${sessionId}`);
+      }
+    } catch (e: any) {
+      logger.warn(`Failed to process interaction log: ${e.message}`);
+    }
+  }
+
+  /**
+   * 归档输出文件到 data/sessions/<session_id>/ 目录
+   * @returns 归档后的 JSONL 文件路径（绝对路径），失败时返回 null
+   */
+  private archiveOutputFiles(outputFile: string, stderrFile: string, sessionId: string): string | null {
+    if (!sessionId) {
+      logger.warn('No session ID, skipping archive');
+      return null;
+    }
+
+    const thisDir = dirname(fileURLToPath(import.meta.url));
+    const archiveDir = join(thisDir, '../../data/sessions', sessionId);
+    let archivedJsonlPath: string | null = null;
+
+    try {
+      mkdirSync(archiveDir, { recursive: true });
+
+      // 移动 .jsonl 文件
+      if (outputFile) {
+        try {
+          const archivePath = join(archiveDir, basename(outputFile));
+          renameSync(outputFile, archivePath);
+          archivedJsonlPath = archivePath;
+          logger.debug(`Archived output file to ${archivePath}`);
+        } catch (e: any) {
+          logger.warn(`Failed to archive output file: ${e.message}`);
+        }
+      }
+
+      // 移动 .stderr 文件
+      if (stderrFile) {
+        try {
+          const archivePath = join(archiveDir, basename(stderrFile));
+          renameSync(stderrFile, archivePath);
+          logger.debug(`Archived stderr file to ${archivePath}`);
+        } catch (e: any) {
+          logger.warn(`Failed to archive stderr file: ${e.message}`);
+        }
+      }
+    } catch (e: any) {
+      logger.error(`Failed to create archive directory: ${e.message}`);
+    }
+
+    return archivedJsonlPath;
+  }
+
   private cleanupOutputFiles(entry: ProcessRegistryEntry): void {
-    try { unlinkSync(entry.outputFile); } catch {}
-    try { unlinkSync(entry.stderrFile); } catch {}
+    // 改用归档而非删除
+    const sessionId = entry.claudeSessionId || '';
+    const archivedJsonlPath = this.archiveOutputFiles(entry.outputFile, entry.stderrFile, sessionId);
+
+    // 解析 JSONL 写入 interaction_log
+    if (archivedJsonlPath && sessionId) {
+      this.processInteractionLog(archivedJsonlPath, sessionId);
+    }
   }
 
   async verify(): Promise<boolean> {

@@ -1,0 +1,16 @@
+{
+  "verdict": "fail",
+  "summary": "TypeScript 编译通过，migration/类型/UPSERT/5处替换/内存同步均正确。但 save() 简化后不再写 message_history 表，导致 2 个 message history 测试失败——测试期望 save() 写入消息历史并读回，与新行为不匹配。",
+  "verifyCommands": [
+    "./node_modules/.bin/tsc --noEmit",
+    "./node_modules/.bin/vitest run discord/db/repo/__tests__/session-repo.test.ts"
+  ],
+  "issues": [
+    {
+      "severity": "error",
+      "file": "discord/db/repo/__tests__/session-repo.test.ts",
+      "line": 90,
+      "description": "save() 简化后不再写 message_history 表，但测试 'should save and retrieve message history'（L90）和 'should replace message history on save'（L108）仍期望 save() 写入消息历史。需要更新测试：改用 addMessageAndTrim() 写入消息，或改为验证 messageCount 字段而非 messageHistory 数组。"
+    }
+  ]
+}

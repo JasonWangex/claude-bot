@@ -13,6 +13,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     cwd: '/home/test',
     createdAt: Date.now(),
     messageHistory: [],
+    messageCount: 0,
     ...overrides,
   };
 }
@@ -86,25 +87,23 @@ describe('SessionRepository', () => {
   });
 
   describe('message history', () => {
-    it('should save and retrieve message history', async () => {
-      const now = Date.now();
+    it('should persist messageCount and return empty messageHistory (table dropped in migration 006)', async () => {
       const session = makeSession({
         messageHistory: [
-          { role: 'user', text: 'Hi', timestamp: now },
-          { role: 'assistant', text: 'Hello!', timestamp: now + 1 },
+          { role: 'user', text: 'Hi', timestamp: Date.now() },
+          { role: 'assistant', text: 'Hello!', timestamp: Date.now() + 1 },
         ],
+        messageCount: 2,
       });
       await repo.save(session);
 
       const result = await repo.get('guild-1', 'thread-1');
-      expect(result!.messageHistory).toHaveLength(2);
-      expect(result!.messageHistory[0].role).toBe('user');
-      expect(result!.messageHistory[0].text).toBe('Hi');
-      expect(result!.messageHistory[1].role).toBe('assistant');
-      expect(result!.messageHistory[1].text).toBe('Hello!');
+      expect(result!.messageCount).toBe(2);
+      // messageHistory 始终为空数组（message_history 表已废弃）
+      expect(result!.messageHistory).toHaveLength(0);
     });
 
-    it('should replace message history on save', async () => {
+    it('should always return empty message history', async () => {
       const now = Date.now();
       await repo.save(makeSession({
         messageHistory: [{ role: 'user', text: 'old', timestamp: now }],
@@ -117,8 +116,7 @@ describe('SessionRepository', () => {
       }));
 
       const result = await repo.get('guild-1', 'thread-1');
-      expect(result!.messageHistory).toHaveLength(2);
-      expect(result!.messageHistory[0].text).toBe('new1');
+      expect(result!.messageHistory).toHaveLength(0);
     });
   });
 
@@ -148,17 +146,6 @@ describe('SessionRepository', () => {
       expect(deleted).toBe(false);
     });
 
-    it('should cascade delete message history', async () => {
-      const now = Date.now();
-      await repo.save(makeSession({
-        messageHistory: [{ role: 'user', text: 'hi', timestamp: now }],
-      }));
-      await repo.delete('guild-1', 'thread-1');
-
-      // Verify message_history is also deleted
-      const row = db.prepare('SELECT COUNT(*) as cnt FROM message_history WHERE session_id = ?').get('sess-001') as { cnt: number };
-      expect(row.cnt).toBe(0);
-    });
   });
 
   // ==================== 查询 ====================

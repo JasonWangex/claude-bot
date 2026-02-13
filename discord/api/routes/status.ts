@@ -13,7 +13,7 @@ function sessionToSummary(s: Session, children: TaskSummary[]): TaskSummary {
     cwd: s.cwd,
     model: s.model || null,
     has_session: !!s.claudeSessionId,
-    message_count: s.messageHistory.length,
+    message_count: s.messageCount,
     created_at: s.createdAt,
     last_message: s.lastMessage || null,
     last_message_at: s.lastMessageAt || null,

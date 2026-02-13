@@ -1,0 +1,18 @@
+{
+  "verdict": "pass",
+  "summary": "交互日志 Tab 页实现完整且正确。前端新增 InteractionLog + InteractionTurn 组件，按轮次分组展示 user/assistant 消息，工具调用支持折叠，统计面板显示 token/成本汇总。后端 API 路由 getTaskInteractions 正确查询 interaction_log 表并返回数据。类型定义前后端对齐，React 自动转义防止 XSS。",
+  "issues": [
+    {
+      "severity": "warning",
+      "file": "web/package.json",
+      "line": 15,
+      "description": "添加了 date-fns 依赖但代码中从未使用（formatDistanceToNow 来自自定义 @/lib/format 模块），属于多余依赖"
+    },
+    {
+      "severity": "warning",
+      "file": "web/src/components/tasks/InteractionTurn.tsx",
+      "line": 62,
+      "description": "borderLeft 和 border 同时设置，border: '1px solid #f0f0f0' 会覆盖 borderLeft: '3px solid #1677ff'。实际效果可能不符合预期（取决于 CSS 属性顺序），建议改用 borderLeft 单独设置或使用 borderTop/borderRight/borderBottom"
+    }
+  ]
+}

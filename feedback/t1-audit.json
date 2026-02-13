@@ -1,0 +1,18 @@
+{
+  "verdict": "pass",
+  "summary": "Implementation correctly replaces JSONL/stderr file deletion with archival to data/sessions/<session_id>/. Both the main exit handler and cleanupOutputFiles (used by orphaned process recovery) are updated. File naming is preserved via basename(). renameSync is safe since source and destination are on the same filesystem (both under data/). Error handling is adequate with try/catch and logger warnings. The test file only tests fs primitives rather than the actual private method, which is a minor gap but acceptable.",
+  "issues": [
+    {
+      "severity": "warning",
+      "file": "discord/claude/executor.ts",
+      "line": 934,
+      "description": "When sessionId is empty (no session_id event received), archiveOutputFiles silently skips archival and the files remain on disk in data/processes/ forever. Previously unlinkSync would clean them up. Consider falling back to unlinkSync when sessionId is absent to avoid file accumulation."
+    },
+    {
+      "severity": "warning",
+      "file": "discord/claude/__tests__/executor-archive.test.ts",
+      "line": 41,
+      "description": "Test manually reimplements archive logic with renameSync rather than testing the actual ClaudeExecutor.archiveOutputFiles method. This means the test doesn't validate the real code path. Consider testing via a public method or exporting the method for testing."
+    }
+  ]
+}
