@@ -13,8 +13,9 @@ function parseProgress(progress: string | null): { completed: number; total: num
 }
 
 export function GoalCard({ goal }: { goal: Goal }) {
+  const isDone = goal.status === 'Done';
   const prog = parseProgress(goal.progress);
-  const percentage = prog && prog.total > 0 ? Math.round((prog.completed / prog.total) * 100) : 0;
+  const percentage = isDone ? 100 : (prog && prog.total > 0 ? Math.round((prog.completed / prog.total) * 100) : 0);
 
   return (
     <Link to={`/goals/${goal.id}`}>
@@ -30,22 +31,22 @@ export function GoalCard({ goal }: { goal: Goal }) {
           {goal.date && <><span>·</span><span>{goal.date}</span></>}
         </Space>
 
-        {prog && (
+        {(isDone || prog) && (
           <div style={{ marginTop: 8 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#999' }}>
-              <span>{goal.progress}</span>
+              <span>{isDone && prog ? `${prog.total}/${prog.total} 子任务完成` : goal.progress}</span>
               <span>{percentage}%</span>
             </div>
-            <Progress percent={percentage} showInfo={false} size="small" />
+            <Progress percent={percentage} showInfo={false} size="small" status={isDone ? 'success' : 'active'} />
           </div>
         )}
 
-        {goal.next && (
+        {!isDone && goal.next && (
           <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 4 }} ellipsis>
             下一步: {goal.next}
           </Text>
         )}
-        {goal.blocked_by && (
+        {!isDone && goal.blocked_by && (
           <Text type="danger" style={{ fontSize: 12, display: 'block', marginTop: 4 }} ellipsis>
             卡点: {goal.blocked_by}
           </Text>
