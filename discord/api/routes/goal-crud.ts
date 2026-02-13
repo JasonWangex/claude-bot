@@ -14,6 +14,9 @@ import { sendJson, readJsonBody } from '../middleware.js';
 import { getDb, GoalMetaRepo } from '../../db/index.js';
 import type { Goal, GoalStatus, GoalType } from '../../types/repository.js';
 
+const VALID_STATUSES: GoalStatus[] = ['Idea', 'Processing', 'Active', 'Paused', 'Done', 'Abandoned'];
+const VALID_TYPES: GoalType[] = ['探索型', '交付型'];
+
 function getRepo() {
   return new GoalMetaRepo(getDb());
 }
@@ -108,9 +111,20 @@ export const createGoal: RouteHandler = async (req, res) => {
     return;
   }
 
+  if (body.status && !VALID_STATUSES.includes(body.status)) {
+    sendJson(res, 400, { ok: false, error: `Invalid status. Valid values: ${VALID_STATUSES.join(', ')}` });
+    return;
+  }
+
+  if (body.type && !VALID_TYPES.includes(body.type)) {
+    sendJson(res, 400, { ok: false, error: `Invalid type. Valid values: ${VALID_TYPES.join(', ')}` });
+    return;
+  }
+
   try {
     const repo = getRepo();
-    const id = `goal-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const { randomUUID } = await import('crypto');
+    const id = randomUUID();
 
     const goal: Goal = {
       id,
@@ -151,6 +165,16 @@ export const updateGoal: RouteHandler = async (req, res, params) => {
   const updates = await readJsonBody<UpdateGoalRequest>(req);
   if (!updates) {
     sendJson(res, 400, { ok: false, error: 'Request body required' });
+    return;
+  }
+
+  if (updates.status !== undefined && !VALID_STATUSES.includes(updates.status)) {
+    sendJson(res, 400, { ok: false, error: `Invalid status. Valid values: ${VALID_STATUSES.join(', ')}` });
+    return;
+  }
+
+  if (updates.type !== undefined && updates.type !== null && !VALID_TYPES.includes(updates.type)) {
+    sendJson(res, 400, { ok: false, error: `Invalid type. Valid values: ${VALID_TYPES.join(', ')}` });
     return;
   }
 

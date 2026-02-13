@@ -27,7 +27,7 @@ function rowToSession(row: SessionRow, history: MessageHistoryRow[]): Session {
     createdAt: row.created_at,
     lastMessage: row.last_message ?? undefined,
     lastMessageAt: row.last_message_at ?? undefined,
-    planMode: row.plan_mode === 1 ? true : undefined,
+    planMode: row.plan_mode === 1 ? true : false,
     model: row.model ?? undefined,
     messageHistory: history.map((h) => ({
       role: h.role,
@@ -40,8 +40,14 @@ function rowToSession(row: SessionRow, history: MessageHistoryRow[]): Session {
 }
 
 function rowToArchivedSession(row: ArchivedSessionRow): ArchivedSession {
+  // 从 JSON 恢复归档的 message history
+  let history: { role: 'user' | 'assistant'; text: string; timestamp: number }[] = [];
+  if (row.message_history_json) {
+    try { history = JSON.parse(row.message_history_json); } catch { /* ignore parse errors */ }
+  }
   return {
     ...rowToSession(row, []),
+    messageHistory: history,
     archivedAt: row.archived_at,
     archivedBy: row.archived_by ?? undefined,
     archiveReason: row.archive_reason ?? undefined,
@@ -191,11 +197,13 @@ export class SessionRepository implements ISessionRepo {
         INSERT INTO archived_sessions (
           id, name, thread_id, guild_id, claude_session_id, prev_claude_session_id,
           cwd, created_at, last_message, last_message_at, plan_mode, model,
-          parent_thread_id, worktree_branch, archived_at, archived_by, archive_reason
+          parent_thread_id, worktree_branch, archived_at, archived_by, archive_reason,
+          message_history_json
         ) VALUES (
           @id, @name, @thread_id, @guild_id, @claude_session_id, @prev_claude_session_id,
           @cwd, @created_at, @last_message, @last_message_at, @plan_mode, @model,
-          @parent_thread_id, @worktree_branch, @archived_at, @archived_by, @archive_reason
+          @parent_thread_id, @worktree_branch, @archived_at, @archived_by, @archive_reason,
+          @message_history_json
         )
       `),
 
@@ -268,12 +276,19 @@ export class SessionRepository implements ISessionRepo {
     if (!row) return false;
 
     const archiveTransaction = this.db.transaction(() => {
-      // 插入 archived_sessions
+      // 先读取 message history（删除 session 后 CASCADE 会清除）
+      const history = this.stmts.getHistory.all(row.id) as MessageHistoryRow[];
+      const historyJson = history.length > 0
+        ? JSON.stringify(history.map(h => ({ role: h.role, text: h.text, timestamp: h.timestamp })))
+        : null;
+
+      // 插入 archived_sessions（含 message history）
       this.stmts.insertArchived.run({
         ...sessionToParams(rowToSession(row, [])),
         archived_at: Date.now(),
         archived_by: userId ?? null,
         archive_reason: reason ?? null,
+        message_history_json: historyJson,
       });
 
       // 删除 sessions（CASCADE 清理 message_history）
@@ -309,6 +324,21 @@ export class SessionRepository implements ISessionRepo {
         parent_thread_id: row.parent_thread_id,
         worktree_branch: row.worktree_branch,
       });
+
+      // 恢复 message history
+      if (row.message_history_json) {
+        try {
+          const history = JSON.parse(row.message_history_json) as Array<{ role: string; text: string; timestamp: number }>;
+          for (const entry of history) {
+            this.stmts.insertMessage.run({
+              session_id: row.id,
+              role: entry.role,
+              text: entry.text,
+              timestamp: entry.timestamp,
+            });
+          }
+        } catch { /* ignore parse errors */ }
+      }
 
       // 删除 archived_sessions 记录
       this.stmts.deleteArchived.run(guildId, threadId);

@@ -42,7 +42,7 @@ export class GoalRepo implements IGoalRepo {
           drive_status, drive_branch, drive_thread_id, drive_base_cwd,
           drive_max_concurrent, drive_created_at, drive_updated_at
         ) VALUES (
-          @id, @name, @status,
+          @id, @name, COALESCE((SELECT status FROM goals WHERE id = @id), 'Active'),
           @drive_status, @drive_branch, @drive_thread_id, @drive_base_cwd,
           @drive_max_concurrent, @drive_created_at, @drive_updated_at
         )
@@ -163,7 +163,6 @@ function goalDriveStateToGoalRow(state: GoalDriveState): Record<string, unknown>
   return {
     id: state.goalId,
     name: state.goalName,
-    status: 'Active',
     drive_status: state.status,
     drive_branch: state.goalBranch,
     drive_thread_id: state.goalThreadId,
@@ -190,12 +189,12 @@ function rowsToGoalDriveState(
   return {
     goalId: goal.id,
     goalName: goal.name,
-    goalBranch: goal.drive_branch!,
-    goalThreadId: goal.drive_thread_id!,
-    baseCwd: goal.drive_base_cwd!,
-    status: goal.drive_status as GoalDriveStatus,
-    createdAt: goal.drive_created_at!,
-    updatedAt: goal.drive_updated_at!,
+    goalBranch: goal.drive_branch ?? '',
+    goalThreadId: goal.drive_thread_id ?? '',
+    baseCwd: goal.drive_base_cwd ?? '',
+    status: (goal.drive_status as GoalDriveStatus) ?? 'running',
+    createdAt: goal.drive_created_at ?? 0,
+    updatedAt: goal.drive_updated_at ?? 0,
     maxConcurrent: goal.drive_max_concurrent ?? 2,
     tasks: tasks.map((t) => ({
       id: t.id,
@@ -209,8 +208,8 @@ function rowsToGoalDriveState(
       dispatchedAt: t.dispatched_at ?? undefined,
       completedAt: t.completed_at ?? undefined,
       error: t.error ?? undefined,
-      merged: t.merged === 1 ? true : undefined,
-      notifiedBlocked: t.notified_blocked === 1 ? true : undefined,
+      merged: t.merged === 1,
+      notifiedBlocked: t.notified_blocked === 1,
     })),
   };
 }

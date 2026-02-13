@@ -98,7 +98,7 @@ claude-bot/
 │   ├── goal/                # 目标管理
 │   ├── merge/               # 分支合并与清理
 │   ├── idea/                # 想法记录与推进
-│   ├── devlog/              # 开发日志（写入 Notion）
+│   ├── devlog/              # 开发日志（写入 SQLite）
 │   ├── review/              # 日报/周报生成
 │   └── dc/                  # Discord Bot 远程控制
 │

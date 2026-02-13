@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type Database from 'better-sqlite3';
-import { SessionRepo } from '../session-repo.js';
+import { SessionRepository } from '../session-repo.js';
 import { createTestDb } from './test-helpers.js';
 import type { Session } from '../../../types/index.js';
 
@@ -17,13 +17,13 @@ function makeSession(overrides: Partial<Session> = {}): Session {
   };
 }
 
-describe('SessionRepo', () => {
+describe('SessionRepository', () => {
   let db: Database.Database;
-  let repo: SessionRepo;
+  let repo: SessionRepository;
 
   beforeEach(() => {
     db = createTestDb();
-    repo = new SessionRepo(db);
+    repo = new SessionRepository(db);
   });
 
   afterEach(() => {

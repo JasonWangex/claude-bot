@@ -77,7 +77,8 @@ const migration: Migration = {
         worktree_branch  TEXT,
         archived_at     INTEGER NOT NULL,
         archived_by     TEXT,
-        archive_reason  TEXT
+        archive_reason  TEXT,
+        message_history_json TEXT
       );
 
       CREATE INDEX IF NOT EXISTS idx_archived_sessions_guild_thread
@@ -147,7 +148,8 @@ const migration: Migration = {
         goal_id             TEXT NOT NULL,
         depends_on_task_id  TEXT NOT NULL,
         PRIMARY KEY (goal_id, task_id, depends_on_task_id),
-        FOREIGN KEY (goal_id, task_id) REFERENCES goal_tasks(goal_id, id) ON DELETE CASCADE
+        FOREIGN KEY (goal_id, task_id) REFERENCES goal_tasks(goal_id, id) ON DELETE CASCADE,
+        FOREIGN KEY (goal_id, depends_on_task_id) REFERENCES goal_tasks(goal_id, id) ON DELETE CASCADE
       );
 
       -- ============================================================

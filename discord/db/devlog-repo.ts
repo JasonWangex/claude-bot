@@ -77,12 +77,12 @@ export class DevLogRepository implements IDevLogRepo {
       name: log.name,
       date: log.date,
       project: log.project,
-      branch: log.branch || null,
-      summary: log.summary || null,
-      commits: log.commits || null,
-      lines_changed: log.linesChanged || null,
-      goal: log.goal || null,
-      body: log.content || null,
+      branch: log.branch ?? null,
+      summary: log.summary ?? null,
+      commits: log.commits ?? null,
+      lines_changed: log.linesChanged ?? null,
+      goal: log.goal ?? null,
+      body: log.content ?? null,
       created_at: log.createdAt,
     });
   }

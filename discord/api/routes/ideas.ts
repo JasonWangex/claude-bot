@@ -134,6 +134,7 @@ export const createIdea: RouteHandler = async (req, res) => {
 interface UpdateIdeaRequest {
   name?: string;
   status?: IdeaStatus;
+  project?: string;
 }
 
 // PATCH /api/ideas/:id
@@ -144,7 +145,7 @@ export const updateIdea: RouteHandler = async (req, res, params) => {
     return;
   }
 
-  if (body.status && !VALID_STATUSES.includes(body.status)) {
+  if (body.status !== undefined && !VALID_STATUSES.includes(body.status)) {
     sendJson(res, 400, { ok: false, error: `Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}` });
     return;
   }
@@ -157,8 +158,9 @@ export const updateIdea: RouteHandler = async (req, res, params) => {
       return;
     }
 
-    if (body.name) idea.name = body.name.trim();
-    if (body.status) idea.status = body.status;
+    if (body.name !== undefined) idea.name = body.name.trim();
+    if (body.status !== undefined) idea.status = body.status;
+    if (body.project !== undefined) idea.project = body.project.trim();
     idea.updatedAt = Date.now();
 
     await repo.save(idea);

@@ -20,7 +20,7 @@ import { sendMessage } from './routes/messages.js';
 import { clearSession, compactSession, rewindSession, stopSession } from './routes/session-ops.js';
 import { getModels, setDefaultModel } from './routes/models.js';
 import { startDrive, getDriveStatus, pauseDrive, resumeDrive, skipTask, markTaskDone, retryTask } from './routes/goals.js';
-import { listGoals, createGoal, getGoal, updateGoal } from './routes/goals-crud.js';
+import { listGoals, createGoal, getGoal, updateGoal } from './routes/goal-crud.js';
 import { qdev } from './routes/qdev.js';
 import { listDevLogs, getDevLog, createDevLog } from './routes/devlogs.js';
 import { listIdeas, createIdea, getIdea, updateIdea, deleteIdea } from './routes/ideas.js';

@@ -60,10 +60,27 @@ export interface StartDriveParams {
 export class GoalOrchestrator {
   private deps: OrchestratorDeps;
   private mergeLocks = new Map<string, Promise<void>>();
+  private stateLocks = new Map<string, Promise<void>>();
   private activeDrives = new Map<string, GoalDriveState>();
 
   constructor(deps: OrchestratorDeps) {
     this.deps = deps;
+  }
+
+  /**
+   * 串行化对同一 goal 的状态操作，防止并发 read-modify-write race condition
+   */
+  private async withStateLock<T>(goalId: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.stateLocks.get(goalId) ?? Promise.resolve();
+    let resolve: () => void;
+    const current = new Promise<void>(r => { resolve = r; });
+    this.stateLocks.set(goalId, current);
+    await prev;
+    try {
+      return await fn();
+    } finally {
+      resolve!();
+    }
   }
 
   /** 启动 Goal 自动推进 */
@@ -210,7 +227,7 @@ export class GoalOrchestrator {
         continue;
       }
 
-      // Check worktree existence for running tasks
+      // Reset running/dispatched tasks: worktree missing → failed, else → pending (re-dispatch)
       let stateModified = false;
       for (const task of state.tasks) {
         if ((task.status === 'running' || task.status === 'dispatched') && task.branchName) {
@@ -225,8 +242,15 @@ export class GoalOrchestrator {
               logger.warn(`[Orchestrator] Worktree missing for task ${task.id} (${task.branchName}), marking failed`);
               task.status = 'failed';
               task.error = 'Worktree not found after restart';
-              stateModified = true;
+            } else {
+              // Worktree exists but process is gone — reset to pending for re-dispatch
+              logger.info(`[Orchestrator] Resetting task ${task.id} to pending for re-dispatch`);
+              task.status = 'pending';
+              task.branchName = undefined;
+              task.threadId = undefined;
+              task.dispatchedAt = undefined;
             }
+            stateModified = true;
           } catch {
             task.status = 'failed';
             task.error = 'Cannot verify worktree after restart';
@@ -417,32 +441,36 @@ export class GoalOrchestrator {
   }
 
   private async onTaskCompleted(goalId: string, taskId: string): Promise<void> {
-    const state = await this.getState(goalId);
-    if (!state) return;
-    const task = state.tasks.find(t => t.id === taskId);
-    if (!task) return;
-    task.status = 'completed';
-    task.completedAt = Date.now();
-    await this.saveState(state);
-    await this.notify(state.goalThreadId, `Completed: ${task.id} - ${task.description}`, 'success');
-    if (task.branchName) await this.mergeAndCleanup(state, task);
-    const refreshed = await this.getState(goalId);
-    if (refreshed && refreshed.status === 'running') await this.dispatchNext(refreshed);
+    await this.withStateLock(goalId, async () => {
+      const state = await this.getState(goalId);
+      if (!state) return;
+      const task = state.tasks.find(t => t.id === taskId);
+      if (!task) return;
+      task.status = 'completed';
+      task.completedAt = Date.now();
+      await this.saveState(state);
+      await this.notify(state.goalThreadId, `Completed: ${task.id} - ${task.description}`, 'success');
+      if (task.branchName) await this.mergeAndCleanup(state, task);
+      const refreshed = await this.getState(goalId);
+      if (refreshed && refreshed.status === 'running') await this.dispatchNext(refreshed);
+    });
   }
 
   private async onTaskFailed(goalId: string, taskId: string, error: string): Promise<void> {
-    const state = await this.getState(goalId);
-    if (!state) return;
-    const task = state.tasks.find(t => t.id === taskId);
-    if (!task) return;
-    task.status = 'failed';
-    task.error = error;
-    await this.saveState(state);
-    await this.notify(state.goalThreadId,
-      `Failed: ${task.id} - ${task.description}\nError: ${error}\n\nReply "retry ${task.id}" to retry.`,
-      'error'
-    );
-    if (state.status === 'running') await this.dispatchNext(state);
+    await this.withStateLock(goalId, async () => {
+      const state = await this.getState(goalId);
+      if (!state) return;
+      const task = state.tasks.find(t => t.id === taskId);
+      if (!task) return;
+      task.status = 'failed';
+      task.error = error;
+      await this.saveState(state);
+      await this.notify(state.goalThreadId,
+        `Failed: ${task.id} - ${task.description}\nError: ${error}\n\nReply "retry ${task.id}" to retry.`,
+        'error'
+      );
+      if (state.status === 'running') await this.dispatchNext(state);
+    });
   }
 
   private async mergeAndCleanup(state: GoalDriveState, task: GoalTask): Promise<void> {

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import type Database from 'better-sqlite3';
-import { GuildRepo } from '../guild-repo.js';
+import { GuildRepository } from '../guild-repo.js';
 import { createTestDb } from './test-helpers.js';
 import type { GuildState } from '../../../types/index.js';
 
@@ -13,13 +13,13 @@ function makeGuild(overrides: Partial<GuildState> = {}): GuildState {
   };
 }
 
-describe('GuildRepo', () => {
+describe('GuildRepository', () => {
   let db: Database.Database;
-  let repo: GuildRepo;
+  let repo: GuildRepository;
 
   beforeEach(() => {
     db = createTestDb();
-    repo = new GuildRepo(db);
+    repo = new GuildRepository(db);
   });
 
   afterEach(() => {

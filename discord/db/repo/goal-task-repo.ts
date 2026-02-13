@@ -234,8 +234,8 @@ function taskRowToGoalTask(
     dispatchedAt: row.dispatched_at ?? undefined,
     completedAt: row.completed_at ?? undefined,
     error: row.error ?? undefined,
-    merged: row.merged === 1 ? true : undefined,
-    notifiedBlocked: row.notified_blocked === 1 ? true : undefined,
+    merged: row.merged === 1,
+    notifiedBlocked: row.notified_blocked === 1,
   };
 }
 

@@ -102,6 +102,8 @@ export interface ArchivedSessionRow extends SessionRow {
   archived_by: string | null;
   /** 归档原因 */
   archive_reason: string | null;
+  /** 归档时的消息历史 (JSON 序列化) */
+  message_history_json: string | null;
 }
 
 // ================================================================
