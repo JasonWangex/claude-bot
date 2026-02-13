@@ -3,7 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 PROJECT_DIR="$(pwd)"
-SERVICES="claude-discord claude-monitor claude-mcp"
+SERVICES="claude-discord claude-monitor claude-mcp claude-web"
 
 if [ ! -f .env ]; then
   echo "Missing .env file. Please create it from example.env."
@@ -54,6 +54,9 @@ do_deploy() {
 
   echo "==> Installing skills..."
   bash scripts/install-skills.sh
+
+  echo "==> Building web UI..."
+  pnpm --dir web build
 
   echo "==> Installing systemd services..."
   install_systemd_services
@@ -119,7 +122,7 @@ do_status() {
 }
 
 do_logs() {
-  journalctl --user -u claude-discord -u claude-monitor -u claude-mcp -f
+  journalctl --user -u claude-discord -u claude-monitor -u claude-mcp -u claude-web -f
 }
 
 case "${1:-}" in

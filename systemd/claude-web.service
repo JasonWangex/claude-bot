@@ -1,0 +1,20 @@
+[Unit]
+Description=Claude Bot Web UI
+After=network.target claude-discord.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/jason/projects/claude-bot/web
+EnvironmentFile=/home/jason/projects/claude-bot/.env
+Environment=NODE_ENV=production
+Environment=PATH=/home/jason/.local/bin:/home/jason/projects/claude-bot/web/node_modules/.bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/bin/node /home/jason/projects/claude-bot/web/node_modules/.bin/../vite/bin/vite.js preview --host
+KillMode=process
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=claude-web
+
+[Install]
+WantedBy=default.target
