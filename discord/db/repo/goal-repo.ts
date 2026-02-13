@@ -40,11 +40,13 @@ export class GoalRepo implements IGoalRepo {
         INSERT INTO goals (
           id, name, status,
           drive_status, drive_branch, drive_thread_id, drive_base_cwd,
-          drive_max_concurrent, drive_created_at, drive_updated_at
+          drive_max_concurrent, drive_created_at, drive_updated_at,
+          drive_pending_json
         ) VALUES (
           @id, @name, COALESCE((SELECT status FROM goals WHERE id = @id), 'Active'),
           @drive_status, @drive_branch, @drive_thread_id, @drive_base_cwd,
-          @drive_max_concurrent, @drive_created_at, @drive_updated_at
+          @drive_max_concurrent, @drive_created_at, @drive_updated_at,
+          @drive_pending_json
         )
         ON CONFLICT(id) DO UPDATE SET
           name = @name,
@@ -54,7 +56,8 @@ export class GoalRepo implements IGoalRepo {
           drive_base_cwd = @drive_base_cwd,
           drive_max_concurrent = @drive_max_concurrent,
           drive_created_at = @drive_created_at,
-          drive_updated_at = @drive_updated_at
+          drive_updated_at = @drive_updated_at,
+          drive_pending_json = @drive_pending_json
       `),
 
       deleteGoal: this.db.prepare(`DELETE FROM goals WHERE id = ?`),
@@ -101,11 +104,11 @@ export class GoalRepo implements IGoalRepo {
           INSERT INTO goal_tasks (
             id, goal_id, description, type, phase, status,
             branch_name, thread_id, dispatched_at, completed_at,
-            error, merged, notified_blocked
+            error, merged, notified_blocked, feedback_json
           ) VALUES (
             @id, @goal_id, @description, @type, @phase, @status,
             @branch_name, @thread_id, @dispatched_at, @completed_at,
-            @error, @merged, @notified_blocked
+            @error, @merged, @notified_blocked, @feedback_json
           )
         `);
 
@@ -129,6 +132,7 @@ export class GoalRepo implements IGoalRepo {
             error: task.error ?? null,
             merged: task.merged ? 1 : 0,
             notified_blocked: task.notifiedBlocked ? 1 : 0,
+            feedback_json: task.feedback ? JSON.stringify(task.feedback) : null,
           });
 
           for (const dep of task.depends) {
@@ -160,6 +164,12 @@ export class GoalRepo implements IGoalRepo {
 // ==================== 转换函数 ====================
 
 function goalDriveStateToGoalRow(state: GoalDriveState): Record<string, unknown> {
+  // 序列化 pendingReplan + pendingRollback 为 JSON
+  const pending: Record<string, unknown> = {};
+  if (state.pendingReplan) pending.pendingReplan = state.pendingReplan;
+  if (state.pendingRollback) pending.pendingRollback = state.pendingRollback;
+  const pendingJson = Object.keys(pending).length > 0 ? JSON.stringify(pending) : null;
+
   return {
     id: state.goalId,
     name: state.goalName,
@@ -170,6 +180,7 @@ function goalDriveStateToGoalRow(state: GoalDriveState): Record<string, unknown>
     drive_max_concurrent: state.maxConcurrent,
     drive_created_at: state.createdAt,
     drive_updated_at: state.updatedAt,
+    drive_pending_json: pendingJson,
   };
 }
 
@@ -186,6 +197,17 @@ function rowsToGoalDriveState(
     depsMap.set(dep.task_id, list);
   }
 
+  // 反序列化 pendingReplan / pendingRollback
+  let pendingReplan: GoalDriveState['pendingReplan'];
+  let pendingRollback: GoalDriveState['pendingRollback'];
+  if (goal.drive_pending_json) {
+    try {
+      const pending = JSON.parse(goal.drive_pending_json);
+      pendingReplan = pending.pendingReplan;
+      pendingRollback = pending.pendingRollback;
+    } catch { /* ignore corrupt JSON */ }
+  }
+
   return {
     goalId: goal.id,
     goalName: goal.name,
@@ -196,6 +218,8 @@ function rowsToGoalDriveState(
     createdAt: goal.drive_created_at ?? 0,
     updatedAt: goal.drive_updated_at ?? 0,
     maxConcurrent: goal.drive_max_concurrent ?? 2,
+    pendingReplan,
+    pendingRollback,
     tasks: tasks.map((t) => ({
       id: t.id,
       description: t.description,
@@ -210,6 +234,7 @@ function rowsToGoalDriveState(
       error: t.error ?? undefined,
       merged: t.merged === 1,
       notifiedBlocked: t.notified_blocked === 1,
+      feedback: t.feedback_json ? JSON.parse(t.feedback_json) : undefined,
     })),
   };
 }

@@ -703,11 +703,13 @@ export class GoalOrchestrator {
             'info'
           );
 
+          // 先 merge 分支，再 replan（replan 需要基于已合并的代码状态）
+          if (task.branchName) await this.mergeAndCleanup(state, task);
+
           // 触发重规划 + 分级自治
           await this.triggerReplan(state, task.id, feedback);
 
-          // replan 后需刷新 state 再继续调度
-          if (task.branchName) await this.mergeAndCleanup(state, task);
+          // replan 后刷新 state 再继续调度
           const refreshed = await this.getState(goalId);
           if (refreshed && refreshed.status === 'running') await this.reviewAndDispatch(refreshed, taskId);
           return;
@@ -786,9 +788,16 @@ export class GoalOrchestrator {
       };
 
       const result = await replanTasks(ctx);
-      if (!result || result.changes.length === 0) {
+      if (!result) {
         await this.notify(state.goalThreadId,
-          `Replan: 无需变更 — ${result?.reasoning ?? 'LLM 未返回结果'}`,
+          `⚠️ Replan 调用失败 — LLM 未返回有效结果，当前计划保持不变`,
+          'warning',
+        );
+        return;
+      }
+      if (result.changes.length === 0) {
+        await this.notify(state.goalThreadId,
+          `Replan: 无需变更 — ${result.reasoning}`,
           'info',
         );
         return;
@@ -1317,7 +1326,7 @@ export class GoalOrchestrator {
       await this.saveState(state);
 
       await this.notify(state.goalThreadId,
-        `🚫 **回滚已取消**\n已暂停的任务将重新分发`,
+        `🚫 **回滚已取消**\n已暂停的任务将重新派发（之前的执行进度无法恢复）`,
         'info',
       );
 
@@ -1672,7 +1681,7 @@ export class GoalOrchestrator {
     threadId: string,
     message: string,
     type?: 'success' | 'error' | 'warning' | 'info',
-    options?: { components?: import('discord.js').ActionRowBuilder<import('discord.js').ButtonBuilder>[] },
+    options?: { components?: import('discord.js').ActionRowBuilder<import('discord.js').MessageActionRowComponentBuilder>[] },
   ): Promise<void> {
     try {
       const colorMap: Record<string, EmbedColor> = {
@@ -1684,7 +1693,7 @@ export class GoalOrchestrator {
       const embedColor = type ? colorMap[type] : undefined;
       await this.deps.mq.sendLong(threadId, message, {
         embedColor,
-        components: options?.components as any,
+        components: options?.components,
       });
     } catch (err: any) {
       logger.error(`[Orchestrator] Failed to send notification: ${err.message}`);

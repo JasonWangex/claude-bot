@@ -150,6 +150,8 @@ export interface GoalRow {
   drive_created_at: number | null;
   /** Drive 最近更新时间 (Unix ms) */
   drive_updated_at: number | null;
+  /** JSON: pendingReplan + pendingRollback（重启恢复用） */
+  drive_pending_json: string | null;
 }
 
 // ================================================================
@@ -183,6 +185,8 @@ export interface GoalTaskRow {
   merged: number;
   /** 是否已通知阻塞 (0/1) */
   notified_blocked: number;
+  /** JSON: GoalTaskFeedback（feedback/<taskId>.json 的内容） */
+  feedback_json: string | null;
 }
 
 // ================================================================

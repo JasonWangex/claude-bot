@@ -53,7 +53,7 @@ export interface HandleReplanDeps extends ApplyChangesDeps {
     threadId: string,
     message: string,
     type?: 'success' | 'error' | 'warning' | 'info',
-    options?: { components?: import('discord.js').ActionRowBuilder<import('discord.js').ButtonBuilder>[] },
+    options?: { components?: import('discord.js').ActionRowBuilder<import('discord.js').MessageActionRowComponentBuilder>[] },
   ) => Promise<void>;
 }
 
@@ -366,8 +366,8 @@ export function updateGoalBodyWithTasks(body: string | null, tasks: GoalTask[]):
 
   if (!body) return taskSection;
 
-  // 匹配 "## 子任务" 到下一个 ## 或文件末尾
-  const sectionRegex = /## 子任务[\s\S]*?(?=\n## [^子]|\n## $|$)/;
+  // 匹配 "## 子任务" 到下一个 ## 标题或文件末尾
+  const sectionRegex = /## 子任务[\s\S]*?(?=\n##\s|$)/;
   if (sectionRegex.test(body)) {
     return body.replace(sectionRegex, taskSection);
   }

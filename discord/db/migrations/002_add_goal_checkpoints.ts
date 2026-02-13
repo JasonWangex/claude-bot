@@ -23,6 +23,12 @@ const migration: Migration = {
 
       CREATE INDEX idx_goal_checkpoints_goal
         ON goal_checkpoints(goal_id, created_at);
+
+      -- goals 表新增 drive_pending_json 列（存储 pendingReplan / pendingRollback）
+      ALTER TABLE goals ADD COLUMN drive_pending_json TEXT;
+
+      -- goal_tasks 表新增 feedback_json 列（存储 GoalTaskFeedback）
+      ALTER TABLE goal_tasks ADD COLUMN feedback_json TEXT;
     `);
   },
 

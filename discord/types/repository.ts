@@ -20,6 +20,7 @@ import type {
 // Goal、DevLog 和 Idea 实体定义
 
 // 从 db.ts 统一导出，避免重复定义
+import type { GoalStatus, GoalType } from './db.js';
 export type { GoalStatus, GoalType } from './db.js';
 
 /** 开发目标（元数据视图，对应 goals 表的完整行） */
