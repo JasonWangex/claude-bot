@@ -34,6 +34,7 @@ function rowToSession(row: SessionRow, history: MessageHistoryRow[]): Session {
       text: h.text,
       timestamp: h.timestamp,
     })),
+    messageCount: row.message_count,
     parentThreadId: row.parent_thread_id ?? undefined,
     worktreeBranch: row.worktree_branch ?? undefined,
   };
@@ -70,6 +71,7 @@ function sessionToParams(session: Session): Record<string, unknown> {
     model: session.model ?? null,
     parent_thread_id: session.parentThreadId ?? null,
     worktree_branch: session.worktreeBranch ?? null,
+    message_count: session.messageHistory.length,
   };
 }
 
@@ -92,6 +94,7 @@ export class SessionRepository implements ISessionRepo {
     deleteHistory: Database.Statement;
     trimHistory: Database.Statement;
     updateLastMessage: Database.Statement;
+    updateMessageCount: Database.Statement;
     getArchivedByKey: Database.Statement;
     getAllArchivedByGuild: Database.Statement;
     getAllArchived: Database.Statement;
@@ -119,11 +122,11 @@ export class SessionRepository implements ISessionRepo {
         INSERT INTO sessions (
           id, name, thread_id, guild_id, claude_session_id, prev_claude_session_id,
           cwd, created_at, last_message, last_message_at, plan_mode, model,
-          parent_thread_id, worktree_branch
+          parent_thread_id, worktree_branch, message_count
         ) VALUES (
           @id, @name, @thread_id, @guild_id, @claude_session_id, @prev_claude_session_id,
           @cwd, @created_at, @last_message, @last_message_at, @plan_mode, @model,
-          @parent_thread_id, @worktree_branch
+          @parent_thread_id, @worktree_branch, @message_count
         )
         ON CONFLICT(guild_id, thread_id) DO UPDATE SET
           name = @name,
@@ -135,7 +138,8 @@ export class SessionRepository implements ISessionRepo {
           plan_mode = @plan_mode,
           model = @model,
           parent_thread_id = @parent_thread_id,
-          worktree_branch = @worktree_branch
+          worktree_branch = @worktree_branch,
+          message_count = @message_count
       `),
 
       deleteByKey: this.db.prepare(
@@ -183,6 +187,12 @@ export class SessionRepository implements ISessionRepo {
         `UPDATE sessions SET last_message = ?, last_message_at = ? WHERE id = ?`,
       ),
 
+      updateMessageCount: this.db.prepare(
+        `UPDATE sessions SET message_count = (
+          SELECT COUNT(*) FROM message_history WHERE session_id = ?
+        ) WHERE id = ?`,
+      ),
+
       getArchivedByKey: this.db.prepare(
         `SELECT * FROM archived_sessions WHERE guild_id = ? AND thread_id = ?`,
       ),
@@ -197,13 +207,13 @@ export class SessionRepository implements ISessionRepo {
         INSERT INTO archived_sessions (
           id, name, thread_id, guild_id, claude_session_id, prev_claude_session_id,
           cwd, created_at, last_message, last_message_at, plan_mode, model,
-          parent_thread_id, worktree_branch, archived_at, archived_by, archive_reason,
-          message_history_json
+          parent_thread_id, worktree_branch, message_count, archived_at, archived_by,
+          archive_reason, message_history_json
         ) VALUES (
           @id, @name, @thread_id, @guild_id, @claude_session_id, @prev_claude_session_id,
           @cwd, @created_at, @last_message, @last_message_at, @plan_mode, @model,
-          @parent_thread_id, @worktree_branch, @archived_at, @archived_by, @archive_reason,
-          @message_history_json
+          @parent_thread_id, @worktree_branch, @message_count, @archived_at, @archived_by,
+          @archive_reason, @message_history_json
         )
       `),
 
@@ -231,19 +241,9 @@ export class SessionRepository implements ISessionRepo {
   }
 
   async save(session: Session): Promise<void> {
-    const saveTransaction = this.db.transaction(() => {
-      this.stmts.upsert.run(sessionToParams(session));
-      this.stmts.deleteHistory.run(session.id);
-      for (const entry of session.messageHistory) {
-        this.stmts.insertMessage.run({
-          session_id: session.id,
-          role: entry.role,
-          text: entry.text,
-          timestamp: entry.timestamp,
-        });
-      }
-    });
-    saveTransaction();
+    // 简化为单条 UPSERT — message_count 从 messageHistory.length 计算
+    // 消息历史的更新由 addMessageAndTrim() 方法优化处理
+    this.stmts.upsert.run(sessionToParams(session));
   }
 
   async delete(guildId: string, threadId: string): Promise<boolean> {
@@ -284,7 +284,7 @@ export class SessionRepository implements ISessionRepo {
 
       // 插入 archived_sessions（含 message history）
       this.stmts.insertArchived.run({
-        ...sessionToParams(rowToSession(row, [])),
+        ...sessionToParams(rowToSession(row, history)),
         archived_at: Date.now(),
         archived_by: userId ?? null,
         archive_reason: reason ?? null,
@@ -323,6 +323,7 @@ export class SessionRepository implements ISessionRepo {
         model: row.model,
         parent_thread_id: row.parent_thread_id,
         worktree_branch: row.worktree_branch,
+        message_count: row.message_count,
       });
 
       // 恢复 message history
@@ -406,6 +407,8 @@ export class SessionRepository implements ISessionRepo {
       if (lastMessage !== undefined) {
         this.stmts.updateLastMessage.run(lastMessage, lastMessageAt, sessionId);
       }
+      // 更新 message_count 字段（从 message_history 计数）
+      this.stmts.updateMessageCount.run(sessionId, sessionId);
     });
     addTransaction();
   }

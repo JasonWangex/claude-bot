@@ -39,6 +39,7 @@ export interface Session {
     text: string;
     timestamp: number;
   }>;
+  messageCount: number;       // 消息历史条数（从 DB message_count 字段）
   parentThreadId?: string;    // 父 Channel ID（fork 产生的子 channel）
   worktreeBranch?: string;    // worktree 分支名（fork 创建的）
 }

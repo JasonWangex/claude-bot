@@ -57,6 +57,8 @@ export interface SessionRow {
   parent_thread_id: string | null;
   /** worktree 分支名 */
   worktree_branch: string | null;
+  /** 消息历史条数（替代 messageHistory.length） */
+  message_count: number;
 }
 
 // ================================================================

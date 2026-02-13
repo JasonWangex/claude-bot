@@ -219,7 +219,7 @@ async function handleStatus(
     const lastMsg = s.lastMessage
       ? `\n    ${s.lastMessage.slice(0, 60)}${s.lastMessage.length > 60 ? '...' : ''}`
       : '';
-    return `${claude} **${escapeMarkdown(s.name)}** (${s.messageHistory.length} msgs)${lastMsg}`;
+    return `${claude} **${escapeMarkdown(s.name)}** (${s.messageCount} msgs)${lastMsg}`;
   });
 
   const channelId = interaction.channelId;

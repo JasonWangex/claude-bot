@@ -302,7 +302,7 @@ async function handleInfo(
       `Claude context: ${session.claudeSessionId ? `\`${session.claudeSessionId}\`` : '(new session)'}\n` +
       `Created: ${created}\n` +
       `Last activity: ${lastMsgTime}\n` +
-      `Messages: ${session.messageHistory.length}`
+      `Messages: ${session.messageCount}`
     );
   } else {
     // General: show server info
