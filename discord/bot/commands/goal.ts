@@ -11,6 +11,9 @@ import {
   SlashCommandBuilder,
   ChannelType,
   EmbedBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ActionRowBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
 import { generateBranchName } from '../../utils/git-utils.js';
@@ -18,6 +21,8 @@ import { generateTopicTitle } from '../../utils/llm.js';
 import { forkTaskCore } from '../../utils/fork-task.js';
 import { logger } from '../../utils/logger.js';
 import { EmbedColors } from '../message-queue.js';
+import { getDb } from '../../db/index.js';
+import { GoalMetaRepo } from '../../db/goal-meta-repo.js';
 import type { CommandDeps } from './types.js';
 import { requireAuth, requireThread } from './utils.js';
 
@@ -62,7 +67,72 @@ async function handleGoal(
     return;
   }
 
-  // 加载 goal skill
+  // 列表模式：无参数 + 当前 session → 直接查 DB 展示
+  if (!newSession && !text) {
+    await interaction.reply('Querying goals...');
+
+    try {
+      const db = getDb();
+      const goalMetaRepo = new GoalMetaRepo(db);
+      const activeGoals = await goalMetaRepo.findByStatus('Active');
+      const processingGoals = await goalMetaRepo.findByStatus('Processing');
+      const pausedGoals = await goalMetaRepo.findByStatus('Paused');
+      const allGoals = [...activeGoals, ...processingGoals, ...pausedGoals];
+
+      if (allGoals.length === 0) {
+        await messageQueue.send(threadId, 'No active goals found.', {
+          embedColor: EmbedColors.GRAY,
+          priority: 'high',
+        });
+        return;
+      }
+
+      const statusEmoji: Record<string, string> = {
+        Active: '\u{1F7E2}',
+        Processing: '\u{1F535}',
+        Paused: '\u23F8\uFE0F',
+      };
+
+      const lines = allGoals.map((goal, i) => {
+        const emoji = statusEmoji[goal.status] || '\u26AA';
+        let line = `**${i + 1}.** ${emoji} ${goal.name}`;
+        if (goal.progress) line += `\n   Progress: ${goal.progress}`;
+        if (goal.next) line += `\n   Next: ${goal.next}`;
+        if (goal.project) line += `\n   Project: \`${goal.project}\``;
+        return line;
+      });
+
+      const description = lines.join('\n\n');
+
+      // 构建「推进」按钮（最多 5 个，一行一个）
+      const buttons = allGoals.slice(0, 5).map((goal, i) =>
+        new ButtonBuilder()
+          .setCustomId(`goal:drive_prompt:${goal.id}`)
+          .setLabel(`${i + 1}. 推进`)
+          .setStyle(ButtonStyle.Primary),
+      );
+      const rows: ActionRowBuilder<ButtonBuilder>[] = [];
+      for (let j = 0; j < buttons.length; j += 5) {
+        rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(buttons.slice(j, j + 5)));
+      }
+
+      await messageQueue.send(
+        threadId,
+        `**Goals** (${allGoals.length} active)\n\n${description}`,
+        {
+          components: rows as any,
+          embedColor: EmbedColors.PURPLE,
+          priority: 'high',
+        },
+      );
+    } catch (err: any) {
+      logger.error('goal list mode failed:', err.message);
+      await messageQueue.sendLong(threadId, `goal query failed: ${err.message}`).catch(() => {});
+    }
+    return;
+  }
+
+  // 以下路径需要加载 goal skill
   const skillPath = join(homedir(), '.claude/skills/goal/SKILL.md');
   let skillContent: string;
   try {
@@ -77,9 +147,9 @@ async function handleGoal(
     .replace('{{SKILL_ARGS}}', text);
 
   if (!newSession) {
-    // 直接在当前 session 中执行 goal skill
+    // 有参数，当前 session：转发给 Claude
     const prompt = promptTemplate.replace('{{THREAD_ID}}', threadId);
-    await interaction.reply(`Goal: ${text || '(listing goals)'}...`);
+    await interaction.reply(`Goal: ${text}...`);
     messageHandler.handleBackgroundChat(guildId, threadId, prompt).catch((err) => {
       logger.error('goal failed:', err.message);
       messageQueue.sendLong(threadId, `goal failed: ${err.message}`).catch(() => {});
