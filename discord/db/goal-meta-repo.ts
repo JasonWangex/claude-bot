@@ -23,6 +23,7 @@ function rowToGoal(row: GoalRow): Goal {
     next: row.next,
     blockedBy: row.blocked_by,
     body: row.body,
+    seq: row.seq ?? null,
   };
 }
 
@@ -42,8 +43,9 @@ export class GoalMetaRepo implements IGoalMetaRepo {
       get: db.prepare('SELECT * FROM goals WHERE id = ?'),
       getAll: db.prepare('SELECT * FROM goals ORDER BY date DESC'),
       upsert: db.prepare(`
-        INSERT INTO goals (id, name, status, type, project, date, completion, progress, next, blocked_by, body)
-        VALUES (@id, @name, @status, @type, @project, @date, @completion, @progress, @next, @blocked_by, @body)
+        INSERT INTO goals (id, name, status, type, project, date, completion, progress, next, blocked_by, body, seq)
+        VALUES (@id, @name, @status, @type, @project, @date, @completion, @progress, @next, @blocked_by, @body,
+                COALESCE(@seq, (SELECT COALESCE(MAX(seq), 0) + 1 FROM goals)))
         ON CONFLICT(id) DO UPDATE SET
           name = @name,
           status = @status,
@@ -86,6 +88,7 @@ export class GoalMetaRepo implements IGoalMetaRepo {
       next: goal.next,
       blocked_by: goal.blockedBy,
       body: goal.body,
+      seq: goal.seq,
     });
   }
 

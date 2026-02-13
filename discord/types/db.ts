@@ -133,6 +133,8 @@ export interface GoalRow {
   blocked_by: string | null;
   /** 页面正文 Markdown（完整内容） */
   body: string | null;
+  /** 人类可读的短序号（g1, g2, ...），用于子任务命名前缀 */
+  seq: number | null;
 
   // ---- Drive 状态（Goal 被 drive 时填充）----
 
@@ -159,7 +161,7 @@ export interface GoalRow {
 // ================================================================
 
 export interface GoalTaskRow {
-  /** 任务 ID，如 "t1", "t2" — Goal 内唯一 */
+  /** 任务 ID，如 "t1", "t2" — Goal 内唯一。对外命名时带 goal seq 前缀如 "g2t1" */
   id: string;
   /** 所属 Goal ID (FOREIGN KEY → goals.id) */
   goal_id: string;

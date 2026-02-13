@@ -215,6 +215,7 @@ function rowsToGoalDriveState(
 
   return {
     goalId: goal.id,
+    goalSeq: goal.seq ?? 0,
     goalName: goal.name,
     goalBranch: goal.drive_branch ?? '',
     goalThreadId: goal.drive_thread_id ?? '',

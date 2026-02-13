@@ -334,6 +334,7 @@ export interface PendingRollback {
 
 export interface GoalDriveState {
   goalId: string;
+  goalSeq: number;            // 短序号，用于子任务命名前缀（g1, g2, ...）
   goalName: string;
   goalBranch: string;
   goalThreadId: string;       // 调度员 thread（用于通知用户）

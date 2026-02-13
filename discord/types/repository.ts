@@ -36,6 +36,7 @@ export interface Goal {
   next: string | null;           // 下一步
   blockedBy: string | null;      // 卡点说明
   body: string | null;           // 页面正文 Markdown
+  seq: number | null;            // 短序号，用于子任务命名前缀（g1, g2, ...）
 }
 
 /** 开发日志 */

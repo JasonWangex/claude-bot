@@ -88,6 +88,11 @@ export class GoalOrchestrator {
     this.deps = deps;
   }
 
+  /** 生成带 goal seq 前缀的任务标签，如 g2t1 */
+  private getTaskLabel(state: GoalDriveState, taskId: string): string {
+    return state.goalSeq > 0 ? `g${state.goalSeq}${taskId}` : taskId;
+  }
+
   /**
    * 串行化对同一 goal 的状态操作，防止并发 read-modify-write race condition
    */
@@ -136,8 +141,16 @@ export class GoalOrchestrator {
       throw err;
     }
 
+    // 获取 goal seq（短序号），用于子任务命名前缀
+    let goalSeq = 0;
+    try {
+      const goalMeta = await this.deps.goalMetaRepo.get(goalId);
+      goalSeq = goalMeta?.seq ?? 0;
+    } catch { /* fallback to 0 */ }
+
     const state: GoalDriveState = {
       goalId,
+      goalSeq,
       goalName,
       goalBranch,
       goalThreadId,
@@ -205,7 +218,7 @@ export class GoalOrchestrator {
 
     task.status = 'skipped';
     await this.saveState(state);
-    await this.notify(state.goalThreadId, `Skipped task: ${task.id} - ${task.description}`, 'info');
+    await this.notify(state.goalThreadId, `Skipped task: ${this.getTaskLabel(state, task.id)} - ${task.description}`, 'info');
     if (state.status === 'running') await this.reviewAndDispatch(state);
     return true;
   }
@@ -218,7 +231,7 @@ export class GoalOrchestrator {
     task.status = 'completed';
     task.completedAt = Date.now();
     await this.saveState(state);
-    await this.notify(state.goalThreadId, `Manual task completed: ${task.id} - ${task.description}`, 'success');
+    await this.notify(state.goalThreadId, `Manual task completed: ${this.getTaskLabel(state, task.id)} - ${task.description}`, 'success');
     if (state.status === 'running') await this.reviewAndDispatch(state, taskId);
     return true;
   }
@@ -249,7 +262,7 @@ export class GoalOrchestrator {
     task.pipelinePhase = undefined;
     task.auditRetries = 0;
     await this.saveState(state);
-    await this.notify(state.goalThreadId, `Retrying task: ${task.id} - ${task.description}`, 'warning');
+    await this.notify(state.goalThreadId, `Retrying task: ${this.getTaskLabel(state, task.id)} - ${task.description}`, 'warning');
     if (state.status === 'running') await this.reviewAndDispatch(state);
     return true;
   }
@@ -276,7 +289,7 @@ export class GoalOrchestrator {
     // 保留 branchName, threadId, dispatchedAt — 恢复时复用
     await this.saveState(state);
     await this.notify(state.goalThreadId,
-      `Paused task: ${task.id} - ${task.description}\nBranch/thread preserved for resume.`,
+      `Paused task: ${this.getTaskLabel(state, task.id)} - ${task.description}\nBranch/thread preserved for resume.`,
       'warning'
     );
     return true;
@@ -299,7 +312,7 @@ export class GoalOrchestrator {
       task.status = 'running';
       await this.saveState(state);
       await this.notify(state.goalThreadId,
-        `Resumed task: ${task.id} - ${task.description}`,
+        `Resumed task: ${this.getTaskLabel(state, task.id)} - ${task.description}`,
         'success'
       );
 
@@ -316,7 +329,7 @@ export class GoalOrchestrator {
     task.dispatchedAt = undefined;
     await this.saveState(state);
     await this.notify(state.goalThreadId,
-      `Resumed task: ${task.id} - ${task.description} (re-dispatch)`,
+      `Resumed task: ${this.getTaskLabel(state, task.id)} - ${task.description} (re-dispatch)`,
       'success'
     );
     if (state.status === 'running') await this.dispatchNext(state);
@@ -550,7 +563,7 @@ export class GoalOrchestrator {
       if (!task.notifiedBlocked) {
         task.notifiedBlocked = true;
         await this.notify(state.goalThreadId,
-          `Manual task pending: ${task.id} - ${task.description}\nReply "done ${task.id}" when complete.`,
+          `Manual task pending: ${this.getTaskLabel(state, task.id)} - ${task.description}\nReply "done ${task.id}" when complete.`,
           'warning'
         );
       }
@@ -564,7 +577,7 @@ export class GoalOrchestrator {
   }
 
   private async dispatchTask(state: GoalDriveState, task: GoalTask): Promise<void> {
-    const branchName = await this.generateBranchName(task);
+    const branchName = await this.generateBranchName(task, state);
     task.branchName = branchName;
     task.status = 'dispatched';
     task.dispatchedAt = Date.now();
@@ -614,19 +627,20 @@ export class GoalOrchestrator {
 
       const guild = await this.deps.client.guilds.fetch(guildId);
       const title = await generateTopicTitle(task.description);
-      const channelName = `${task.id} ${title}`.slice(0, 100);
+      const taskLabel = this.getTaskLabel(state, task.id);
+      const channelName = `${taskLabel} ${title}`.slice(0, 100);
 
       const textChannel = await guild.channels.create({
         name: channelName,
         type: ChannelType.GuildText,
         parent: categoryId,
-        reason: `Goal subtask: ${task.id}`,
+        reason: `Goal subtask: ${taskLabel}`,
       });
 
       // 发送初始消息
       const initEmbed = new EmbedBuilder()
         .setColor(EmbedColors.PURPLE)
-        .setDescription(`[goal] Task: \`${task.id}\` - ${task.description}\nBranch: \`${branchName}\`\nWorking directory: \`${subtaskDir}\``.slice(0, 4096));
+        .setDescription(`[goal] Task: \`${taskLabel}\` - ${task.description}\nBranch: \`${branchName}\`\nWorking directory: \`${subtaskDir}\``.slice(0, 4096));
       await textChannel.send({ embeds: [initEmbed] });
 
       const newThreadId = textChannel.id;
@@ -642,7 +656,7 @@ export class GoalOrchestrator {
       await this.saveState(state);
 
       await this.notify(state.goalThreadId,
-        `Dispatched: ${task.id} - ${task.description} → \`${branchName}\``,
+        `Dispatched: ${taskLabel} - ${task.description} → \`${branchName}\``,
         'info'
       );
 
@@ -653,7 +667,7 @@ export class GoalOrchestrator {
       task.error = err.message;
       await this.saveState(state);
       await this.notify(state.goalThreadId,
-        `Dispatch failed: ${task.id} - ${task.description}\nError: ${err.message}`,
+        `Dispatch failed: ${this.getTaskLabel(state, task.id)} - ${task.description}\nError: ${err.message}`,
         'error'
       );
     }
@@ -1115,14 +1129,14 @@ export class GoalOrchestrator {
       `You are a senior architect planning the implementation of a subtask for Goal "${state.goalName}".`,
       ``,
       `## Task to Plan`,
-      `ID: ${task.id}`,
+      `ID: ${this.getTaskLabel(state, task.id)}`,
       `Description: ${task.description}`,
     ];
 
     if (task.depends.length > 0) {
       const depInfos = task.depends.map(depId => {
         const dep = state.tasks.find(t => t.id === depId);
-        return dep ? `  - ${dep.id}: ${dep.description} (${dep.status})` : `  - ${depId}: (unknown)`;
+        return dep ? `  - ${this.getTaskLabel(state, dep.id)}: ${dep.description} (${dep.status})` : `  - ${depId}: (unknown)`;
       });
       lines.push(``, `## Dependencies (completed before this task)`, ...depInfos);
     }
@@ -1134,11 +1148,11 @@ export class GoalOrchestrator {
       `2. Identify all files that need to be modified or created`,
       `3. Design the implementation approach with specific steps`,
       `4. Write a detailed plan to \`.task-plan.md\` in the working directory`,
-      `5. \`git add .task-plan.md && git commit -m "plan: ${task.id} implementation plan"\``,
+      `5. \`git add .task-plan.md && git commit -m "plan: ${this.getTaskLabel(state, task.id)} implementation plan"\``,
       ``,
       `## Plan File Format (.task-plan.md)`,
       '```markdown',
-      `# Implementation Plan: ${task.id}`,
+      `# Implementation Plan: ${this.getTaskLabel(state, task.id)}`,
       ``,
       `## Overview`,
       `<Brief summary of what needs to be done>`,
@@ -1179,7 +1193,7 @@ export class GoalOrchestrator {
       `A senior architect has already created a detailed plan for you.`,
       ``,
       `## Current Task`,
-      `ID: ${task.id}`,
+      `ID: ${this.getTaskLabel(state, task.id)}`,
       `Description: ${task.description}`,
       ``,
       `## Instructions`,
@@ -1220,7 +1234,7 @@ export class GoalOrchestrator {
       `You are a senior code reviewer auditing a subtask implementation for Goal "${state.goalName}".`,
       ``,
       `## Task Being Audited`,
-      `ID: ${task.id}`,
+      `ID: ${this.getTaskLabel(state, task.id)}`,
       `Description: ${task.description}`,
       ``,
       `## Instructions`,
@@ -1231,7 +1245,7 @@ export class GoalOrchestrator {
       `   - **Bugs**: Are there obvious bugs, edge cases, or runtime errors?`,
       `   - **Security**: Any security vulnerabilities (injection, XSS, etc.)?`,
       `3. Write your verdict to \`feedback/${task.id}-audit.json\``,
-      `4. \`git add feedback/${task.id}-audit.json && git commit -m "audit: ${task.id}"\``,
+      `4. \`git add feedback/${task.id}-audit.json && git commit -m "audit: ${this.getTaskLabel(state, task.id)}"\``,
       ``,
       `## Verdict File Format (feedback/${task.id}-audit.json)`,
       '```json',
@@ -1271,7 +1285,7 @@ export class GoalOrchestrator {
       `You are fixing audit issues found in a code review for Goal "${state.goalName}".`,
       ``,
       `## Task`,
-      `ID: ${task.id}`,
+      `ID: ${this.getTaskLabel(state, task.id)}`,
       `Description: ${task.description}`,
       ``,
       `## Audit Issues to Fix`,
@@ -1313,7 +1327,7 @@ export class GoalOrchestrator {
           await this.saveState(state);
 
           await this.notify(state.goalThreadId,
-            `**Replan feedback:** ${task.id} - ${task.description}\n` +
+            `**Replan feedback:** ${this.getTaskLabel(state, task.id)} - ${task.description}\n` +
             `Reason: ${feedback.reason}`,
             'info'
           );
@@ -1334,7 +1348,7 @@ export class GoalOrchestrator {
         task.status = 'blocked_feedback';
         await this.saveState(state);
         await this.notify(state.goalThreadId,
-          `**Feedback received:** ${task.id} - ${task.description}\n` +
+          `**Feedback received:** ${this.getTaskLabel(state, task.id)} - ${task.description}\n` +
           `Type: ${feedback.type}\n` +
           `Reason: ${feedback.reason}` +
           (feedback.details ? `\nDetails: ${feedback.details}` : ''),
@@ -1348,7 +1362,7 @@ export class GoalOrchestrator {
       task.status = 'completed';
       task.completedAt = Date.now();
       await this.saveState(state);
-      await this.notify(state.goalThreadId, `Completed: ${task.id} - ${task.description}`, 'success');
+      await this.notify(state.goalThreadId, `Completed: ${this.getTaskLabel(state, task.id)} - ${task.description}`, 'success');
       if (task.branchName) await this.mergeAndCleanup(state, task);
       const refreshed = await this.getState(goalId);
       if (refreshed && refreshed.status === 'running') await this.reviewAndDispatch(refreshed, taskId);
@@ -1365,7 +1379,7 @@ export class GoalOrchestrator {
       task.error = error;
       await this.saveState(state);
       await this.notify(state.goalThreadId,
-        `Failed: ${task.id} - ${task.description}\nError: ${error}\n\nReply "retry ${task.id}" to retry.`,
+        `Failed: ${this.getTaskLabel(state, task.id)} - ${task.description}\nError: ${error}\n\nReply "retry ${task.id}" to retry.`,
         'error'
       );
       if (state.status === 'running') await this.reviewAndDispatch(state);
@@ -2159,7 +2173,7 @@ export class GoalOrchestrator {
           await this.notify(state.goalThreadId,
             `AI could not resolve conflict: \`${branchName}\` → \`${state.goalBranch}\`\n` +
             `Reason: ${resolution.error}\n` +
-            `Manual resolution needed. Reply "done ${task.id}" when resolved.`,
+            `Manual resolution needed. Reply "done ${task.id}" when resolved.`,  // keep task.id for command matching
             'error'
           );
           task.status = 'blocked';
@@ -2174,18 +2188,20 @@ export class GoalOrchestrator {
     }
   }
 
-  private async generateBranchName(task: GoalTask): Promise<string> {
+  private async generateBranchName(task: GoalTask, state: GoalDriveState): Promise<string> {
     const prefix = task.type === '调研' ? 'research' : 'feat';
     const translated = await translateToBranchName(task.description);
-    return `${prefix}/${task.id}-${translated.slice(0, 30) || 'task'}`;
+    const taskLabel = this.getTaskLabel(state, task.id);
+    return `${prefix}/${taskLabel}-${translated.slice(0, 30) || 'task'}`;
   }
 
   private buildTaskPrompt(task: GoalTask, state: GoalDriveState): string {
+    const label = this.getTaskLabel(state, task.id);
     const lines: string[] = [
       `You are a subtask executor for Goal "${state.goalName}".`,
       ``,
       `## Current Task`,
-      `ID: ${task.id}`,
+      `ID: ${label}`,
       `Type: ${task.type}`,
       `Description: ${task.description}`,
     ];
@@ -2194,7 +2210,7 @@ export class GoalOrchestrator {
     if (task.depends.length > 0) {
       const depInfos = task.depends.map(depId => {
         const dep = state.tasks.find(t => t.id === depId);
-        return dep ? `  - ${dep.id}: ${dep.description} (${dep.status})` : `  - ${depId}: (unknown)`;
+        return dep ? `  - ${this.getTaskLabel(state, dep.id)}: ${dep.description} (${dep.status})` : `  - ${depId}: (unknown)`;
       });
       lines.push(``, `## Dependencies (completed before this task)`, ...depInfos);
     }

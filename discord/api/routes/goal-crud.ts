@@ -25,6 +25,7 @@ function getRepo() {
 function toApiGoal(goal: Goal) {
   return {
     id: goal.id,
+    seq: goal.seq,
     name: goal.name,
     status: goal.status,
     type: goal.type,
@@ -138,10 +139,13 @@ export const createGoal: RouteHandler = async (req, res) => {
       next: body.next?.trim() || null,
       blockedBy: body.blocked_by?.trim() || null,
       body: body.body || null,
+      seq: null,  // auto-assigned by DB (MAX(seq) + 1)
     };
 
     await repo.save(goal);
-    sendJson(res, 201, { ok: true, data: toApiGoal(goal) });
+    // Re-read to get the auto-assigned seq
+    const saved = await repo.get(id);
+    sendJson(res, 201, { ok: true, data: toApiGoal(saved || goal) });
   } catch (error: any) {
     sendJson(res, 500, { ok: false, error: `Failed to create goal: ${error.message}` });
   }
@@ -199,6 +203,7 @@ export const updateGoal: RouteHandler = async (req, res, params) => {
       next: updates.next !== undefined ? updates.next?.trim() ?? null : existing.next,
       blockedBy: updates.blocked_by !== undefined ? updates.blocked_by?.trim() ?? null : existing.blockedBy,
       body: updates.body !== undefined ? updates.body : existing.body,
+      seq: existing.seq,
     };
 
     await repo.save(updated);
