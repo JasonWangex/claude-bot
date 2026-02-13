@@ -26,6 +26,8 @@ export function initOss(): void {
     bucket,
     accessKeyId,
     accessKeySecret,
+    secure: true,
+    timeout: 120_000,
     ...(endpoint ? { endpoint } : {}),
   });
   logger.info(`OSS enabled: region=${region}, bucket=${bucket}`);
@@ -36,6 +38,8 @@ export function isOssEnabled(): boolean {
 }
 
 const SIGNED_URL_EXPIRES = 86400; // 24 hours
+
+const MAX_UPLOAD_RETRIES = 2;
 
 export async function uploadToOss(content: string, filename: string): Promise<string> {
   if (!ossClient) throw new Error('OSS client not initialized');
@@ -52,9 +56,23 @@ export async function uploadToOss(content: string, filename: string): Promise<st
       ? 'text/markdown; charset=utf-8'
       : 'text/plain; charset=utf-8';
 
-  await ossClient.put(objectKey, buffer, {
-    headers: { 'Content-Type': contentType },
-  });
+  for (let attempt = 0; attempt <= MAX_UPLOAD_RETRIES; attempt++) {
+    try {
+      await ossClient.put(objectKey, buffer, {
+        headers: {
+          'Content-Type': contentType,
+          'Content-Disposition': `inline; filename="${filename}"`,
+        },
+      });
+      break;
+    } catch (err: any) {
+      if (attempt < MAX_UPLOAD_RETRIES) {
+        logger.warn(`OSS put failed (attempt ${attempt + 1}), retrying: ${err.message}`);
+        continue;
+      }
+      throw err;
+    }
+  }
 
   const signedUrl = ossClient.signatureUrl(objectKey, {
     expires: SIGNED_URL_EXPIRES,

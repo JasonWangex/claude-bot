@@ -474,10 +474,11 @@ export class MessageQueue {
     if (isOssEnabled()) {
       try {
         const signedUrl = await uploadToOss(op.content, op.filename);
-        const maxCaptionLen = this.MAX_MESSAGE_LENGTH - signedUrl.length - 4;
+        const link = `[${op.filename}](${signedUrl})`;
+        const maxCaptionLen = this.MAX_MESSAGE_LENGTH - link.length - 2;
         const text = op.caption && maxCaptionLen > 0
-          ? `${op.caption.slice(0, maxCaptionLen)}\n\n${signedUrl}`
-          : signedUrl;
+          ? `${op.caption.slice(0, maxCaptionLen)}\n${link}`
+          : link;
         const msgOpts: MessageCreateOptions = {
           content: text,
           ...(op.silent && { flags: MessageFlags.SuppressNotifications }),
