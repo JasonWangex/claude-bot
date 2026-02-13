@@ -603,20 +603,101 @@ export class GoalOrchestrator {
   }
 
   private buildTaskPrompt(task: GoalTask, state: GoalDriveState): string {
-    return [
+    const lines: string[] = [
       `You are a subtask executor for Goal "${state.goalName}".`,
       ``,
       `## Current Task`,
       `ID: ${task.id}`,
       `Type: ${task.type}`,
       `Description: ${task.description}`,
+    ];
+
+    // 依赖上下文：列出已完成的前置任务，帮助 executor 理解背景
+    if (task.depends.length > 0) {
+      const depInfos = task.depends.map(depId => {
+        const dep = state.tasks.find(t => t.id === depId);
+        return dep ? `  - ${dep.id}: ${dep.description} (${dep.status})` : `  - ${depId}: (unknown)`;
+      });
+      lines.push(``, `## Dependencies (completed before this task)`, ...depInfos);
+    }
+
+    // 通用要求
+    lines.push(
       ``,
       `## Requirements`,
       `1. Focus on completing the task above`,
       `2. Ensure all code is saved when done`,
       `3. If you need user decisions, ask clearly`,
       `4. Do not modify code unrelated to this task`,
-    ].join('\n');
+    );
+
+    // ── Feedback 协议 ──
+    lines.push(
+      ``,
+      `## Feedback Protocol`,
+      `When you encounter situations described below, write a feedback file and then **end your session**.`,
+      ``,
+      `**File path:** \`feedback/${task.id}.json\` (relative to working directory)`,
+      `**Format:**`,
+      '```json',
+      `{`,
+      `  "type": "replan" | "blocked" | "clarify",`,
+      `  "reason": "brief summary of why",`,
+      `  "details": {}  // optional, structured data depending on type`,
+      `}`,
+      '```',
+      ``,
+      `After writing the feedback file, you MUST \`git add\` and \`git commit\` it, then **stop working**. The orchestrator will read your feedback and decide the next action.`,
+    );
+
+    // ── 调研任务特殊规则 ──
+    if (task.type === '调研') {
+      lines.push(
+        ``,
+        `## Research Task Rules`,
+        `This is a **research task**. When you finish your research:`,
+        `1. You **MUST** write a feedback file before ending`,
+        `2. Use \`type: "replan"\` with your findings in \`details\``,
+        `3. Example:`,
+        '```json',
+        `{`,
+        `  "type": "replan",`,
+        `  "reason": "Research completed — findings may affect task plan",`,
+        `  "details": {`,
+        `    "findings": "Your research conclusions here",`,
+        `    "recommendations": ["actionable suggestion 1", "suggestion 2"],`,
+        `    "affectedTasks": ["t3", "t4"]`,
+        `  }`,
+        `}`,
+        '```',
+        `4. Do NOT write implementation code — only research, document, and report back via feedback`,
+      );
+    }
+
+    // ── 阻塞触发场景 ──
+    lines.push(
+      ``,
+      `## When to Write Feedback`,
+      `Write a feedback file (and stop) if any of these occur:`,
+      `- **Blocked:** You hit a technical blocker you cannot resolve (missing API, wrong architecture, external dependency). Use \`type: "blocked"\`, describe the blocker in \`reason\`, and include attempted solutions in \`details\`.`,
+      `- **Needs Clarification:** The task description is ambiguous or you discover conflicting requirements. Use \`type: "clarify"\`, list your questions in \`details.questions\`.`,
+      `- **Scope Mismatch:** You realize the task requires changes far beyond its description, or should be split into multiple tasks. Use \`type: "replan"\`, describe the discovered scope in \`details\`.`,
+      `- **Dependency Issue:** A completed dependency task is incorrect or insufficient for your work. Use \`type: "blocked"\`, reference the dependency in \`details.dependencyId\`.`,
+    );
+
+    // ── 占位任务引导 ──
+    if (task.type === '占位') {
+      lines.push(
+        ``,
+        `## Placeholder Task`,
+        `This is a **placeholder task**. It exists as a structural marker in the task graph.`,
+        `- Placeholder tasks are normally NOT dispatched automatically.`,
+        `- If you are seeing this, the task was triggered manually or by an unusual condition.`,
+        `- **Do not write code.** Instead, write a \`type: "clarify"\` feedback asking the orchestrator why this task was dispatched, then stop.`,
+      );
+    }
+
+    return lines.join('\n');
   }
 
   private findWorktreeDir(worktreeListOutput: string, branchName: string): string | null {
