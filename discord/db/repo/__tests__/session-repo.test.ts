@@ -145,17 +145,6 @@ describe('SessionRepository', () => {
       expect(deleted).toBe(false);
     });
 
-    it('should cascade delete message history', async () => {
-      const now = Date.now();
-      await repo.save(makeSession({
-        messageHistory: [{ role: 'user', text: 'hi', timestamp: now }],
-      }));
-      await repo.delete('guild-1', 'thread-1');
-
-      // Verify message_history is also deleted
-      const row = db.prepare('SELECT COUNT(*) as cnt FROM message_history WHERE session_id = ?').get('sess-001') as { cnt: number };
-      expect(row.cnt).toBe(0);
-    });
   });
 
   // ==================== 查询 ====================

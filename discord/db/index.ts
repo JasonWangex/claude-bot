@@ -17,12 +17,14 @@ import migration001 from './migrations/001_initial_schema.js';
 import migration002 from './migrations/002_add_goal_checkpoints.js';
 import migration003 from './migrations/003_add_pipeline_fields.js';
 import migration004 from './migrations/004_add_interaction_log.js';
+import migration005 from './migrations/005_drop_message_history.js';
 
 const allMigrations: Migration[] = [
   migration001,
   migration002,
   migration003,
   migration004,
+  migration005,
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

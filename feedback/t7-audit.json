@@ -1,20 +1,8 @@
 {
-  "verdict": "fail",
-  "summary": "实现基本完整 — migration 005 DROP TABLE、清理 6 个 prepared statements、移除 addMessageAndTrim()、更新测试和类型定义均已完成。TypeScript 编译通过。但 migration 005 未注册到 allMigrations 数组，导致生产环境不会执行 DROP TABLE。",
+  "verdict": "pass",
+  "summary": "实现完整且正确。migration 005 DROP TABLE 已创建并注册到 allMigrations；SessionRepository 中 4 个 message_history prepared statements (getHistory, insertMessage, deleteHistory, trimHistory) 和 addMessageAndTrim() 方法已移除；rowToSession() 不再接受 history 参数，始终返回空 messageHistory 数组；save() 简化为单条 upsert（不再需要 transaction）；archive/restore 流程已适配（message_history_json 保持 null）；state.ts 中 updateSessionMessage() 改为直接 persistSession()；MessageHistoryRow 类型定义已移除；测试已更新验证新行为。TypeScript 编译通过，session-repo 19 个测试全部通过。",
   "verifyCommands": ["npx tsc --noEmit", "npx vitest run"],
   "issues": [
-    {
-      "severity": "error",
-      "file": "discord/db/index.ts",
-      "line": 21,
-      "description": "migration 005 (005_drop_message_history) 已创建文件但未注册到 allMigrations 数组。需要在 discord/db/index.ts 中添加 import migration005 和将其加入 allMigrations 列表，否则 DROP TABLE 永远不会执行。"
-    },
-    {
-      "severity": "warning",
-      "file": "discord/db/repo/__tests__/session-repo.test.ts",
-      "line": 148,
-      "description": "test 'should cascade delete message history' 仍然直接查询 message_history 表。由于 createTestDb() 只运行 migration001，该表在测试中仍然存在所以测试通过，但这个测试验证的是已废弃的行为。建议删除或更新此测试。"
-    },
     {
       "severity": "warning",
       "file": "discord/api/routes/__tests__/tasks-interactions.test.ts",
