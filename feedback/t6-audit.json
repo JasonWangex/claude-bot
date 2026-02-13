@@ -1,12 +1,16 @@
 {
   "verdict": "fail",
-  "summary": "核心功能（migration 005、UPSERT 简化、5 处 messageHistory.length 替换、内存 messageCount 同步）均已正确实现，TypeScript 编译通过。但 test-helpers.ts 中 createTestDb() 只运行 migration 001，缺少 migration 005 导致 sessions 表无 message_count 列，20 个 SessionRepository 测试全部失败。",
+  "summary": "TypeScript 编译通过，migration/类型/UPSERT/5处替换/内存同步均正确。但 save() 简化后不再写 message_history 表，导致 2 个 message history 测试失败——测试期望 save() 写入消息历史并读回，与新行为不匹配。",
+  "verifyCommands": [
+    "./node_modules/.bin/tsc --noEmit",
+    "./node_modules/.bin/vitest run discord/db/repo/__tests__/session-repo.test.ts"
+  ],
   "issues": [
     {
       "severity": "error",
-      "file": "discord/db/repo/__tests__/test-helpers.ts",
-      "line": 12,
-      "description": "createTestDb() 只运行 migration001，但 session-repo.ts 的 upsert SQL 引用了 message_count 列（来自 migration005）。所有 20 个 SessionRepository 测试因 'table sessions has no column named message_count' 失败。需要导入并运行所有 migrations（001-005），与 discord/db/index.ts 中的 allMigrations 保持一致。"
+      "file": "discord/db/repo/__tests__/session-repo.test.ts",
+      "line": 90,
+      "description": "save() 简化后不再写 message_history 表，但测试 'should save and retrieve message history'（L90）和 'should replace message history on save'（L108）仍期望 save() 写入消息历史。需要更新测试：改用 addMessageAndTrim() 写入消息，或改为验证 messageCount 字段而非 messageHistory 数组。"
     }
   ]
 }
