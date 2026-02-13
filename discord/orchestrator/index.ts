@@ -859,7 +859,7 @@ export class GoalOrchestrator {
     }
 
     // Audit 失败 → Sonnet 修复（最多 2 次）
-    await this.auditFixLoop(goalId, taskId, guildId, threadId, task, state, auditResult.issues);
+    await this.auditFixLoop(goalId, taskId, guildId, threadId, task, state, auditResult.issues, auditResult.verifyCommands);
   }
 
   /**
@@ -933,7 +933,7 @@ export class GoalOrchestrator {
     }
 
     // Audit 失败 → Sonnet 修复
-    await this.auditFixLoop(goalId, taskId, guildId, threadId, task, state, auditResult.issues);
+    await this.auditFixLoop(goalId, taskId, guildId, threadId, task, state, auditResult.issues, auditResult.verifyCommands);
   }
 
   /**
@@ -947,6 +947,7 @@ export class GoalOrchestrator {
     task: GoalTask,
     state: GoalDriveState,
     issues: string[],
+    verifyCommands: string[] = [],
   ): Promise<void> {
     const { pipelineSonnetModel: sonnetModel } = this.deps.config;
     const maxRetries = 2;
@@ -968,7 +969,7 @@ export class GoalOrchestrator {
         'pipeline',
       );
 
-      const fixPrompt = this.buildFixPrompt(task, state, issues);
+      const fixPrompt = this.buildFixPrompt(task, state, issues, verifyCommands);
       logger.info(`[Orchestrator] Pipeline ${taskId}: Sonnet fix attempt ${retry}`);
       await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, fixPrompt);
 
@@ -979,6 +980,7 @@ export class GoalOrchestrator {
         return;
       }
       issues = reAudit.issues;
+      verifyCommands = reAudit.verifyCommands;
     }
 
     // 所有重试耗尽 → 标记失败
@@ -996,7 +998,7 @@ export class GoalOrchestrator {
     threadId: string,
     task: GoalTask,
     state: GoalDriveState,
-  ): Promise<{ verdict: 'pass' | 'fail'; issues: string[] }> {
+  ): Promise<{ verdict: 'pass' | 'fail'; issues: string[]; verifyCommands: string[] }> {
     const { pipelineOpusModel: opusModel } = this.deps.config;
 
     this.switchSessionModel(guildId, threadId, opusModel);
@@ -1062,10 +1064,12 @@ export class GoalOrchestrator {
   private async readAuditResult(
     state: GoalDriveState,
     task: GoalTask,
-  ): Promise<{ verdict: 'pass' | 'fail'; issues: string[] }> {
+  ): Promise<{ verdict: 'pass' | 'fail'; issues: string[]; verifyCommands: string[] }> {
+    const defaultResult = { verifyCommands: [] as string[] };
+
     if (!task.branchName) {
       logger.warn(`[Orchestrator] readAuditResult(${task.id}): no branchName, defaulting to fail`);
-      return { verdict: 'fail', issues: ['No branch name — cannot locate audit result'] };
+      return { verdict: 'fail', issues: ['No branch name — cannot locate audit result'], ...defaultResult };
     }
 
     let subtaskDir: string | null = null;
@@ -1078,12 +1082,12 @@ export class GoalOrchestrator {
       subtaskDir = this.findWorktreeDir(stdout, task.branchName);
     } catch (err: any) {
       logger.warn(`[Orchestrator] readAuditResult(${task.id}): cannot list worktrees: ${err.message}`);
-      return { verdict: 'fail', issues: ['Cannot list worktrees to find audit result'] };
+      return { verdict: 'fail', issues: ['Cannot list worktrees to find audit result'], ...defaultResult };
     }
 
     if (!subtaskDir) {
       logger.warn(`[Orchestrator] readAuditResult(${task.id}): worktree not found for ${task.branchName}`);
-      return { verdict: 'fail', issues: ['Worktree not found — cannot locate audit result'] };
+      return { verdict: 'fail', issues: ['Worktree not found — cannot locate audit result'], ...defaultResult };
     }
 
     const auditPath = join(subtaskDir, 'feedback', `${task.id}-audit.json`);
@@ -1093,7 +1097,7 @@ export class GoalOrchestrator {
       await access(auditPath);
     } catch {
       logger.warn(`[Orchestrator] readAuditResult(${task.id}): audit file not found at ${auditPath}`);
-      return { verdict: 'fail', issues: ['Audit result file not found — auditor may not have written it'] };
+      return { verdict: 'fail', issues: ['Audit result file not found — auditor may not have written it'], ...defaultResult };
     }
 
     // 文件存在，读取并解析
@@ -1103,18 +1107,32 @@ export class GoalOrchestrator {
 
       if (!parsed.verdict) {
         logger.warn(`[Orchestrator] readAuditResult(${task.id}): verdict field missing in audit file`);
-        return { verdict: 'fail', issues: ['Audit file exists but verdict field is missing'] };
+        return { verdict: 'fail', issues: ['Audit file exists but verdict field is missing'], ...defaultResult };
       }
+
+      // 保留结构化信息：[severity] (file:line) description
+      const issues = Array.isArray(parsed.issues)
+        ? parsed.issues.map((i: any) => {
+            if (typeof i === 'string') return i;
+            const sev = i.severity || 'error';
+            const loc = i.file ? ` (${i.file}${i.line ? ':' + i.line : ''})` : '';
+            const desc = i.description || JSON.stringify(i);
+            return `[${sev}]${loc} ${desc}`;
+          })
+        : [];
+
+      const verifyCommands = Array.isArray(parsed.verifyCommands)
+        ? parsed.verifyCommands.filter((c: any) => typeof c === 'string')
+        : [];
 
       return {
         verdict: parsed.verdict === 'pass' ? 'pass' : 'fail',
-        issues: Array.isArray(parsed.issues)
-          ? parsed.issues.map((i: any) => typeof i === 'string' ? i : i.description || JSON.stringify(i))
-          : [],
+        issues,
+        verifyCommands,
       };
     } catch (err: any) {
       logger.warn(`[Orchestrator] readAuditResult(${task.id}): failed to parse audit file: ${err.message}`);
-      return { verdict: 'fail', issues: [`Audit file parse error: ${err.message}`] };
+      return { verdict: 'fail', issues: [`Audit file parse error: ${err.message}`], ...defaultResult };
     }
   }
 
@@ -1199,8 +1217,11 @@ export class GoalOrchestrator {
       `## Instructions`,
       `1. **First**, read the plan file: \`cat .task-plan.md\``,
       `2. Follow the plan step by step — implement each step in order`,
-      `3. Ensure all code compiles and is saved`,
-      `4. Commit your changes when done`,
+      `3. After implementation, **verify the code works**:`,
+      `   - Detect the project's build system (package.json, Makefile, pyproject.toml, Cargo.toml, etc.)`,
+      `   - Run the appropriate build/compile command and fix any errors`,
+      `   - Run the appropriate test command and fix any failures`,
+      `4. Commit your changes only when build and tests pass`,
       ``,
       `## CRITICAL Rules`,
       `- Follow the plan exactly — do not deviate or add features not in the plan`,
@@ -1227,7 +1248,7 @@ export class GoalOrchestrator {
 
   /**
    * buildAuditPrompt — Opus audit phase
-   * 读 git diff → 审查正确性/完整性/bug → 写 audit verdict 文件
+   * 运行 build/test 验证 + 读 git diff → 审查正确性/完整性/bug → 写 audit verdict 文件
    */
   private buildAuditPrompt(task: GoalTask, state: GoalDriveState): string {
     const lines: string[] = [
@@ -1239,19 +1260,26 @@ export class GoalOrchestrator {
       ``,
       `## Instructions`,
       `1. Run \`git log --oneline\` to see all commits, then \`git diff ${state.goalBranch}...HEAD\` to see all changes since branching from the goal branch`,
-      `2. Review the changes for:`,
+      `2. **Verify the code builds and tests pass** before reviewing:`,
+      `   - Detect the project's build system by looking for config files: \`package.json\`, \`Makefile\`, \`pyproject.toml\`, \`Cargo.toml\`, \`pom.xml\`, \`build.gradle\`, \`CMakeLists.txt\`, etc.`,
+      `   - Run the appropriate **build/compile** command (e.g. \`npm run build\`, \`tsc --noEmit\`, \`make\`, \`cargo build\`, \`mvn compile\`, \`go build ./...\`)`,
+      `   - Run the appropriate **test** command (e.g. \`npm test\`, \`pytest\`, \`cargo test\`, \`mvn test\`, \`go test ./...\`)`,
+      `   - Build failures and test failures are **always "error" severity** issues`,
+      `   - If no build/test configuration is found, note this in the summary and proceed with code review only`,
+      `3. Review the changes for:`,
       `   - **Correctness**: Does the code do what the task description requires?`,
       `   - **Completeness**: Are all aspects of the task addressed?`,
       `   - **Bugs**: Are there obvious bugs, edge cases, or runtime errors?`,
       `   - **Security**: Any security vulnerabilities (injection, XSS, etc.)?`,
-      `3. Write your verdict to \`feedback/${task.id}-audit.json\``,
-      `4. \`git add feedback/${task.id}-audit.json && git commit -m "audit: ${this.getTaskLabel(state, task.id)}"\``,
+      `4. Write your verdict to \`feedback/${task.id}-audit.json\``,
+      `5. \`git add feedback/${task.id}-audit.json && git commit -m "audit: ${this.getTaskLabel(state, task.id)}"\``,
       ``,
       `## Verdict File Format (feedback/${task.id}-audit.json)`,
       '```json',
       `{`,
       `  "verdict": "pass" | "fail",`,
       `  "summary": "Brief overall assessment",`,
+      `  "verifyCommands": ["the build command you ran", "the test command you ran"],`,
       `  "issues": [`,
       `    {`,
       `      "severity": "error" | "warning",`,
@@ -1263,9 +1291,12 @@ export class GoalOrchestrator {
       `}`,
       '```',
       ``,
+      `**IMPORTANT**: The \`verifyCommands\` array must list the exact build/test commands you ran. These will be passed to the fixer so they can re-verify after applying fixes.`,
+      ``,
       `## Verdict Rules`,
       `- **pass**: No "error" severity issues. Warnings are acceptable.`,
       `- **fail**: At least one "error" severity issue found.`,
+      `- Build failures and test failures are ALWAYS "error" severity`,
       `- Be pragmatic — minor style issues are "warning", not "error"`,
       `- Focus on functional correctness, not code style preferences`,
       `- If no code changes are found (empty diff), verdict is "pass"`,
@@ -1276,9 +1307,9 @@ export class GoalOrchestrator {
 
   /**
    * buildFixPrompt — Sonnet fix phase
-   * 读 audit issues → 逐条修复 error 级别 → 只修不加新功能
+   * 读 audit issues → 逐条修复 error 级别 → 运行验证命令 → 只修不加新功能
    */
-  private buildFixPrompt(task: GoalTask, state: GoalDriveState, issues: string[]): string {
+  private buildFixPrompt(task: GoalTask, state: GoalDriveState, issues: string[], verifyCommands: string[] = []): string {
     const issueList = issues.map((issue, i) => `  ${i + 1}. ${issue}`).join('\n');
 
     const lines: string[] = [
@@ -1295,15 +1326,34 @@ export class GoalOrchestrator {
       `1. Read each issue carefully`,
       `2. Fix only the issues listed above — do not add new features or refactor unrelated code`,
       `3. For each fix, make the minimal change necessary`,
-      `4. Ensure the code compiles after your fixes`,
-      `5. Commit your fixes`,
+    ];
+
+    if (verifyCommands.length > 0) {
+      lines.push(
+        `4. **After all fixes, run these verification commands** to ensure nothing is broken:`,
+      );
+      verifyCommands.forEach(cmd => lines.push(`   - \`${cmd}\``));
+      lines.push(
+        `5. If any verification command fails, fix the new errors before committing`,
+        `6. Commit your fixes only when all verification commands pass`,
+      );
+    } else {
+      lines.push(
+        `4. **Verify the code works** — detect the project's build system (package.json, Makefile, pyproject.toml, etc.) and run the appropriate build and test commands`,
+        `5. If any build or test fails after your fix, fix those errors too before committing`,
+        `6. Commit your fixes only when build and tests pass`,
+      );
+    }
+
+    lines.push(
       ``,
       `## CRITICAL Rules`,
       `- Only fix "error" severity issues — ignore warnings`,
       `- Do not modify code unrelated to the listed issues`,
       `- If an issue is unclear or unfixable, skip it and note why in a comment`,
+      `- **You MUST run build and test commands to verify your fixes** — do not just assume the code compiles`,
       `- After fixing, the code should be in a state that would pass the same audit`,
-    ];
+    );
 
     return lines.join('\n');
   }
@@ -2220,9 +2270,10 @@ export class GoalOrchestrator {
       ``,
       `## Requirements`,
       `1. Focus on completing the task above`,
-      `2. Ensure all code is saved when done`,
-      `3. If you need user decisions, ask clearly`,
-      `4. Do not modify code unrelated to this task`,
+      `2. After implementation, **verify the code works** — detect the project's build system (package.json, Makefile, pyproject.toml, Cargo.toml, etc.) and run the appropriate build and test commands`,
+      `3. Fix any build or test failures before committing`,
+      `4. If you need user decisions, ask clearly`,
+      `5. Do not modify code unrelated to this task`,
     );
 
     // ── Feedback 协议 ──
