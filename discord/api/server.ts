@@ -15,7 +15,7 @@ import { logger } from '../utils/logger.js';
 // Route handlers
 import { getHealth } from './routes/health.js';
 import { getStatus } from './routes/status.js';
-import { listTasks, createTask, getTask, updateTask, deleteTask, archiveTask, forkTask } from './routes/tasks.js';
+import { listTasks, createTask, getTask, updateTask, deleteTask, archiveTask, forkTask, getTaskInteractions } from './routes/tasks.js';
 import { sendMessage } from './routes/messages.js';
 import { clearSession, compactSession, rewindSession, stopSession } from './routes/session-ops.js';
 import { getModels, setDefaultModel } from './routes/models.js';
@@ -55,6 +55,7 @@ function defineRoutes(): Route[] {
     r('POST',   '/api/tasks/:threadId/qdev', qdev),
 
     // Task 内操作
+    r('GET',  '/api/tasks/:threadId/interactions', getTaskInteractions),
     r('POST', '/api/tasks/:threadId/message', sendMessage),
     r('POST', '/api/tasks/:threadId/clear', clearSession),
     r('POST', '/api/tasks/:threadId/compact', compactSession),
