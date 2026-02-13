@@ -13,6 +13,7 @@ import type {
   GoalDriveStatus,
   GoalTask,
   GoalTaskStatus,
+  GoalCheckpoint,
 } from './index.js';
 
 // ==================== 新增实体类型 ====================
@@ -158,6 +159,30 @@ export interface IGoalTaskRepo {
   // —— 查询 ——
   findByStatus(goalId: string, status: GoalTaskStatus): Promise<GoalTask[]>;
   findByThreadId(threadId: string): Promise<{ goalId: string; task: GoalTask } | null>;
+}
+
+/**
+ * GoalCheckpoint 仓库
+ *
+ * 管理 Goal 快照检查点，支持保存/恢复/列表/清理。
+ * 主键: id
+ * 保留策略：每 Goal 最近 10 个（自动淘汰最旧），Goal 完成后压缩为首末两个。
+ */
+export interface IGoalCheckpointRepo {
+  get(id: string): Promise<GoalCheckpoint | null>;
+  getByGoal(goalId: string): Promise<GoalCheckpoint[]>;
+  save(checkpoint: GoalCheckpoint): Promise<void>;
+  delete(id: string): Promise<boolean>;
+
+  // —— 业务方法 ——
+  /** 保存快照并自动执行保留策略（每 Goal 最多 10 个） */
+  saveCheckpoint(checkpoint: GoalCheckpoint): Promise<void>;
+  /** 恢复指定快照，返回任务列表 */
+  restoreCheckpoint(checkpointId: string): Promise<GoalTask[] | null>;
+  /** 列出指定 Goal 的所有快照（按时间倒序） */
+  listByGoal(goalId: string): Promise<GoalCheckpoint[]>;
+  /** 清理策略：Goal 完成后压缩为首末两个快照 */
+  compressForCompletedGoal(goalId: string): Promise<number>;
 }
 
 /**

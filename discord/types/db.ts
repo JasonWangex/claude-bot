@@ -249,6 +249,31 @@ export interface IdeaRow {
 }
 
 // ================================================================
+// goal_checkpoints 表 — 对应 GoalCheckpoint 接口
+// ================================================================
+
+export interface GoalCheckpointRow {
+  /** UUID (PRIMARY KEY) */
+  id: string;
+  /** 所属 Goal ID (FOREIGN KEY → goals.id) */
+  goal_id: string;
+  /** 触发方式，如 'task_complete' | 'manual' | 'phase_change' */
+  trigger: string;
+  /** 触发任务 ID（可选） */
+  trigger_task_id: string | null;
+  /** 触发原因 */
+  reason: string | null;
+  /** 任务列表快照 (JSON) */
+  tasks_snapshot: string | null;
+  /** git 引用（commit hash 或 branch） */
+  git_ref: string | null;
+  /** 变更摘要 */
+  change_summary: string | null;
+  /** 创建时间 (Unix ms) */
+  created_at: number;
+}
+
+// ================================================================
 // 运行时类型转换辅助
 // ================================================================
 
