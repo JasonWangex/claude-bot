@@ -13,6 +13,7 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     cwd: '/home/test',
     createdAt: Date.now(),
     messageHistory: [],
+    messageCount: 0,
     ...overrides,
   };
 }

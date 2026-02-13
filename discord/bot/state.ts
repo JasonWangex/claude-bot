@@ -203,6 +203,7 @@ export class StateManager {
         createdAt: Date.now(),
         model: guildModel,
         messageHistory: [],
+        messageCount: 0,
       };
       this.sessions.set(key, session);
       this.persistSession(guildId, threadId);
@@ -245,6 +246,9 @@ export class StateManager {
     if (session.messageHistory.length > MAX_HISTORY) {
       session.messageHistory = session.messageHistory.slice(-MAX_HISTORY);
     }
+
+    // 同步更新内存中的 messageCount
+    session.messageCount = session.messageHistory.length;
 
     let lastMessage: string | undefined;
     let lastMessageAt: number | undefined;
