@@ -48,6 +48,40 @@ version: 1.0.0
 | POST | `/api/tasks/:threadId/stop` | 停止当前任务 |
 | POST | `/api/tasks/:threadId/qdev` | 快速创建开发子任务 — `{"description": "..."}` |
 
+### Goal CRUD
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/goals` | 列出 Goals — `?status=&project=&q=` |
+| POST | `/api/goals` | 创建 Goal — `{"name", "status?", "type?", "project?", ...}` |
+| GET | `/api/goals/:goalId` | Goal 详情 |
+| PATCH | `/api/goals/:goalId` | 更新 Goal — `{"name?", "status?", "type?", ...}` |
+
+### Goal Drive
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/goals/:goalId/drive` | 启动 Goal Drive — `{"goalName", "goalThreadId", "baseCwd", "tasks"}` |
+| GET | `/api/goals/:goalId/status` | Drive 状态 |
+| POST | `/api/goals/:goalId/pause` | 暂停 Drive |
+| POST | `/api/goals/:goalId/resume` | 恢复 Drive |
+| POST | `/api/goals/:goalId/tasks/:taskId/skip` | 跳过子任务 |
+| POST | `/api/goals/:goalId/tasks/:taskId/done` | 标记手动任务完成 |
+| POST | `/api/goals/:goalId/tasks/:taskId/retry` | 重试失败任务 |
+
+### DevLog
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/devlogs` | 列出 DevLog — `?project=&date=&start=&end=` |
+| POST | `/api/devlogs` | 创建 DevLog — `{"name", "date", "project", ...}` |
+| GET | `/api/devlogs/:id` | DevLog 详情 |
+
+### Idea
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/ideas` | 列出 Idea — `?project=&status=` |
+| POST | `/api/ideas` | 创建 Idea — `{"name", "project", "status?"}` |
+| GET | `/api/ideas/:id` | Idea 详情 |
+| PATCH | `/api/ideas/:id` | 更新 Idea — `{"name?", "status?", "project?"}` |
+
 ## 响应格式
 
 所有端点返回统一的 JSON 格式：

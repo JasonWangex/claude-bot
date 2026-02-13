@@ -6,10 +6,13 @@
   "scripts": {
     "dev": "tsx watch discord/index.ts",
     "dev:monitor": "tsx watch monitor/index.ts",
-    "start": "NODE_ENV=production tsx discord/index.ts"
+    "start": "NODE_ENV=production tsx discord/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "ali-oss": "^6.23.0",
+    "better-sqlite3": "^12.6.2",
     "chokidar": "^5.0.0",
     "discord.js": "^14.25.1",
     "dotenv": "^17.2.4",
@@ -18,8 +21,10 @@
   },
   "devDependencies": {
     "@types/ali-oss": "^6.23.2",
+    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20.11.5",
     "@types/sharp": "^0.31.1",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
   }
 }

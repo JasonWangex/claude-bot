@@ -2,30 +2,24 @@
  * 状态管理（Guild + Category/Channels 模式）
  * 每个 Text Channel 对应一个独立 Session，不同 channel 并行无干扰
  * ID 全部使用 string (Discord snowflake)
+ *
+ * 持久化后端：SQLite（通过 SessionRepository + GuildRepository）
+ * 内存 Map 作为读缓存，写操作同步写入 SQLite（better-sqlite3 是同步的）
  */
 
 import { randomUUID } from 'crypto';
-import { readFile, writeFile, rename, mkdir } from 'fs/promises';
-import { join, dirname } from 'path';
 import { Session, GuildState, ArchivedSession } from '../types/index.js';
 import { logger } from '../utils/logger.js';
+import type { SessionRepository } from '../db/repo/session-repo.js';
+import type { GuildRepository } from '../db/repo/guild-repo.js';
 
 const MAX_HISTORY = 50;
-
-interface PersistedData {
-  sessions: Record<string, Session>;
-  guilds: Record<string, GuildState>;
-  archivedSessions?: Record<string, ArchivedSession>;
-}
 
 export class StateManager {
   private sessions: Map<string, Session> = new Map();   // "guildId:threadId" → Session
   private guilds: Map<string, GuildState> = new Map();   // guildId → GuildState
   private archivedSessions: Map<string, ArchivedSession> = new Map();
   private defaultWorkDir: string;
-  private filePath: string;
-  private saveTimer: NodeJS.Timeout | null = null;
-  private savePromise: Promise<void> = Promise.resolve();
 
   /**
    * 生成 thread 级别的固定 lockKey，用于 Claude 进程互斥
@@ -34,87 +28,66 @@ export class StateManager {
     return `${guildId}:${threadId}`;
   }
 
-  constructor(defaultWorkDir: string) {
+  constructor(
+    defaultWorkDir: string,
+    private sessionRepo?: SessionRepository,
+    private guildRepo?: GuildRepository,
+  ) {
     this.defaultWorkDir = defaultWorkDir;
-    this.filePath = join(dirname(new URL(import.meta.url).pathname), '../../data/discord-states.json');
   }
 
   private threadKey(guildId: string, threadId: string): string {
     return `${guildId}:${threadId}`;
   }
 
-  // ========== 加载 / 保存 ==========
+  // ========== 加载 ==========
 
   async load(): Promise<void> {
-    try {
-      const raw = await readFile(this.filePath, 'utf-8');
-      let data;
-      try {
-        data = JSON.parse(raw);
-      } catch (parseError: any) {
-        logger.error('Failed to parse state JSON, starting fresh:', parseError.message);
-        return;
-      }
+    if (this.sessionRepo && this.guildRepo) {
+      const sessions = this.sessionRepo.loadAllSessions();
+      const guilds = this.guildRepo.loadAll();
 
-      if (data.sessions && typeof data.sessions === 'object' && !Array.isArray(data.sessions)) {
-        for (const [key, s] of Object.entries(data.sessions)) {
-          this.sessions.set(key, s as Session);
-        }
-        if (data.guilds) {
-          for (const [key, g] of Object.entries(data.guilds)) {
-            this.guilds.set(key, g as GuildState);
-          }
-        }
-        if (data.archivedSessions) {
-          for (const [key, a] of Object.entries(data.archivedSessions)) {
-            this.archivedSessions.set(key, a as ArchivedSession);
-          }
-        }
-        logger.info(`Loaded ${this.sessions.size} session(s), ${this.guilds.size} guild(s), ${this.archivedSessions.size} archived from disk`);
+      for (const s of sessions) {
+        this.sessions.set(this.threadKey(s.guildId, s.threadId), s);
       }
-    } catch (err: any) {
-      if (err.code === 'ENOENT') {
-        logger.info('No persisted state file, starting fresh');
-        await this.saveToDisk();
-      } else {
-        logger.error('Failed to load state file:', err.message);
+      for (const g of guilds) {
+        this.guilds.set(g.guildId, g);
       }
+      const archived = this.sessionRepo.loadAllArchived();
+      for (const a of archived) {
+        this.archivedSessions.set(this.threadKey(a.guildId, a.threadId), a);
+      }
+      logger.info(`Loaded ${this.sessions.size} session(s), ${this.guilds.size} guild(s), ${this.archivedSessions.size} archived from SQLite`);
+      return;
     }
+
+    // 无 repo 时不加载
+    logger.warn('StateManager: No repositories provided, running without persistence');
   }
 
-  private scheduleSave(): void {
-    if (this.saveTimer) return;
-    this.saveTimer = setTimeout(() => {
-      this.saveTimer = null;
-      this.saveToDisk().catch((err) => logger.error('Failed to save state:', err.message));
-    }, 500);
-  }
-
+  /**
+   * 刷新到磁盘。SQLite 模式下为 no-op（写入是即时的）。
+   */
   async flush(): Promise<void> {
-    if (this.saveTimer) {
-      clearTimeout(this.saveTimer);
-      this.saveTimer = null;
-    }
-    await this.saveToDisk();
+    // SQLite writes are immediate, nothing to flush
   }
 
-  private async saveToDisk(): Promise<void> {
-    this.savePromise = this.savePromise.then(async () => {
-      const data: PersistedData = { sessions: {}, guilds: {}, archivedSessions: {} };
-      for (const [key, session] of this.sessions.entries()) {
-        data.sessions[key] = session;
-      }
-      for (const [guildId, guild] of this.guilds.entries()) {
-        data.guilds[guildId] = guild;
-      }
-      for (const [key, archived] of this.archivedSessions.entries()) {
-        data.archivedSessions![key] = archived;
-      }
-      await mkdir(dirname(this.filePath), { recursive: true });
-      const tmpPath = this.filePath + '.tmp';
-      await writeFile(tmpPath, JSON.stringify(data, null, 2), 'utf-8');
-      await rename(tmpPath, this.filePath);
-    }).catch((err) => logger.error('saveToDisk error:', err.message));
+  // ========== 持久化辅助 ==========
+
+  private persistSession(guildId: string, threadId: string): void {
+    if (!this.sessionRepo) return;
+    const session = this.sessions.get(this.threadKey(guildId, threadId));
+    if (session) {
+      this.sessionRepo.save(session);
+    }
+  }
+
+  private persistGuild(guildId: string): void {
+    if (!this.guildRepo) return;
+    const guild = this.guilds.get(guildId);
+    if (guild) {
+      this.guildRepo.save(guild);
+    }
   }
 
   // ========== Session CRUD ==========
@@ -134,7 +107,7 @@ export class StateManager {
         messageHistory: [],
       };
       this.sessions.set(key, session);
-      this.scheduleSave();
+      this.persistSession(guildId, threadId);
     }
     return this.sessions.get(key)!;
   }
@@ -175,12 +148,19 @@ export class StateManager {
       session.messageHistory = session.messageHistory.slice(-MAX_HISTORY);
     }
 
+    let lastMessage: string | undefined;
+    let lastMessageAt: number | undefined;
     if (role === 'assistant') {
       session.lastMessage = text.slice(0, 500);
       session.lastMessageAt = Date.now();
+      lastMessage = session.lastMessage;
+      lastMessageAt = session.lastMessageAt;
     }
 
-    this.scheduleSave();
+    // 使用优化的消息追加方法，而非全量 save
+    if (this.sessionRepo) {
+      this.sessionRepo.addMessageAndTrim(session.id, entry, lastMessage, lastMessageAt);
+    }
   }
 
   setSessionClaudeId(guildId: string, threadId: string, claudeSessionId: string): void {
@@ -190,14 +170,14 @@ export class StateManager {
       session.prevClaudeSessionId = session.claudeSessionId;
     }
     session.claudeSessionId = claudeSessionId;
-    this.scheduleSave();
+    this.persistSession(guildId, threadId);
   }
 
   setSessionCwd(guildId: string, threadId: string, cwd: string): void {
     const session = this.getSession(guildId, threadId);
     if (!session) return;
     session.cwd = cwd;
-    this.scheduleSave();
+    this.persistSession(guildId, threadId);
   }
 
   clearSessionClaudeId(guildId: string, threadId: string): void {
@@ -205,7 +185,7 @@ export class StateManager {
     if (!session) return;
     session.claudeSessionId = undefined;
     session.prevClaudeSessionId = undefined;
-    this.scheduleSave();
+    this.persistSession(guildId, threadId);
   }
 
   rewindSession(guildId: string, threadId: string): { success: boolean; reason?: string; prevId?: string } {
@@ -225,7 +205,7 @@ export class StateManager {
       history.splice(removeFrom);
     }
 
-    this.scheduleSave();
+    this.persistSession(guildId, threadId);
     return { success: true, prevId };
   }
 
@@ -233,14 +213,14 @@ export class StateManager {
     const session = this.getSession(guildId, threadId);
     if (!session) return;
     session.model = model;
-    this.scheduleSave();
+    this.persistSession(guildId, threadId);
   }
 
   setSessionPlanMode(guildId: string, threadId: string, planMode: boolean): void {
     const session = this.getSession(guildId, threadId);
     if (!session) return;
     session.planMode = planMode;
-    this.scheduleSave();
+    this.persistSession(guildId, threadId);
   }
 
   // ========== Guild ==========
@@ -261,7 +241,7 @@ export class StateManager {
     } else {
       this.guilds.set(guildId, { guildId, defaultCwd: this.defaultWorkDir, defaultModel: model, lastActivity: Date.now() });
     }
-    this.scheduleSave();
+    this.persistGuild(guildId);
   }
 
   setGuildDefaultCwd(guildId: string, cwd: string): void {
@@ -272,7 +252,7 @@ export class StateManager {
     } else {
       this.guilds.set(guildId, { guildId, defaultCwd: cwd, lastActivity: Date.now() });
     }
-    this.scheduleSave();
+    this.persistGuild(guildId);
   }
 
   // ========== 清理 ==========
@@ -280,17 +260,16 @@ export class StateManager {
   cleanup(): void {
     const now = Date.now();
     const maxAge = 7 * 24 * 60 * 60 * 1000; // 7 天
-    let cleaned = false;
 
     for (const [key, session] of this.sessions.entries()) {
       const lastActive = session.lastMessageAt || session.createdAt;
       if (now - lastActive > maxAge) {
         this.sessions.delete(key);
-        cleaned = true;
+        if (this.sessionRepo) {
+          this.sessionRepo.delete(session.guildId, session.threadId);
+        }
       }
     }
-
-    if (cleaned) this.scheduleSave();
   }
 
   getSessionCount(): number {
@@ -317,7 +296,10 @@ export class StateManager {
     this.clearChildParentRefs(guildId, threadId);
 
     logger.info(`Archived session: ${session.name} (thread=${threadId}, guild=${guildId})`);
-    this.scheduleSave();
+
+    if (this.sessionRepo) {
+      this.sessionRepo.archive(guildId, threadId, userId, reason);
+    }
     return true;
   }
 
@@ -328,7 +310,9 @@ export class StateManager {
     if (existed) {
       this.sessions.delete(key);
       this.clearChildParentRefs(guildId, threadId);
-      this.scheduleSave();
+      if (this.sessionRepo) {
+        this.sessionRepo.delete(guildId, threadId);
+      }
     }
 
     return existed;
@@ -339,6 +323,10 @@ export class StateManager {
       if (session.guildId === guildId && session.parentThreadId === parentThreadId) {
         session.parentThreadId = undefined;
       }
+    }
+    // DB 层面也清除
+    if (this.sessionRepo) {
+      this.sessionRepo.clearParentRefs(guildId, parentThreadId);
     }
   }
 
@@ -357,7 +345,9 @@ export class StateManager {
     this.sessions.set(key, session as Session);
     this.archivedSessions.delete(key);
 
-    this.scheduleSave();
+    if (this.sessionRepo) {
+      this.sessionRepo.restore(guildId, threadId);
+    }
     return true;
   }
 
@@ -386,7 +376,7 @@ export class StateManager {
     if (!session) return;
     session.parentThreadId = parentThreadId;
     session.worktreeBranch = worktreeBranch;
-    this.scheduleSave();
+    this.persistSession(guildId, threadId);
   }
 
   getRootSession(guildId: string, threadId: string): Session | undefined {
@@ -404,7 +394,7 @@ export class StateManager {
     const session = this.getSession(guildId, threadId);
     if (!session) return;
     session.parentThreadId = undefined;
-    this.scheduleSave();
+    this.persistSession(guildId, threadId);
   }
 
   getChildSessions(guildId: string, parentThreadId: string): Session[] {
@@ -421,6 +411,6 @@ export class StateManager {
     const session = this.getSession(guildId, threadId);
     if (!session) return;
     session.name = name;
-    this.scheduleSave();
+    this.persistSession(guildId, threadId);
   }
 }

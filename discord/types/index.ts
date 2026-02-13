@@ -2,6 +2,23 @@
  * Discord Bot 类型定义
  */
 
+// Re-export repository interfaces and related types
+export type {
+  Goal,
+  GoalStatus,
+  GoalType,
+  DevLog,
+  Idea,
+  IdeaStatus,
+  ISessionRepo,
+  IGuildRepo,
+  IGoalRepo,
+  IGoalMetaRepo,
+  IGoalTaskRepo,
+  IDevLogRepo,
+  IIdeaRepo,
+} from './repository.js';
+
 // 会话
 export interface Session {
   id: string;                // 本地 UUID

@@ -20,7 +20,10 @@ import { sendMessage } from './routes/messages.js';
 import { clearSession, compactSession, rewindSession, stopSession } from './routes/session-ops.js';
 import { getModels, setDefaultModel } from './routes/models.js';
 import { startDrive, getDriveStatus, pauseDrive, resumeDrive, skipTask, markTaskDone, retryTask } from './routes/goals.js';
+import { listGoals, createGoal, getGoal, updateGoal } from './routes/goal-crud.js';
 import { qdev } from './routes/qdev.js';
+import { listDevLogs, getDevLog, createDevLog } from './routes/devlogs.js';
+import { listIdeas, createIdea, getIdea, updateIdea, deleteIdea } from './routes/ideas.js';
 
 function defineRoutes(): Route[] {
   const r = (method: string, path: string, handler: Route['handler']): Route => {
@@ -58,6 +61,17 @@ function defineRoutes(): Route[] {
     r('POST', '/api/tasks/:threadId/rewind', rewindSession),
     r('POST', '/api/tasks/:threadId/stop', stopSession),
 
+    // DevLog CRUD
+    r('GET',  '/api/devlogs', listDevLogs),
+    r('POST', '/api/devlogs', createDevLog),
+    r('GET',  '/api/devlogs/:id', getDevLog),
+
+    // Goal CRUD
+    r('GET',    '/api/goals', listGoals),
+    r('POST',   '/api/goals', createGoal),
+    r('GET',    '/api/goals/:goalId', getGoal),
+    r('PATCH',  '/api/goals/:goalId', updateGoal),
+
     // Goal Drive
     r('POST', '/api/goals/:goalId/drive', startDrive),
     r('GET',  '/api/goals/:goalId/status', getDriveStatus),
@@ -66,6 +80,13 @@ function defineRoutes(): Route[] {
     r('POST', '/api/goals/:goalId/tasks/:taskId/skip', skipTask),
     r('POST', '/api/goals/:goalId/tasks/:taskId/done', markTaskDone),
     r('POST', '/api/goals/:goalId/tasks/:taskId/retry', retryTask),
+
+    // Ideas CRUD
+    r('GET',    '/api/ideas', listIdeas),
+    r('POST',   '/api/ideas', createIdea),
+    r('GET',    '/api/ideas/:id', getIdea),
+    r('PATCH',  '/api/ideas/:id', updateIdea),
+    r('DELETE', '/api/ideas/:id', deleteIdea),
   ];
 }
 

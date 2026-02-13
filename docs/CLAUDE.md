@@ -7,7 +7,7 @@
 **项目名称**: claude-bot
 **项目位置**: `/home/jason/projects/claude-bot`
 **项目类型**: Discord Bot + REST API + Local Skills
-**主要功能**: 通过 Discord 和本地 API 与 Claude Code CLI 交互，支持多 Task 并行开发、Goal 自动调度、Notion 集成、本地 Skill 工作流
+**主要功能**: 通过 Discord 和本地 API 与 Claude Code CLI 交互，支持多 Task 并行开发、Goal 自动调度、SQLite 本地数据存储、本地 Skill 工作流
 
 ## 技术栈
 
@@ -15,6 +15,7 @@
 - **语言**: TypeScript 5.9 (strict mode)
 - **Discord**: discord.js 14.x
 - **Claude**: Claude Code CLI (stream-json 解析)
+- **数据库**: SQLite (better-sqlite3, WAL mode)
 - **LLM**: DeepSeek API (轻量任务：分支名/标题生成)
 - **图片处理**: sharp (压缩、缩放)
 - **云存储**: ali-oss (阿里云 OSS，可选)
@@ -38,7 +39,7 @@ claude-bot/
 │   │   │   ├── dev.ts       # /qdev /idea /commit /merge
 │   │   │   └── types.ts     # CommandDeps 接口
 │   │   ├── message-queue.ts # MessageQueue：生产者-消费者队列 + per-thread 节流
-│   │   ├── state.ts         # StateManager：Session 持久化 CRUD
+│   │   ├── state.ts         # StateManager：Session 持久化 CRUD（SQLite 后端）
 │   │   ├── interaction-registry.ts # Button/SelectMenu/Modal 回调
 │   │   ├── auth.ts          # Guild 级鉴权
 │   │   └── message-utils.ts # Markdown 直通 + Discord 转义 + diff 渲染
@@ -47,7 +48,7 @@ claude-bot/
 │   │   └── executor.ts      # ClaudeExecutor：进程管理、流解析、stall 检测
 │   ├── orchestrator/        # Goal 自动调度引擎
 │   │   ├── index.ts         # GoalOrchestrator：drive 生命周期、任务派发、merge
-│   │   ├── goal-state.ts    # 状态持久化：读写 data/goals/<id>.json
+│   │   ├── goal-state.ts    # 工具函数：子任务解析、分支名生成
 │   │   ├── goal-branch.ts   # Git 分支操作：创建/合并/清理 goal 和子任务分支
 │   │   ├── git-ops.ts       # 底层 Git 执行
 │   │   └── task-scheduler.ts # 调度算法：依赖分析、并发控制、进度统计
@@ -64,6 +65,13 @@ claude-bot/
 │   │   │   └── session-ops.ts # 会话操作 (clear/compact/rewind/stop)
 │   │   ├── types.ts         # API 类型定义
 │   │   └── middleware.ts    # JSON 响应工具
+│   ├── db/                  # SQLite 数据库层
+│   │   ├── index.ts         # DB 初始化 & 单例
+│   │   ├── migrate.ts       # 迁移机制（user_version pragma）
+│   │   ├── migrations/      # 迁移脚本（001_initial_schema.ts ...）
+│   │   ├── repo/            # Repository 实现（session, guild, goal, goal-task）
+│   │   ├── idea-repo.ts     # Idea 仓库
+│   │   └── devlog-repo.ts   # DevLog 仓库
 │   ├── utils/
 │   │   ├── config.ts        # 环境变量 → DiscordBotConfig
 │   │   ├── env.ts           # AUTHORIZED_GUILD_ID / GENERAL_CHANNEL_ID 读写
@@ -74,7 +82,10 @@ claude-bot/
 │   │   ├── topic-path.ts    # 目录命名
 │   │   ├── image-processor.ts # 图片下载、压缩、base64 编码
 │   │   └── oss.ts           # 阿里云 OSS 文件上传（可选）
-│   └── types/index.ts       # 全局类型：Session, StreamEvent, GoalDriveState 等
+│   └── types/               # 类型定义
+│       ├── index.ts         # 全局类型：Session, StreamEvent, GoalDriveState 等
+│       ├── db.ts            # SQLite Row 类型
+│       └── repository.ts    # Repository 接口（DevLog, Idea 等）
 │
 ├── monitor/                  # 进程监控守护进程
 │   ├── index.ts             # 入口
@@ -87,7 +98,7 @@ claude-bot/
 │   ├── goal/                # 目标管理
 │   ├── merge/               # 分支合并与清理
 │   ├── idea/                # 想法记录与推进
-│   ├── devlog/              # 开发日志（写入 Notion）
+│   ├── devlog/              # 开发日志（写入 SQLite）
 │   ├── review/              # 日报/周报生成
 │   └── dc/                  # Discord Bot 远程控制
 │
@@ -97,8 +108,7 @@ claude-bot/
 │   └── debug-session.sh     # 会话调试工具
 │
 ├── data/                     # 持久化数据（运行时创建）
-│   ├── discord-states.json  # Bot 状态（sessions + guilds）
-│   ├── goals/               # Goal Drive 状态文件（<goalId>.json）
+│   ├── bot.db               # SQLite 数据库（sessions, guilds, goals, devlogs, ideas）
 │   └── processes/           # Claude 进程输出临时文件
 │
 ├── docs/
@@ -208,6 +218,14 @@ Discord Server (授权的 Guild ID)
 | POST | /api/tasks/:threadId/rewind | 撤销最后一轮 |
 | POST | /api/tasks/:threadId/stop | 停止任务 |
 
+#### Goal CRUD
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /api/goals | 列出 Goals（?status=&project= 筛选） |
+| POST | /api/goals | 创建 Goal |
+| GET | /api/goals/:id | Goal 详情（含子任务） |
+| PATCH | /api/goals/:id | 更新 Goal 元数据 |
+
 #### Goal Drive
 | 方法 | 路径 | 说明 |
 |------|------|------|
@@ -218,6 +236,21 @@ Discord Server (授权的 Guild ID)
 | POST | /api/goals/:id/tasks/:taskId/skip | 跳过子任务 |
 | POST | /api/goals/:id/tasks/:taskId/done | 标记手动任务完成 |
 | POST | /api/goals/:id/tasks/:taskId/retry | 重试失败任务 |
+
+#### DevLog CRUD
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /api/devlogs | 列出 DevLog（?project=&date=&start=&end= 筛选） |
+| POST | /api/devlogs | 创建 DevLog |
+| GET | /api/devlogs/:id | DevLog 详情 |
+
+#### Ideas CRUD
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /api/ideas | 列出 Ideas（?project=&status= 筛选） |
+| POST | /api/ideas | 创建 Idea |
+| GET | /api/ideas/:id | Idea 详情 |
+| PATCH | /api/ideas/:id | 更新 Idea |
 
 ## Slash Commands
 
@@ -259,18 +292,23 @@ Discord Server (授权的 Guild ID)
 |-------|------|
 | `/commit` | 代码审查 + 提交（先 audit 再 commit，Conventional Commits 格式） |
 | `/qdev` | 快速创建开发任务（通过 Bot API fork root task + 发送描述） |
-| `/goal` | 目标管理（列表/搜索/创建/批量 drive all，Notion Goals 集成） |
+| `/goal` | 目标管理（列表/搜索/创建/批量 drive all，通过 Bot API + SQLite） |
 | `/merge` | 分支合并与清理（merge → 删 worktree → 删分支 → 删 Thread → devlog） |
-| `/idea` | 想法记录（写入 Notion Status=Idea）或推进已有 Idea（→ qdev） |
-| `/devlog` | 开发日志（收集 git 信息 → 生成 Notion 页面，tag 追踪进度） |
-| `/review` | 日报/周报（从 Notion Dev Log + Goals 收集数据，生成结构化报告） |
+| `/idea` | 想法记录（写入 SQLite Status=Idea）或推进已有 Idea（→ qdev） |
+| `/devlog` | 开发日志（收集 git 信息 → 写入 SQLite，tag 追踪进度） |
+| `/review` | 日报/周报（从 SQLite DevLog + Goals 收集数据，生成结构化报告） |
 | `/dc` | Discord Bot 远程控制（通过本地 HTTP API 操作 Bot 所有功能） |
 
-## Notion 集成
+## 数据存储
 
-通过 Claude AI Notion MCP 深度集成：
-- **Goals Database** - 目标管理、子任务拆解、进度跟踪
-- **Dev Log Database** - 开发日志、合并记录、变更历史
+所有数据存储在本地 SQLite 数据库 (`data/bot.db`)：
+- **sessions / archived_sessions** - Discord 会话状态
+- **guilds** - Guild 配置
+- **goals / goal_tasks / goal_task_deps** - 目标管理、子任务拆解、依赖关系
+- **devlogs** - 开发日志、合并记录、变更历史
+- **ideas** - 想法记录与状态追踪
+
+Skills 通过 Bot REST API (`/api/goals`, `/api/devlogs`, `/api/ideas`) 读写数据。
 
 ## 环境变量
 
