@@ -248,6 +248,23 @@ export class DiscordBot {
       return;
     }
 
+    // Cancel button: cancel:<lockKeyPrefix>
+    // 只取消排队中的消息，不杀运行中的进程
+    if (customId.startsWith('cancel:')) {
+      const lockKeyPrefix = customId.slice('cancel:'.length);
+      const result = this.claudeClient.cancelQueued(lockKeyPrefix);
+      let content: string;
+      if (result.cancelled > 0) {
+        content = `Cancelled ${result.cancelled} queued message(s).`;
+      } else if (result.hasRunning) {
+        content = 'No queued messages. Task is running — use /stop to stop it.';
+      } else {
+        content = 'Nothing to cancel.';
+      }
+      await interaction.reply({ content, ephemeral: true }).catch(() => {});
+      return;
+    }
+
     // Interrupt button: interrupt:<lockKeyPrefix>
     // 只杀运行中的进程，队列中的消息自然获得锁继续执行
     if (customId.startsWith('interrupt:')) {

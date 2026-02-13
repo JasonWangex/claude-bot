@@ -309,7 +309,7 @@ export class MessageHandler {
           .setLabel('Interrupt & Send Now')
           .setStyle(ButtonStyle.Primary);
         const cancelButton = new ButtonBuilder()
-          .setCustomId(`stop:${lockKey.slice(0, 20)}`)
+          .setCustomId(`cancel:${lockKey.slice(0, 20)}`)
           .setLabel('Cancel')
           .setStyle(ButtonStyle.Secondary);
         const queuedRow = new ActionRowBuilder<ButtonBuilder>().addComponents(interruptButton, cancelButton);

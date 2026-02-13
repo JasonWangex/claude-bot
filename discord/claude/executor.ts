@@ -665,6 +665,32 @@ export class ClaudeExecutor {
   }
 
   /**
+   * 取消排队中的请求（只排空队列，不杀运行中的进程）
+   * 如果有正在运行的任务，返回 hasRunning=true，提示用户改用 stop
+   */
+  cancelQueued(lockKeyOrPrefix: string): { cancelled: number; hasRunning: boolean } {
+    const matchedKeys = this.resolveKeys(lockKeyOrPrefix);
+    let cancelled = 0;
+    let hasRunning = false;
+
+    for (const lockKey of matchedKeys) {
+      const entry = this.locks.get(lockKey);
+      if (entry && entry.queue.length > 0) {
+        const err = new ClaudeExecutionError('任务已被用户取消', ClaudeErrorType.ABORTED);
+        for (const q of entry.queue) q.reject(err);
+        cancelled += entry.queue.length;
+        entry.queue = [];
+      }
+
+      if (this.activeProcesses.has(lockKey)) {
+        hasRunning = true;
+      }
+    }
+
+    return { cancelled, hasRunning };
+  }
+
+  /**
    * 查询指定 lockKey 的队列长度
    */
   getQueueLength(lockKeyOrPrefix: string): number {

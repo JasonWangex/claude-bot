@@ -178,6 +178,10 @@ export class ClaudeClient {
     return this.executor.abortRunning(lockKey);
   }
 
+  cancelQueued(lockKey: string): { cancelled: number; hasRunning: boolean } {
+    return this.executor.cancelQueued(lockKey);
+  }
+
   updateProgressInfo(lockKey: string, text: string, toolUseCount: number): void {
     this.executor.updateProgressInfo(lockKey, text, toolUseCount);
   }
