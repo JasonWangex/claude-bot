@@ -261,6 +261,9 @@ export interface DiscordBotConfig {
   worktreesDir: string;
   apiPort: number;
   apiListen: string;
+  // 多模型流水线配置
+  pipelineOpusModel: string;
+  pipelineSonnetModel: string;
 }
 
 // ========== Goal Orchestrator ==========
@@ -276,12 +279,20 @@ export interface GoalTaskFeedback {
   details?: string;    // 详细说明
 }
 
+export type GoalTaskComplexity = 'simple' | 'complex';
+export type GoalPipelinePhase = 'plan' | 'execute' | 'audit' | 'fix';
+
 export interface GoalTask {
   id: string;
   description: string;
   type: GoalTaskType;
   depends: string[];
   phase?: number;
+
+  // 多模型流水线
+  complexity?: GoalTaskComplexity;   // 代码任务复杂度，Goal 创建时标注
+  pipelinePhase?: GoalPipelinePhase; // 当前阶段: 'plan' | 'execute' | 'audit' | 'fix'
+  auditRetries?: number;             // audit 重试计数（最多 2）
 
   // 执行状态
   status: GoalTaskStatus;

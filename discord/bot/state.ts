@@ -8,6 +8,9 @@
  */
 
 import { randomUUID } from 'crypto';
+import { readFileSync, renameSync } from 'fs';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 import { Session, GuildState, ArchivedSession } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 import type { SessionRepository } from '../db/repo/session-repo.js';
@@ -44,15 +47,31 @@ export class StateManager {
 
   async load(): Promise<void> {
     if (this.sessionRepo && this.guildRepo) {
+      // 先尝试从 SQLite 加载
       const sessions = this.sessionRepo.loadAllSessions();
       const guilds = this.guildRepo.loadAll();
 
-      for (const s of sessions) {
-        this.sessions.set(this.threadKey(s.guildId, s.threadId), s);
+      // 如果 SQLite 为空，尝试从旧 JSON 文件迁移
+      if (sessions.length === 0 && guilds.length === 0) {
+        await this.migrateFromJson();
+        // 迁移后重新加载
+        const migratedSessions = this.sessionRepo.loadAllSessions();
+        const migratedGuilds = this.guildRepo.loadAll();
+        for (const s of migratedSessions) {
+          this.sessions.set(this.threadKey(s.guildId, s.threadId), s);
+        }
+        for (const g of migratedGuilds) {
+          this.guilds.set(g.guildId, g);
+        }
+      } else {
+        for (const s of sessions) {
+          this.sessions.set(this.threadKey(s.guildId, s.threadId), s);
+        }
+        for (const g of guilds) {
+          this.guilds.set(g.guildId, g);
+        }
       }
-      for (const g of guilds) {
-        this.guilds.set(g.guildId, g);
-      }
+
       const archived = this.sessionRepo.loadAllArchived();
       for (const a of archived) {
         this.archivedSessions.set(this.threadKey(a.guildId, a.threadId), a);
@@ -63,6 +82,85 @@ export class StateManager {
 
     // 无 repo 时不加载
     logger.warn('StateManager: No repositories provided, running without persistence');
+  }
+
+  /**
+   * 从旧版 discord-states.json 迁移数据到 SQLite（一次性操作）
+   * 迁移成功后将 JSON 文件重命名为 .bak
+   */
+  private async migrateFromJson(): Promise<void> {
+    const __dirname = dirname(fileURLToPath(import.meta.url));
+    const jsonPath = join(__dirname, '../../data/discord-states.json');
+
+    let raw: string;
+    try {
+      raw = readFileSync(jsonPath, 'utf-8');
+    } catch (err: any) {
+      if (err.code === 'ENOENT') {
+        logger.info('No JSON state file found, starting fresh with SQLite');
+        return;
+      }
+      logger.error('Failed to read JSON state file for migration:', err.message);
+      return;
+    }
+
+    let data: {
+      sessions?: Record<string, Session>;
+      guilds?: Record<string, GuildState>;
+      archivedSessions?: Record<string, ArchivedSession>;
+    };
+    try {
+      data = JSON.parse(raw);
+    } catch (err: any) {
+      logger.error('Failed to parse JSON state file:', err.message);
+      return;
+    }
+
+    let sessionCount = 0;
+    let guildCount = 0;
+    let archivedCount = 0;
+
+    // 迁移 guilds
+    if (data.guilds && this.guildRepo) {
+      for (const guild of Object.values(data.guilds)) {
+        // JSON 中可能缺少 lastActivity，补上默认值
+        if (!guild.lastActivity) guild.lastActivity = Date.now();
+        await this.guildRepo.save(guild);
+        guildCount++;
+      }
+    }
+
+    // 迁移 sessions
+    if (data.sessions && this.sessionRepo) {
+      for (const session of Object.values(data.sessions)) {
+        await this.sessionRepo.save(session);
+        sessionCount++;
+      }
+    }
+
+    // 迁移 archived sessions
+    if (data.archivedSessions && this.sessionRepo) {
+      for (const archived of Object.values(data.archivedSessions)) {
+        await this.sessionRepo.save(archived as Session);
+        await this.sessionRepo.archive(
+          archived.guildId,
+          archived.threadId,
+          archived.archivedBy,
+          archived.archiveReason,
+        );
+        archivedCount++;
+      }
+    }
+
+    logger.info(`Migrated from JSON: ${sessionCount} session(s), ${guildCount} guild(s), ${archivedCount} archived`);
+
+    // 重命名为 .bak
+    try {
+      renameSync(jsonPath, jsonPath + '.bak');
+      logger.info('Renamed discord-states.json → discord-states.json.bak');
+    } catch (err: any) {
+      logger.warn('Failed to rename JSON file:', err.message);
+    }
   }
 
   /**

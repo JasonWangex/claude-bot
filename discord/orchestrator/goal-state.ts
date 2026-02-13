@@ -5,11 +5,12 @@
  * 持久化已迁移到 IGoalRepo (SQLite)。
  */
 
-import type { GoalTask, GoalTaskType } from '../types/index.js';
+import type { GoalTask, GoalTaskType, GoalTaskComplexity } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 import { chatCompletion } from '../utils/llm.js';
 
 const VALID_GOAL_TASK_TYPES: GoalTaskType[] = ['代码', '手动', '调研', '占位'];
+const VALID_COMPLEXITIES: GoalTaskComplexity[] = ['simple', 'complex'];
 
 /**
  * 从 Goal Skill 传入的结构化子任务列表解析为 GoalTask[]
@@ -28,18 +29,25 @@ export function parseTasks(raw: Array<{
   type?: string;
   depends?: string[];
   phase?: number;
+  complexity?: string;
 }>): GoalTask[] {
   return raw.map(t => {
     const rawType = t.type || '代码';
     const type: GoalTaskType = VALID_GOAL_TASK_TYPES.includes(rawType as GoalTaskType)
       ? (rawType as GoalTaskType)
       : '代码';
+    const rawComplexity = t.complexity;
+    const complexity: GoalTaskComplexity | undefined =
+      rawComplexity && VALID_COMPLEXITIES.includes(rawComplexity as GoalTaskComplexity)
+        ? (rawComplexity as GoalTaskComplexity)
+        : undefined;
     return {
       id: t.id,
       description: t.description,
       type,
       depends: t.depends || [],
       phase: t.phase,
+      complexity,
       status: 'pending' as const,
     };
   });

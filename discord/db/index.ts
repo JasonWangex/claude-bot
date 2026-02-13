@@ -15,10 +15,12 @@ import type { Migration } from './migrate.js';
 // Migration 注册表 — 新增 migration 只需在此追加导入
 import migration001 from './migrations/001_initial_schema.js';
 import migration002 from './migrations/002_add_goal_checkpoints.js';
+import migration003 from './migrations/003_add_pipeline_fields.js';
 
 const allMigrations: Migration[] = [
   migration001,
   migration002,
+  migration003,
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

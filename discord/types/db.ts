@@ -169,6 +169,12 @@ export interface GoalTaskRow {
   type: '代码' | '手动' | '调研' | '占位';
   /** 阶段编号 */
   phase: number | null;
+  /** 代码任务复杂度 */
+  complexity: 'simple' | 'complex' | null;
+  /** 当前流水线阶段 */
+  pipeline_phase: string | null;
+  /** audit 重试计数 */
+  audit_retries: number;
   /** 执行状态 */
   status: 'pending' | 'dispatched' | 'running' | 'completed' | 'failed' | 'blocked' | 'blocked_feedback' | 'paused' | 'cancelled' | 'skipped';
   /** git 分支名 */

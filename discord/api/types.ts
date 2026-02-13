@@ -216,6 +216,9 @@ export interface GoalTaskSummary {
   description: string;
   type: string;
   phase: number | null;
+  complexity: string | null;
+  pipeline_phase: string | null;
+  audit_retries: number;
   status: string;
   depends: string[];
   branch_name: string | null;

@@ -18,8 +18,8 @@ import { buildReplanApprovalButtons, buildReplanRollbackButton } from './goal-bu
 
 /** 单条变更指令 */
 export type ReplanChange =
-  | { action: 'add'; task: { id: string; description: string; type: string; depends: string[]; phase?: number } }
-  | { action: 'modify'; taskId: string; updates: { description?: string; type?: string; depends?: string[]; phase?: number } }
+  | { action: 'add'; task: { id: string; description: string; type: string; depends: string[]; phase?: number; complexity?: 'simple' | 'complex' } }
+  | { action: 'modify'; taskId: string; updates: { description?: string; type?: string; depends?: string[]; phase?: number; complexity?: 'simple' | 'complex' } }
   | { action: 'remove'; taskId: string; reason: string }
   | { action: 'reorder'; taskId: string; newDepends: string[]; newPhase?: number };
 
@@ -152,6 +152,7 @@ export function applyReplanChanges(
           type: (change.task.type as GoalTask['type']) || '代码',
           depends: change.task.depends,
           phase: change.task.phase,
+          complexity: change.task.complexity,
           status: 'pending',
         };
         updatedTasks.push(newTask);
@@ -182,6 +183,7 @@ export function applyReplanChanges(
         if (change.updates.type) task.type = change.updates.type as GoalTask['type'];
         if (change.updates.depends) task.depends = change.updates.depends;
         if (change.updates.phase !== undefined) task.phase = change.updates.phase;
+        if (change.updates.complexity) task.complexity = change.updates.complexity;
         applied.push(change);
         break;
       }
@@ -817,8 +819,8 @@ function buildReplanPrompt(ctx: ReplanContext): string {
     ``,
     `{`,
     `  "changes": [`,
-    `    { "action": "add", "task": { "id": "t8", "description": "...", "type": "代码", "depends": ["t3"], "phase": 3 } },`,
-    `    { "action": "modify", "taskId": "t5", "updates": { "description": "new desc", "depends": ["t3", "t8"] } },`,
+    `    { "action": "add", "task": { "id": "t8", "description": "...", "type": "代码", "depends": ["t3"], "phase": 3, "complexity": "simple" } },`,
+    `    { "action": "modify", "taskId": "t5", "updates": { "description": "new desc", "depends": ["t3", "t8"], "complexity": "complex" } },`,
     `    { "action": "remove", "taskId": "t7", "reason": "superseded by t8" },`,
     `    { "action": "reorder", "taskId": "t6", "newDepends": ["t8"], "newPhase": 3 }`,
     `  ],`,
@@ -833,6 +835,7 @@ function buildReplanPrompt(ctx: ReplanContext): string {
     `Note: low/medium changes are auto-applied; high requires user approval.`,
     ``,
     `Valid task types: 代码, 手动, 调研, 占位`,
+    `Valid complexity (for 代码 tasks): "simple" (1-3 files, has patterns to follow) or "complex" (4+ files, needs architecture design). Default: "simple"`,
     `Valid actions: add, modify, remove, reorder`,
     ``,
     `If no changes are needed, return: { "changes": [], "reasoning": "...", "impactLevel": "low" }`,
@@ -878,6 +881,9 @@ function parseReplanResponse(raw: string): ReplanResult | null {
       switch (change.action) {
         case 'add':
           if (change.task?.id && change.task?.description) {
+            const complexity = ['simple', 'complex'].includes(change.task.complexity)
+              ? change.task.complexity as 'simple' | 'complex'
+              : undefined;
             validChanges.push({
               action: 'add',
               task: {
@@ -886,6 +892,7 @@ function parseReplanResponse(raw: string): ReplanResult | null {
                 type: change.task.type || '代码',
                 depends: Array.isArray(change.task.depends) ? change.task.depends : [],
                 phase: change.task.phase,
+                complexity,
               },
             });
           }
@@ -893,10 +900,16 @@ function parseReplanResponse(raw: string): ReplanResult | null {
 
         case 'modify':
           if (change.taskId && change.updates) {
+            const updates = { ...change.updates };
+            if (updates.complexity !== undefined) {
+              updates.complexity = ['simple', 'complex'].includes(updates.complexity)
+                ? updates.complexity as 'simple' | 'complex'
+                : undefined;
+            }
             validChanges.push({
               action: 'modify',
               taskId: change.taskId,
-              updates: change.updates,
+              updates,
             });
           }
           break;

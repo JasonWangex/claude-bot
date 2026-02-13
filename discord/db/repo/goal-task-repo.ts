@@ -8,7 +8,7 @@
 
 import type Database from 'better-sqlite3';
 import type { IGoalTaskRepo } from '../../types/repository.js';
-import type { GoalTask, GoalTaskStatus } from '../../types/index.js';
+import type { GoalTask, GoalTaskStatus, GoalPipelinePhase } from '../../types/index.js';
 import type { GoalTaskRow, GoalTaskDepRow } from '../../types/db.js';
 
 export class GoalTaskRepo implements IGoalTaskRepo {
@@ -48,11 +48,13 @@ export class GoalTaskRepo implements IGoalTaskRepo {
         INSERT INTO goal_tasks (
           id, goal_id, description, type, phase, status,
           branch_name, thread_id, dispatched_at, completed_at,
-          error, merged, notified_blocked, feedback_json
+          error, merged, notified_blocked, feedback_json,
+          complexity, pipeline_phase, audit_retries
         ) VALUES (
           @id, @goal_id, @description, @type, @phase, @status,
           @branch_name, @thread_id, @dispatched_at, @completed_at,
-          @error, @merged, @notified_blocked, @feedback_json
+          @error, @merged, @notified_blocked, @feedback_json,
+          @complexity, @pipeline_phase, @audit_retries
         )
         ON CONFLICT(goal_id, id) DO UPDATE SET
           description = @description,
@@ -66,7 +68,10 @@ export class GoalTaskRepo implements IGoalTaskRepo {
           error = @error,
           merged = @merged,
           notified_blocked = @notified_blocked,
-          feedback_json = @feedback_json
+          feedback_json = @feedback_json,
+          complexity = @complexity,
+          pipeline_phase = @pipeline_phase,
+          audit_retries = @audit_retries
       `),
 
       deleteTask: this.db.prepare(
@@ -207,6 +212,9 @@ function goalTaskToRow(goalId: string, task: GoalTask): Record<string, unknown> 
     merged: task.merged ? 1 : 0,
     notified_blocked: task.notifiedBlocked ? 1 : 0,
     feedback_json: task.feedback ? JSON.stringify(task.feedback) : null,
+    complexity: task.complexity ?? null,
+    pipeline_phase: task.pipelinePhase ?? null,
+    audit_retries: task.auditRetries ?? 0,
   };
 }
 
@@ -230,6 +238,9 @@ function taskRowToGoalTask(
     type: row.type,
     depends: dependsList,
     phase: row.phase ?? undefined,
+    complexity: row.complexity ?? undefined,
+    pipelinePhase: validatePipelinePhase(row.pipeline_phase),
+    auditRetries: row.audit_retries ?? 0,
     status: row.status,
     branchName: row.branch_name ?? undefined,
     threadId: row.thread_id ?? undefined,
@@ -240,6 +251,15 @@ function taskRowToGoalTask(
     notifiedBlocked: row.notified_blocked === 1,
     feedback: row.feedback_json ? JSON.parse(row.feedback_json) : undefined,
   };
+}
+
+const VALID_PIPELINE_PHASES: GoalPipelinePhase[] = ['plan', 'execute', 'audit', 'fix'];
+
+function validatePipelinePhase(value: string | null): GoalPipelinePhase | undefined {
+  if (!value) return undefined;
+  return VALID_PIPELINE_PHASES.includes(value as GoalPipelinePhase)
+    ? (value as GoalPipelinePhase)
+    : undefined;
 }
 
 /** 从 deps 行列表构建 taskId → depends_on_task_id[] 映射 */

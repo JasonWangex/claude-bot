@@ -13,9 +13,9 @@ import { StateManager } from '../bot/state.js';
 import type { ClaudeClient } from '../claude/client.js';
 import type { MessageHandler } from '../bot/handlers.js';
 import { type MessageQueue, EmbedColors, type EmbedColor } from '../bot/message-queue.js';
-import type { DiscordBotConfig, GoalDriveState, GoalTask, GoalTaskFeedback, PendingRollback } from '../types/index.js';
+import type { DiscordBotConfig, GoalDriveState, GoalTask, GoalTaskFeedback, GoalPipelinePhase, PendingRollback } from '../types/index.js';
 import type { IGoalRepo } from '../types/repository.js';
-import { stat, readFile } from 'fs/promises';
+import { stat, readFile, access } from 'fs/promises';
 import { join } from 'path';
 import { getAuthorizedGuildId } from '../utils/env.js';
 import { generateTopicTitle } from '../utils/llm.js';
@@ -73,6 +73,7 @@ export interface StartDriveParams {
     type?: string;
     depends?: string[];
     phase?: number;
+    complexity?: string;
   }>;
   maxConcurrent?: number;
 }
@@ -245,6 +246,8 @@ export class GoalOrchestrator {
     task.dispatchedAt = undefined;
     task.merged = false;
     task.feedback = undefined;
+    task.pipelinePhase = undefined;
+    task.auditRetries = 0;
     await this.saveState(state);
     await this.notify(state.goalThreadId, `Retrying task: ${task.id} - ${task.description}`, 'warning');
     if (state.status === 'running') await this.reviewAndDispatch(state);
@@ -360,6 +363,8 @@ export class GoalOrchestrator {
               task.branchName = undefined;
               task.threadId = undefined;
               task.dispatchedAt = undefined;
+              task.pipelinePhase = undefined;
+              task.auditRetries = 0;
             }
             stateModified = true;
           } catch {
@@ -641,8 +646,7 @@ export class GoalOrchestrator {
         'info'
       );
 
-      const taskPrompt = this.buildTaskPrompt(task, state);
-      this.executeTaskInBackground(state.goalId, task.id, guildId, newThreadId, taskPrompt);
+      this.executeTaskPipeline(state.goalId, task.id, guildId, newThreadId, task, state);
 
     } catch (err: any) {
       task.status = 'failed';
@@ -677,6 +681,617 @@ export class GoalOrchestrator {
         }
       }
     })();
+  }
+
+  // ========== 多模型流水线 ==========
+
+  /**
+   * 切换 session 到新模型，开始新 pipeline phase
+   * 清除旧 claudeSessionId 使得下次 handleBackgroundChat 启动新 session
+   */
+  private switchSessionModel(guildId: string, threadId: string, model: string): void {
+    this.deps.stateManager.clearSessionClaudeId(guildId, threadId);
+    this.deps.stateManager.setSessionModel(guildId, threadId, model);
+  }
+
+  private async updatePipelinePhase(goalId: string, taskId: string, phase: GoalPipelinePhase): Promise<void> {
+    await this.withStateLock(goalId, async () => {
+      const state = await this.getState(goalId);
+      if (!state) return;
+      const task = state.tasks.find(t => t.id === taskId);
+      if (!task) return;
+      task.pipelinePhase = phase;
+      await this.saveState(state);
+    });
+  }
+
+  private async updateAuditRetries(goalId: string, taskId: string, count: number): Promise<void> {
+    await this.withStateLock(goalId, async () => {
+      const state = await this.getState(goalId);
+      if (!state) return;
+      const task = state.tasks.find(t => t.id === taskId);
+      if (!task) return;
+      task.auditRetries = count;
+      await this.saveState(state);
+    });
+  }
+
+  /**
+   * 检查任务当前是否仍在 running 状态（防止 pipeline 操作过期引用）
+   * 在 pipeline 各 phase 之间调用，如果任务已被外部修改（skip/cancel/retry），中止 pipeline
+   */
+  private async isTaskStillRunning(goalId: string, taskId: string): Promise<boolean> {
+    const state = await this.getState(goalId);
+    if (!state) return false;
+    const task = state.tasks.find(t => t.id === taskId);
+    return task?.status === 'running';
+  }
+
+  private async getTaskStatus(goalId: string, taskId: string): Promise<string> {
+    const state = await this.getState(goalId);
+    if (!state) return 'unknown';
+    const task = state.tasks.find(t => t.id === taskId);
+    return task?.status ?? 'unknown';
+  }
+
+  /**
+   * 流水线路由 — 根据 task.type + task.complexity 分发到对应路径
+   */
+  private executeTaskPipeline(
+    goalId: string,
+    taskId: string,
+    guildId: string,
+    threadId: string,
+    task: GoalTask,
+    state: GoalDriveState,
+  ): void {
+    (async () => {
+      try {
+        if (task.type === '调研') {
+          await this.pipelineResearch(goalId, taskId, guildId, threadId, task, state);
+        } else if (task.type === '代码' && task.complexity === 'complex') {
+          await this.pipelineComplexCode(goalId, taskId, guildId, threadId, task, state);
+        } else {
+          // 默认路径：代码(simple/无标注) 和其他类型
+          await this.pipelineSimpleCode(goalId, taskId, guildId, threadId, task, state);
+        }
+      } catch (err: any) {
+        logger.error(`[Orchestrator] Pipeline ${taskId} failed:`, err.message);
+        // 检查任务是否已被用户操作修改（skip/pause/retry）
+        // 如果已不是 running 状态，不要用 onTaskFailed 覆盖
+        const stillRunning = await this.isTaskStillRunning(goalId, taskId);
+        if (!stillRunning) {
+          logger.info(`[Orchestrator] Pipeline ${taskId}: task already ${await this.getTaskStatus(goalId, taskId)}, skipping onTaskFailed`);
+          return;
+        }
+        try {
+          await this.onTaskFailed(goalId, taskId, err.message);
+        } catch (cbErr: any) {
+          logger.error(`[Orchestrator] onTaskFailed callback also failed:`, cbErr.message);
+        }
+      }
+    })();
+  }
+
+  /**
+   * 调研路径：Opus 执行 → onTaskCompleted
+   */
+  private async pipelineResearch(
+    goalId: string,
+    taskId: string,
+    guildId: string,
+    threadId: string,
+    task: GoalTask,
+    state: GoalDriveState,
+  ): Promise<void> {
+    const opusModel = this.deps.config.pipelineOpusModel;
+    this.switchSessionModel(guildId, threadId, opusModel);
+    await this.updatePipelinePhase(goalId, taskId, 'execute');
+
+    await this.notify(state.goalThreadId,
+      `[Pipeline] ${taskId}: 调研路径 → Opus 执行`,
+      'info',
+    );
+
+    const taskPrompt = this.buildTaskPrompt(task, state);
+    logger.info(`[Orchestrator] Pipeline ${taskId}: research → Opus execute`);
+    await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, taskPrompt);
+
+    if (!await this.isTaskStillRunning(goalId, taskId)) {
+      logger.info(`[Orchestrator] Pipeline ${taskId}: task no longer running after execute, aborting pipeline`);
+      return;
+    }
+    await this.onTaskCompleted(goalId, taskId);
+  }
+
+  /**
+   * 简单代码路径：Sonnet 执行 → Opus audit → [pass: 完成 / fail: Sonnet 修复(≤2次)]
+   */
+  private async pipelineSimpleCode(
+    goalId: string,
+    taskId: string,
+    guildId: string,
+    threadId: string,
+    task: GoalTask,
+    state: GoalDriveState,
+  ): Promise<void> {
+    const { pipelineOpusModel: opusModel, pipelineSonnetModel: sonnetModel } = this.deps.config;
+
+    // Phase 1: Sonnet 执行
+    this.switchSessionModel(guildId, threadId, sonnetModel);
+    await this.updatePipelinePhase(goalId, taskId, 'execute');
+
+    await this.notify(state.goalThreadId,
+      `[Pipeline] ${taskId}: 简单代码 → Sonnet 执行`,
+      'info',
+    );
+
+    const taskPrompt = this.buildTaskPrompt(task, state);
+    logger.info(`[Orchestrator] Pipeline ${taskId}: simple code → Sonnet execute`);
+    await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, taskPrompt);
+
+    // 检查任务是否仍在 running（可能被 skip/cancel/retry）
+    if (!await this.isTaskStillRunning(goalId, taskId)) {
+      logger.info(`[Orchestrator] Pipeline ${taskId}: task no longer running after execute, aborting pipeline`);
+      return;
+    }
+
+    // Phase 2: Opus audit
+    const auditResult = await this.runAudit(goalId, taskId, guildId, threadId, task, state);
+
+    if (auditResult.verdict === 'pass') {
+      await this.onTaskCompleted(goalId, taskId);
+      return;
+    }
+
+    // Audit 失败 → Sonnet 修复（最多 2 次）
+    await this.auditFixLoop(goalId, taskId, guildId, threadId, task, state, auditResult.issues);
+  }
+
+  /**
+   * 复杂代码路径：Opus plan → Sonnet 执行 → Opus audit → [同上重试]
+   */
+  private async pipelineComplexCode(
+    goalId: string,
+    taskId: string,
+    guildId: string,
+    threadId: string,
+    task: GoalTask,
+    state: GoalDriveState,
+  ): Promise<void> {
+    const { pipelineOpusModel: opusModel, pipelineSonnetModel: sonnetModel } = this.deps.config;
+
+    // Phase 1: Opus plan
+    this.switchSessionModel(guildId, threadId, opusModel);
+    await this.updatePipelinePhase(goalId, taskId, 'plan');
+
+    await this.notify(state.goalThreadId,
+      `[Pipeline] ${taskId}: 复杂代码 → Opus 规划`,
+      'info',
+    );
+
+    const planPrompt = this.buildPlanPrompt(task, state);
+    logger.info(`[Orchestrator] Pipeline ${taskId}: complex code → Opus plan`);
+    await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, planPrompt);
+
+    if (!await this.isTaskStillRunning(goalId, taskId)) {
+      logger.info(`[Orchestrator] Pipeline ${taskId}: task no longer running after plan, aborting pipeline`);
+      return;
+    }
+
+    // 验证 plan 文件是否写入
+    const planExists = await this.checkPlanFileExists(state, task);
+    if (!planExists) {
+      logger.warn(`[Orchestrator] Pipeline ${taskId}: .task-plan.md not found after plan phase, Sonnet will execute without plan`);
+      await this.notify(state.goalThreadId,
+        `[Pipeline] ${taskId}: Opus 未写入 .task-plan.md，Sonnet 将自行理解任务执行`,
+        'warning',
+      );
+    }
+
+    // Phase 2: Sonnet 执行（读 plan）
+    this.switchSessionModel(guildId, threadId, sonnetModel);
+    await this.updatePipelinePhase(goalId, taskId, 'execute');
+
+    await this.notify(state.goalThreadId,
+      `[Pipeline] ${taskId}: 复杂代码 → Sonnet 执行${planExists ? '（按 plan）' : '（无 plan fallback）'}`,
+      'info',
+    );
+
+    // 根据 plan 是否存在选择不同的 prompt
+    const executePrompt = planExists
+      ? this.buildExecuteWithPlanPrompt(task, state)
+      : this.buildTaskPrompt(task, state);
+    logger.info(`[Orchestrator] Pipeline ${taskId}: complex code → Sonnet execute with plan`);
+    await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, executePrompt);
+
+    if (!await this.isTaskStillRunning(goalId, taskId)) {
+      logger.info(`[Orchestrator] Pipeline ${taskId}: task no longer running after execute, aborting pipeline`);
+      return;
+    }
+
+    // Phase 3: Opus audit
+    const auditResult = await this.runAudit(goalId, taskId, guildId, threadId, task, state);
+
+    if (auditResult.verdict === 'pass') {
+      await this.onTaskCompleted(goalId, taskId);
+      return;
+    }
+
+    // Audit 失败 → Sonnet 修复
+    await this.auditFixLoop(goalId, taskId, guildId, threadId, task, state, auditResult.issues);
+  }
+
+  /**
+   * Audit 失败后的修复循环：Sonnet fix → re-audit（最多 2 次）
+   */
+  private async auditFixLoop(
+    goalId: string,
+    taskId: string,
+    guildId: string,
+    threadId: string,
+    task: GoalTask,
+    state: GoalDriveState,
+    issues: string[],
+  ): Promise<void> {
+    const { pipelineSonnetModel: sonnetModel } = this.deps.config;
+    const maxRetries = 2;
+
+    for (let retry = 1; retry <= maxRetries; retry++) {
+      if (!await this.isTaskStillRunning(goalId, taskId)) {
+        logger.info(`[Orchestrator] Pipeline ${taskId}: task no longer running in fix loop, aborting`);
+        return;
+      }
+
+      await this.updateAuditRetries(goalId, taskId, retry);
+
+      // Sonnet fix
+      this.switchSessionModel(guildId, threadId, sonnetModel);
+      await this.updatePipelinePhase(goalId, taskId, 'fix');
+
+      await this.notify(state.goalThreadId,
+        `[Pipeline] ${taskId}: Audit 失败 → Sonnet 修复 (${retry}/${maxRetries})`,
+        'warning',
+      );
+
+      const fixPrompt = this.buildFixPrompt(task, state, issues);
+      logger.info(`[Orchestrator] Pipeline ${taskId}: Sonnet fix attempt ${retry}`);
+      await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, fixPrompt);
+
+      // Re-audit
+      const reAudit = await this.runAudit(goalId, taskId, guildId, threadId, task, state);
+      if (reAudit.verdict === 'pass') {
+        await this.onTaskCompleted(goalId, taskId);
+        return;
+      }
+      issues = reAudit.issues;
+    }
+
+    // 所有重试耗尽 → 标记失败
+    logger.warn(`[Orchestrator] Pipeline ${taskId}: audit fix exhausted after ${maxRetries} retries`);
+    await this.onTaskFailed(goalId, taskId, `Audit failed after ${maxRetries} fix attempts. Issues: ${issues.join('; ')}`);
+  }
+
+  /**
+   * 运行 Opus audit：读取 git diff → 审查 → 返回 pass/fail
+   */
+  private async runAudit(
+    goalId: string,
+    taskId: string,
+    guildId: string,
+    threadId: string,
+    task: GoalTask,
+    state: GoalDriveState,
+  ): Promise<{ verdict: 'pass' | 'fail'; issues: string[] }> {
+    const { pipelineOpusModel: opusModel } = this.deps.config;
+
+    this.switchSessionModel(guildId, threadId, opusModel);
+    await this.updatePipelinePhase(goalId, taskId, 'audit');
+
+    await this.notify(state.goalThreadId,
+      `[Pipeline] ${taskId}: Opus 审查中...`,
+      'info',
+    );
+
+    const auditPrompt = this.buildAuditPrompt(task, state);
+    logger.info(`[Orchestrator] Pipeline ${taskId}: Opus audit`);
+    await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, auditPrompt);
+
+    // 读取 audit 结果文件
+    const result = await this.readAuditResult(state, task);
+
+    if (result.verdict === 'pass') {
+      await this.notify(state.goalThreadId,
+        `[Pipeline] ${taskId}: Audit 通过 ✓`,
+        'success',
+      );
+    } else {
+      await this.notify(state.goalThreadId,
+        `[Pipeline] ${taskId}: Audit 未通过 — ${result.issues.length} 个问题`,
+        'warning',
+      );
+    }
+
+    return result;
+  }
+
+  /**
+   * 读取 audit 结果文件 feedback/<taskId>-audit.json
+   *
+   * 安全策略：
+   * - 文件不存在 → fail（Opus 没写 audit 结果，不能默认通过）
+   * - 文件存在但解析失败 → fail
+   * - verdict 缺失 → fail
+   * - 只有明确 verdict="pass" 才算通过
+   */
+
+  /**
+   * 检查 .task-plan.md 是否存在于子任务 worktree 中
+   */
+  private async checkPlanFileExists(state: GoalDriveState, task: GoalTask): Promise<boolean> {
+    if (!task.branchName) return false;
+    try {
+      const stdout = await execGit(
+        ['worktree', 'list', '--porcelain'],
+        state.baseCwd,
+        `checkPlanFileExists(${task.id}): list worktrees`,
+      );
+      const subtaskDir = this.findWorktreeDir(stdout, task.branchName);
+      if (!subtaskDir) return false;
+      await access(join(subtaskDir, '.task-plan.md'));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async readAuditResult(
+    state: GoalDriveState,
+    task: GoalTask,
+  ): Promise<{ verdict: 'pass' | 'fail'; issues: string[] }> {
+    if (!task.branchName) {
+      logger.warn(`[Orchestrator] readAuditResult(${task.id}): no branchName, defaulting to fail`);
+      return { verdict: 'fail', issues: ['No branch name — cannot locate audit result'] };
+    }
+
+    let subtaskDir: string | null = null;
+    try {
+      const stdout = await execGit(
+        ['worktree', 'list', '--porcelain'],
+        state.baseCwd,
+        `readAuditResult(${task.id}): list worktrees`,
+      );
+      subtaskDir = this.findWorktreeDir(stdout, task.branchName);
+    } catch (err: any) {
+      logger.warn(`[Orchestrator] readAuditResult(${task.id}): cannot list worktrees: ${err.message}`);
+      return { verdict: 'fail', issues: ['Cannot list worktrees to find audit result'] };
+    }
+
+    if (!subtaskDir) {
+      logger.warn(`[Orchestrator] readAuditResult(${task.id}): worktree not found for ${task.branchName}`);
+      return { verdict: 'fail', issues: ['Worktree not found — cannot locate audit result'] };
+    }
+
+    const auditPath = join(subtaskDir, 'feedback', `${task.id}-audit.json`);
+
+    // 检查文件是否存在
+    try {
+      await access(auditPath);
+    } catch {
+      logger.warn(`[Orchestrator] readAuditResult(${task.id}): audit file not found at ${auditPath}`);
+      return { verdict: 'fail', issues: ['Audit result file not found — auditor may not have written it'] };
+    }
+
+    // 文件存在，读取并解析
+    try {
+      const content = await readFile(auditPath, 'utf-8');
+      const parsed = JSON.parse(content);
+
+      if (!parsed.verdict) {
+        logger.warn(`[Orchestrator] readAuditResult(${task.id}): verdict field missing in audit file`);
+        return { verdict: 'fail', issues: ['Audit file exists but verdict field is missing'] };
+      }
+
+      return {
+        verdict: parsed.verdict === 'pass' ? 'pass' : 'fail',
+        issues: Array.isArray(parsed.issues)
+          ? parsed.issues.map((i: any) => typeof i === 'string' ? i : i.description || JSON.stringify(i))
+          : [],
+      };
+    } catch (err: any) {
+      logger.warn(`[Orchestrator] readAuditResult(${task.id}): failed to parse audit file: ${err.message}`);
+      return { verdict: 'fail', issues: [`Audit file parse error: ${err.message}`] };
+    }
+  }
+
+  // ========== 流水线 Prompts ==========
+
+  /**
+   * buildPlanPrompt — Opus plan phase（复杂代码）
+   * 分析代码 → 写 .task-plan.md → commit → 不写实现代码
+   */
+  private buildPlanPrompt(task: GoalTask, state: GoalDriveState): string {
+    const lines: string[] = [
+      `You are a senior architect planning the implementation of a subtask for Goal "${state.goalName}".`,
+      ``,
+      `## Task to Plan`,
+      `ID: ${task.id}`,
+      `Description: ${task.description}`,
+    ];
+
+    if (task.depends.length > 0) {
+      const depInfos = task.depends.map(depId => {
+        const dep = state.tasks.find(t => t.id === depId);
+        return dep ? `  - ${dep.id}: ${dep.description} (${dep.status})` : `  - ${depId}: (unknown)`;
+      });
+      lines.push(``, `## Dependencies (completed before this task)`, ...depInfos);
+    }
+
+    lines.push(
+      ``,
+      `## Your Job`,
+      `1. Analyze the existing codebase relevant to this task`,
+      `2. Identify all files that need to be modified or created`,
+      `3. Design the implementation approach with specific steps`,
+      `4. Write a detailed plan to \`.task-plan.md\` in the working directory`,
+      `5. \`git add .task-plan.md && git commit -m "plan: ${task.id} implementation plan"\``,
+      ``,
+      `## Plan File Format (.task-plan.md)`,
+      '```markdown',
+      `# Implementation Plan: ${task.id}`,
+      ``,
+      `## Overview`,
+      `<Brief summary of what needs to be done>`,
+      ``,
+      `## Files to Modify`,
+      `- \`path/to/file1.ts\` — <what changes and why>`,
+      `- \`path/to/file2.ts\` — <what changes and why>`,
+      ``,
+      `## Implementation Steps`,
+      `1. <Step 1 with specific details>`,
+      `2. <Step 2 with specific details>`,
+      `...`,
+      ``,
+      `## Key Decisions`,
+      `- <Decision 1 and rationale>`,
+      ``,
+      `## Edge Cases / Risks`,
+      `- <Risk 1 and mitigation>`,
+      '```',
+      ``,
+      `## CRITICAL Rules`,
+      `- Do NOT write any implementation code — only the plan`,
+      `- The plan must be specific enough that a different developer can implement it without ambiguity`,
+      `- Focus on the "what" and "why", include code snippets only as examples/references`,
+      `- After writing and committing the plan file, STOP`,
+    );
+
+    return lines.join('\n');
+  }
+
+  /**
+   * buildExecuteWithPlanPrompt — Sonnet execute (复杂代码)
+   * 先读 .task-plan.md → 按步骤实施 → 不偏离方向
+   */
+  private buildExecuteWithPlanPrompt(task: GoalTask, state: GoalDriveState): string {
+    const lines: string[] = [
+      `You are a code executor implementing a subtask for Goal "${state.goalName}".`,
+      `A senior architect has already created a detailed plan for you.`,
+      ``,
+      `## Current Task`,
+      `ID: ${task.id}`,
+      `Description: ${task.description}`,
+      ``,
+      `## Instructions`,
+      `1. **First**, read the plan file: \`cat .task-plan.md\``,
+      `2. Follow the plan step by step — implement each step in order`,
+      `3. Ensure all code compiles and is saved`,
+      `4. Commit your changes when done`,
+      ``,
+      `## CRITICAL Rules`,
+      `- Follow the plan exactly — do not deviate or add features not in the plan`,
+      `- If a plan step is unclear, make the simplest reasonable interpretation`,
+      `- Do not modify files not mentioned in the plan unless absolutely necessary`,
+      `- If you encounter a blocker that prevents following the plan, write a feedback file:`,
+      `  \`feedback/${task.id}.json\` with \`{"type": "blocked", "reason": "..."}\``,
+      `  then \`git add && git commit\` and stop`,
+    ];
+
+    // Feedback protocol (simplified)
+    lines.push(
+      ``,
+      `## Feedback Protocol`,
+      `If blocked, write \`feedback/${task.id}.json\`:`,
+      '```json',
+      `{"type": "blocked", "reason": "brief description", "details": "..."}`,
+      '```',
+      `Then \`git add && git commit\` and stop.`,
+    );
+
+    return lines.join('\n');
+  }
+
+  /**
+   * buildAuditPrompt — Opus audit phase
+   * 读 git diff → 审查正确性/完整性/bug → 写 audit verdict 文件
+   */
+  private buildAuditPrompt(task: GoalTask, state: GoalDriveState): string {
+    const lines: string[] = [
+      `You are a senior code reviewer auditing a subtask implementation for Goal "${state.goalName}".`,
+      ``,
+      `## Task Being Audited`,
+      `ID: ${task.id}`,
+      `Description: ${task.description}`,
+      ``,
+      `## Instructions`,
+      `1. Run \`git log --oneline\` to see all commits, then \`git diff ${state.goalBranch}...HEAD\` to see all changes since branching from the goal branch`,
+      `2. Review the changes for:`,
+      `   - **Correctness**: Does the code do what the task description requires?`,
+      `   - **Completeness**: Are all aspects of the task addressed?`,
+      `   - **Bugs**: Are there obvious bugs, edge cases, or runtime errors?`,
+      `   - **Security**: Any security vulnerabilities (injection, XSS, etc.)?`,
+      `3. Write your verdict to \`feedback/${task.id}-audit.json\``,
+      `4. \`git add feedback/${task.id}-audit.json && git commit -m "audit: ${task.id}"\``,
+      ``,
+      `## Verdict File Format (feedback/${task.id}-audit.json)`,
+      '```json',
+      `{`,
+      `  "verdict": "pass" | "fail",`,
+      `  "summary": "Brief overall assessment",`,
+      `  "issues": [`,
+      `    {`,
+      `      "severity": "error" | "warning",`,
+      `      "file": "path/to/file.ts",`,
+      `      "line": 42,`,
+      `      "description": "What's wrong and why"`,
+      `    }`,
+      `  ]`,
+      `}`,
+      '```',
+      ``,
+      `## Verdict Rules`,
+      `- **pass**: No "error" severity issues. Warnings are acceptable.`,
+      `- **fail**: At least one "error" severity issue found.`,
+      `- Be pragmatic — minor style issues are "warning", not "error"`,
+      `- Focus on functional correctness, not code style preferences`,
+      `- If no code changes are found (empty diff), verdict is "pass"`,
+    ];
+
+    return lines.join('\n');
+  }
+
+  /**
+   * buildFixPrompt — Sonnet fix phase
+   * 读 audit issues → 逐条修复 error 级别 → 只修不加新功能
+   */
+  private buildFixPrompt(task: GoalTask, state: GoalDriveState, issues: string[]): string {
+    const issueList = issues.map((issue, i) => `  ${i + 1}. ${issue}`).join('\n');
+
+    const lines: string[] = [
+      `You are fixing audit issues found in a code review for Goal "${state.goalName}".`,
+      ``,
+      `## Task`,
+      `ID: ${task.id}`,
+      `Description: ${task.description}`,
+      ``,
+      `## Audit Issues to Fix`,
+      issueList,
+      ``,
+      `## Instructions`,
+      `1. Read each issue carefully`,
+      `2. Fix only the issues listed above — do not add new features or refactor unrelated code`,
+      `3. For each fix, make the minimal change necessary`,
+      `4. Ensure the code compiles after your fixes`,
+      `5. Commit your fixes`,
+      ``,
+      `## CRITICAL Rules`,
+      `- Only fix "error" severity issues — ignore warnings`,
+      `- Do not modify code unrelated to the listed issues`,
+      `- If an issue is unclear or unfixable, skip it and note why in a comment`,
+      `- After fixing, the code should be in a state that would pass the same audit`,
+    ];
+
+    return lines.join('\n');
   }
 
   private async onTaskCompleted(goalId: string, taskId: string): Promise<void> {

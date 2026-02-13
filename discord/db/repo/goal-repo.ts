@@ -104,11 +104,13 @@ export class GoalRepo implements IGoalRepo {
           INSERT INTO goal_tasks (
             id, goal_id, description, type, phase, status,
             branch_name, thread_id, dispatched_at, completed_at,
-            error, merged, notified_blocked, feedback_json
+            error, merged, notified_blocked, feedback_json,
+            complexity, pipeline_phase, audit_retries
           ) VALUES (
             @id, @goal_id, @description, @type, @phase, @status,
             @branch_name, @thread_id, @dispatched_at, @completed_at,
-            @error, @merged, @notified_blocked, @feedback_json
+            @error, @merged, @notified_blocked, @feedback_json,
+            @complexity, @pipeline_phase, @audit_retries
           )
         `);
 
@@ -133,6 +135,9 @@ export class GoalRepo implements IGoalRepo {
             merged: task.merged ? 1 : 0,
             notified_blocked: task.notifiedBlocked ? 1 : 0,
             feedback_json: task.feedback ? JSON.stringify(task.feedback) : null,
+            complexity: task.complexity ?? null,
+            pipeline_phase: task.pipelinePhase ?? null,
+            audit_retries: task.auditRetries ?? 0,
           });
 
           for (const dep of task.depends) {
@@ -226,6 +231,9 @@ function rowsToGoalDriveState(
       type: t.type,
       depends: depsMap.get(t.id) || [],
       phase: t.phase ?? undefined,
+      complexity: t.complexity ?? undefined,
+      pipelinePhase: (t.pipeline_phase as GoalDriveState['tasks'][number]['pipelinePhase']) ?? undefined,
+      auditRetries: t.audit_retries ?? 0,
       status: t.status,
       branchName: t.branch_name ?? undefined,
       threadId: t.thread_id ?? undefined,
