@@ -15,6 +15,10 @@ import type { GoalDriveState, GoalTask } from '../types/index.js';
  * 3. 如果有 phase，前一个 phase 的所有任务都已 completed
  * 4. type 为 '手动' 的任务不自动派发，标记为 blocked
  */
+/** 判断任务状态是否视为「已终结」（不再阻塞后续） */
+const isTerminal = (status: GoalTask['status']): boolean =>
+  status === 'completed' || status === 'skipped' || status === 'cancelled';
+
 export function getDispatchableTasks(state: GoalDriveState): GoalTask[] {
   const taskMap = new Map(state.tasks.map(t => [t.id, t]));
   const dispatchable: GoalTask[] = [];
@@ -23,16 +27,19 @@ export function getDispatchableTasks(state: GoalDriveState): GoalTask[] {
   const phaseComplete = (phase: number): boolean => {
     return state.tasks
       .filter(t => t.phase === phase)
-      .every(t => t.status === 'completed' || t.status === 'skipped');
+      .every(t => isTerminal(t.status));
   };
 
   for (const task of state.tasks) {
     if (task.status !== 'pending') continue;
 
+    // 占位任务不自动派发
+    if (task.type === '占位') continue;
+
     // 检查显式依赖
     const depsOk = task.depends.every(depId => {
       const dep = taskMap.get(depId);
-      return dep && (dep.status === 'completed' || dep.status === 'skipped');
+      return dep && isTerminal(dep.status);
     });
     if (!depsOk) continue;
 
@@ -75,15 +82,21 @@ export function getNextBatch(state: GoalDriveState): GoalTask[] {
   return auto.slice(0, available);
 }
 
-/** 检查 Goal 是否全部完成 */
+/** 检查 Goal 是否全部完成（cancelled/skipped 视为完成） */
 export function isGoalComplete(state: GoalDriveState): boolean {
   return state.tasks.every(
-    t => t.status === 'completed' || t.status === 'skipped'
+    t => t.status === 'completed' || t.status === 'skipped' || t.status === 'cancelled'
   );
 }
 
 /** 检查 Goal 是否卡住（没有可派发任务但还有未完成的） */
 export function isGoalStuck(state: GoalDriveState): boolean {
+  // blocked_feedback / paused 状态直接视为卡住
+  const hasBlockedOrPaused = state.tasks.some(
+    t => t.status === 'blocked_feedback' || t.status === 'paused'
+  );
+  if (hasBlockedOrPaused) return true;
+
   const hasPending = state.tasks.some(t => t.status === 'pending');
   const hasActive = state.tasks.some(t => t.status === 'dispatched' || t.status === 'running');
   if (!hasPending || hasActive) return false;

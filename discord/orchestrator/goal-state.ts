@@ -9,7 +9,7 @@ import type { GoalTask, GoalTaskType } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 import { chatCompletion } from '../utils/llm.js';
 
-const VALID_GOAL_TASK_TYPES: GoalTaskType[] = ['代码', '手动', '调研'];
+const VALID_GOAL_TASK_TYPES: GoalTaskType[] = ['代码', '手动', '调研', '占位'];
 
 /**
  * 从 Goal Skill 传入的结构化子任务列表解析为 GoalTask[]
