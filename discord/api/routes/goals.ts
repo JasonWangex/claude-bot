@@ -184,6 +184,25 @@ export const retryTask: RouteHandler = async (_req, res, params, deps) => {
   sendJson(res, 200, { ok: true, data: { status: 'pending' } });
 };
 
+// POST /api/goals/:goalId/tasks/:taskId/refix
+export const refixTask: RouteHandler = async (_req, res, params, deps) => {
+  const guildId = requireAuth(res);
+  if (!guildId) return;
+
+  if (!deps.orchestrator) {
+    sendJson(res, 503, { ok: false, error: 'Orchestrator not available' });
+    return;
+  }
+
+  const ok = await deps.orchestrator.refixTask(params.goalId, params.taskId);
+  if (!ok) {
+    sendJson(res, 400, { ok: false, error: 'Task not found or not in refixable state (must be failed with existing context)' });
+    return;
+  }
+
+  sendJson(res, 200, { ok: true, data: { status: 'running' } });
+};
+
 // POST /api/goals/:goalId/tasks/:taskId/pause
 export const pauseTask: RouteHandler = async (_req, res, params, deps) => {
   const guildId = requireAuth(res);

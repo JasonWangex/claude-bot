@@ -19,7 +19,7 @@ import { listTasks, createTask, getTask, updateTask, deleteTask, archiveTask, fo
 import { sendMessage } from './routes/messages.js';
 import { clearSession, compactSession, rewindSession, stopSession } from './routes/session-ops.js';
 import { getModels, setDefaultModel } from './routes/models.js';
-import { startDrive, getDriveStatus, pauseDrive, resumeDrive, skipTask, markTaskDone, retryTask, pauseTask, resumeTask, rollback, confirmRollback, cancelRollback } from './routes/goals.js';
+import { startDrive, getDriveStatus, pauseDrive, resumeDrive, skipTask, markTaskDone, retryTask, refixTask, pauseTask, resumeTask, rollback, confirmRollback, cancelRollback } from './routes/goals.js';
 import { listGoals, createGoal, getGoal, updateGoal } from './routes/goal-crud.js';
 import { qdev } from './routes/qdev.js';
 import { listDevLogs, getDevLog, createDevLog } from './routes/devlogs.js';
@@ -80,6 +80,7 @@ function defineRoutes(): Route[] {
     r('POST', '/api/goals/:goalId/tasks/:taskId/skip', skipTask),
     r('POST', '/api/goals/:goalId/tasks/:taskId/done', markTaskDone),
     r('POST', '/api/goals/:goalId/tasks/:taskId/retry', retryTask),
+    r('POST', '/api/goals/:goalId/tasks/:taskId/refix', refixTask),
     r('POST', '/api/goals/:goalId/tasks/:taskId/pause', pauseTask),
     r('POST', '/api/goals/:goalId/tasks/:taskId/resume', resumeTask),
     r('POST', '/api/goals/:goalId/rollback', rollback),

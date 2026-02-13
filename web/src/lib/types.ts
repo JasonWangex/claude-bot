@@ -42,6 +42,7 @@ export interface GoalTask {
   merged?: boolean;
   notifiedBlocked?: boolean;
   feedback?: GoalTaskFeedback;
+  pipelinePhase?: string;
 }
 
 export interface PendingReplan {

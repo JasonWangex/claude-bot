@@ -41,6 +41,10 @@ export async function retryTask(goalId: string, taskId: string) {
   return apiPost(`/api/goals/${goalId}/tasks/${taskId}/retry`);
 }
 
+export async function refixTask(goalId: string, taskId: string) {
+  return apiPost(`/api/goals/${goalId}/tasks/${taskId}/refix`);
+}
+
 export async function markTaskDone(goalId: string, taskId: string) {
   return apiPost(`/api/goals/${goalId}/tasks/${taskId}/done`);
 }

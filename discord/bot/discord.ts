@@ -426,6 +426,26 @@ export class DiscordBot {
           break;
         }
 
+        case 'retry_task': {
+          if (!extra) return;
+          await interaction.update({ content: '🔄 正在重试...', components: [] }).catch(() => {});
+          const ok = await this.orchestrator.retryTask(goalId, extra);
+          if (!ok) {
+            await interaction.followUp({ content: '任务不在可重试状态', ephemeral: true }).catch(() => {});
+          }
+          break;
+        }
+
+        case 'refix_task': {
+          if (!extra) return;
+          await interaction.update({ content: '🔧 正在重新修复...', components: [] }).catch(() => {});
+          const ok = await this.orchestrator.refixTask(goalId, extra);
+          if (!ok) {
+            await interaction.followUp({ content: '任务不在可修复状态（需要 failed 且有上下文）', ephemeral: true }).catch(() => {});
+          }
+          break;
+        }
+
         default:
           await interaction.reply({ content: `Unknown goal action: ${action}`, ephemeral: true }).catch(() => {});
       }
