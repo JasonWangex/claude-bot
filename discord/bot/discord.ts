@@ -18,9 +18,11 @@ import { logger } from '../utils/logger.js';
 import { ApiServer } from '../api/server.js';
 import { GoalOrchestrator } from '../orchestrator/index.js';
 import { parseGoalButtonId, GOAL_MODAL_PREFIX, buildApproveWithModsModal } from '../orchestrator/goal-buttons.js';
+import { parseIdeaButtonId } from './idea-buttons.js';
 import { initDb, getDb, closeDb } from '../db/index.js';
 import { GoalRepo, GoalTaskRepo, CheckpointRepo } from '../db/repo/index.js';
 import { GoalMetaRepo } from '../db/goal-meta-repo.js';
+import { IdeaRepository } from '../db/idea-repo.js';
 import { SessionRepository } from '../db/repo/session-repo.js';
 import { GuildRepository } from '../db/repo/guild-repo.js';
 import { getAuthorizedGuildId, getGeneralChannelId } from '../utils/env.js';
@@ -283,6 +285,12 @@ export class DiscordBot {
       return;
     }
 
+    // Idea buttons: idea:<action>:<ideaId>
+    if (customId.startsWith('idea:')) {
+      await this.handleIdeaButton(interaction);
+      return;
+    }
+
     // AskUserQuestion / ExitPlanMode buttons: input:<prefix>:<selection>
     if (customId.startsWith('input:')) {
       const parts = customId.split(':');
@@ -340,24 +348,31 @@ export class DiscordBot {
   }
 
   /**
-   * 处理 Goal orchestrator 按钮交互
+   * 处理 Goal 按钮交互
    * customId 格式: goal:<action>:<goalId>[:<extra>]
    */
   private async handleGoalButton(interaction: any): Promise<void> {
     const parsed = parseGoalButtonId(interaction.customId);
     if (!parsed) return;
 
+    const { action, goalId, extra } = parsed;
+
+    // drive_prompt 不需要 orchestrator，直接加载 skill 转发给 Claude
+    if (action === 'drive_prompt') {
+      await this.handleGoalDrivePrompt(interaction, goalId);
+      return;
+    }
+
+    // 以下操作均需要 orchestrator
     if (!this.orchestrator) {
       await interaction.reply({ content: 'Orchestrator not available', ephemeral: true }).catch(() => {});
       return;
     }
 
-    const { action, goalId, extra } = parsed;
-
     try {
       switch (action) {
         case 'approve_replan': {
-          await interaction.update({ content: '⏳ 正在执行计划变更...', components: [] }).catch(() => {});
+          await interaction.update({ content: '\u23F3 正在执行计划变更...', components: [] }).catch(() => {});
           const ok = await this.orchestrator.approveReplan(goalId);
           if (!ok) {
             await interaction.followUp({ content: '没有待审批的计划变更', ephemeral: true }).catch(() => {});
@@ -366,7 +381,7 @@ export class DiscordBot {
         }
 
         case 'reject_replan': {
-          await interaction.update({ content: '🚫 已拒绝计划变更', components: [] }).catch(() => {});
+          await interaction.update({ content: '\u{1F6AB} 已拒绝计划变更', components: [] }).catch(() => {});
           await this.orchestrator.rejectReplan(goalId);
           break;
         }
@@ -388,7 +403,7 @@ export class DiscordBot {
             await interaction.reply({ content: '缺少检查点 ID', ephemeral: true }).catch(() => {});
             return;
           }
-          await interaction.update({ content: '⏳ 正在评估回滚成本...', components: [] }).catch(() => {});
+          await interaction.update({ content: '\u23F3 正在评估回滚成本...', components: [] }).catch(() => {});
           const pending = await this.orchestrator.rollback(goalId, extra);
           if (!pending) {
             await interaction.followUp({ content: '回滚评估失败，请查看 Goal thread', ephemeral: true }).catch(() => {});
@@ -397,7 +412,7 @@ export class DiscordBot {
         }
 
         case 'confirm_rollback': {
-          await interaction.update({ content: '⏳ 正在执行回滚...', components: [] }).catch(() => {});
+          await interaction.update({ content: '\u23F3 正在执行回滚...', components: [] }).catch(() => {});
           const ok = await this.orchestrator.confirmRollback(goalId);
           if (!ok) {
             await interaction.followUp({ content: '回滚执行失败', ephemeral: true }).catch(() => {});
@@ -406,7 +421,7 @@ export class DiscordBot {
         }
 
         case 'cancel_rollback': {
-          await interaction.update({ content: '🚫 已取消回滚', components: [] }).catch(() => {});
+          await interaction.update({ content: '\u{1F6AB} 已取消回滚', components: [] }).catch(() => {});
           await this.orchestrator.cancelRollback(goalId);
           break;
         }
@@ -417,6 +432,121 @@ export class DiscordBot {
     } catch (err: any) {
       logger.error(`[DiscordBot] handleGoalButton error: ${err.message}`);
       // 尽量回复用户，避免 Discord 显示 "interaction failed"
+      const reply = interaction.replied || interaction.deferred
+        ? interaction.followUp.bind(interaction)
+        : interaction.reply.bind(interaction);
+      await reply({ content: `操作失败: ${err.message}`, ephemeral: true }).catch(() => {});
+    }
+  }
+
+  /**
+   * Goal 列表「推进」按钮：加载 goal skill 转发给 Claude
+   */
+  private async handleGoalDrivePrompt(interaction: any, goalId: string): Promise<void> {
+    const guildId = interaction.guildId!;
+    const threadId = interaction.channelId;
+
+    try {
+      await interaction.update({ content: '正在准备推进 Goal...', components: [] }).catch(() => {});
+
+      const db = getDb();
+      const goalMetaRepo = new GoalMetaRepo(db);
+      const goal = await goalMetaRepo.get(goalId);
+      if (!goal) {
+        await interaction.followUp({ content: 'Goal not found', ephemeral: true }).catch(() => {});
+        return;
+      }
+
+      // 加载 goal skill，用 goal 名称作为参数
+      const { readFile } = await import('fs/promises');
+      const { homedir } = await import('os');
+      const { join } = await import('path');
+      const skillPath = join(homedir(), '.claude/skills/goal/SKILL.md');
+      let skillContent: string;
+      try {
+        skillContent = await readFile(skillPath, 'utf-8');
+      } catch {
+        await interaction.followUp({ content: 'Skill file not found: ~/.claude/skills/goal/SKILL.md', ephemeral: true }).catch(() => {});
+        return;
+      }
+
+      const bodyMatch = skillContent.match(/^---[\s\S]*?---\s*([\s\S]*)$/);
+      const prompt = (bodyMatch ? bodyMatch[1] : skillContent)
+        .replace('{{SKILL_ARGS}}', goal.name)
+        .replace('{{THREAD_ID}}', threadId);
+
+      this.messageHandler.handleBackgroundChat(guildId, threadId, prompt).catch((err) => {
+        logger.error('goal drive_prompt failed:', err.message);
+        this.messageQueue.sendLong(threadId, `goal drive_prompt failed: ${err.message}`).catch(() => {});
+      });
+    } catch (err: any) {
+      logger.error(`[DiscordBot] handleGoalDrivePrompt error: ${err.message}`);
+      const reply = interaction.replied || interaction.deferred
+        ? interaction.followUp.bind(interaction)
+        : interaction.reply.bind(interaction);
+      await reply({ content: `操作失败: ${err.message}`, ephemeral: true }).catch(() => {});
+    }
+  }
+
+  /**
+   * 处理 Idea 按钮交互
+   * customId 格式: idea:<action>:<ideaId>
+   */
+  private async handleIdeaButton(interaction: any): Promise<void> {
+    const parsed = parseIdeaButtonId(interaction.customId);
+    if (!parsed) return;
+
+    const { action, ideaId } = parsed;
+    const guildId = interaction.guildId!;
+    const threadId = interaction.channelId;
+
+    try {
+      switch (action) {
+        case 'promote': {
+          await interaction.update({ content: '正在准备推进到 Goal...', components: [] }).catch(() => {});
+
+          const db = getDb();
+          const ideaRepo = new IdeaRepository(db);
+          const idea = await ideaRepo.get(ideaId);
+          if (!idea) {
+            await interaction.followUp({ content: 'Idea not found', ephemeral: true }).catch(() => {});
+            return;
+          }
+
+          // 更新 idea 状态为 Processing
+          idea.status = 'Processing';
+          idea.updatedAt = Date.now();
+          await ideaRepo.save(idea);
+
+          // 加载 idea skill，用选中的 idea 信息作为参数
+          const { readFile } = await import('fs/promises');
+          const { homedir } = await import('os');
+          const { join } = await import('path');
+          const skillPath = join(homedir(), '.claude/skills/idea/SKILL.md');
+          let skillContent: string;
+          try {
+            skillContent = await readFile(skillPath, 'utf-8');
+          } catch {
+            await interaction.followUp({ content: 'Skill file not found: ~/.claude/skills/idea/SKILL.md', ephemeral: true }).catch(() => {});
+            return;
+          }
+
+          const bodyMatch = skillContent.match(/^---[\s\S]*?---\s*([\s\S]*)$/);
+          const prompt = (bodyMatch ? bodyMatch[1] : skillContent)
+            .replace('{{SKILL_ARGS}}', `推进 Idea "${idea.name}" (project: ${idea.project}, id: ${idea.id}) 到 Goal`);
+
+          this.messageHandler.handleBackgroundChat(guildId, threadId, prompt).catch((err) => {
+            logger.error('idea promote failed:', err.message);
+            this.messageQueue.sendLong(threadId, `idea promote failed: ${err.message}`).catch(() => {});
+          });
+          break;
+        }
+
+        default:
+          await interaction.reply({ content: `Unknown idea action: ${action}`, ephemeral: true }).catch(() => {});
+      }
+    } catch (err: any) {
+      logger.error(`[DiscordBot] handleIdeaButton error: ${err.message}`);
       const reply = interaction.replied || interaction.deferred
         ? interaction.followUp.bind(interaction)
         : interaction.reply.bind(interaction);

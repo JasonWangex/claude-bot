@@ -19,6 +19,9 @@ import { forkTaskCore } from '../../utils/fork-task.js';
 import { logger } from '../../utils/logger.js';
 import { EmbedColors } from '../message-queue.js';
 import { StateManager } from '../state.js';
+import { getDb } from '../../db/index.js';
+import { IdeaRepository } from '../../db/idea-repo.js';
+import { buildIdeaPromoteButtons } from '../idea-buttons.js';
 import type { CommandDeps } from './types.js';
 import { requireAuth, requireThread } from './utils.js';
 
@@ -165,7 +168,7 @@ async function handleIdea(
   const guildId = interaction.guildId!;
   const threadId = interaction.channelId;
   const args = interaction.options.getString('content') || '';
-  const { stateManager, messageHandler, messageQueue } = deps;
+  const { stateManager, messageQueue } = deps;
 
   const session = stateManager.getSession(guildId, threadId);
   if (!session) {
@@ -173,32 +176,59 @@ async function handleIdea(
     return;
   }
 
-  // 加载 skill 文件
-  const skillPath = join(homedir(), '.claude/skills/idea/SKILL.md');
-  let skillContent: string;
-  try {
-    skillContent = await readFile(skillPath, 'utf-8');
-  } catch {
-    await interaction.reply({ content: 'Skill file not found: ~/.claude/skills/idea/SKILL.md', ephemeral: true });
-    return;
-  }
-
-  // 提取 frontmatter 之后的内容
-  const bodyMatch = skillContent.match(/^---[\s\S]*?---\s*([\s\S]*)$/);
-  const prompt = (bodyMatch ? bodyMatch[1] : skillContent)
-    .replace('{{SKILL_ARGS}}', args);
-
   if (args) {
-    // 记录模式：独立进程，不占用 session
+    // 记录模式：加载 skill，独立进程，不占用 session
+    const skillPath = join(homedir(), '.claude/skills/idea/SKILL.md');
+    let skillContent: string;
+    try {
+      skillContent = await readFile(skillPath, 'utf-8');
+    } catch {
+      await interaction.reply({ content: 'Skill file not found: ~/.claude/skills/idea/SKILL.md', ephemeral: true });
+      return;
+    }
+    const bodyMatch = skillContent.match(/^---[\s\S]*?---\s*([\s\S]*)$/);
+    const prompt = (bodyMatch ? bodyMatch[1] : skillContent)
+      .replace('{{SKILL_ARGS}}', args);
+
     await interaction.reply('Recording idea...');
     spawnSkillProcess('idea', prompt, session.cwd, threadId, messageQueue);
   } else {
-    // 列表模式：通过当前 session 交互（支持用户选择）
-    await interaction.reply('Querying undeveloped ideas...');
-    messageHandler.handleBackgroundChat(guildId, threadId, prompt).catch((err) => {
+    // 列表模式：直接查询数据库，Embed + 按钮展示
+    await interaction.reply('Querying ideas...');
+
+    try {
+      const db = getDb();
+      const ideaRepo = new IdeaRepository(db);
+      const ideas = await ideaRepo.findByStatus('Idea');
+
+      if (ideas.length === 0) {
+        await messageQueue.send(threadId, 'No undeveloped ideas found.', {
+          embedColor: EmbedColors.GRAY,
+          priority: 'high',
+        });
+        return;
+      }
+
+      const lines = ideas.map((idea, i) =>
+        `**${i + 1}.** ${idea.name}\n` +
+        `   Project: \`${idea.project}\` | Date: ${idea.date}`
+      );
+      const description = lines.join('\n\n');
+      const rows = buildIdeaPromoteButtons(ideas);
+
+      await messageQueue.send(
+        threadId,
+        `**Ideas** (${ideas.length} undeveloped)\n\n${description}`,
+        {
+          components: rows as any,
+          embedColor: EmbedColors.PURPLE,
+          priority: 'high',
+        },
+      );
+    } catch (err: any) {
       logger.error('idea list mode failed:', err.message);
-      messageQueue.sendLong(threadId, `idea query failed: ${err.message}`).catch(() => {});
-    });
+      await messageQueue.sendLong(threadId, `idea query failed: ${err.message}`).catch(() => {});
+    }
   }
 }
 
