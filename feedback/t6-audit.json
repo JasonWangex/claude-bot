@@ -1,24 +1,12 @@
 {
   "verdict": "fail",
-  "summary": "DB 层 migration、save() 简化、5 处 messageHistory.length 替换均已完成并提交。但新增 messageCount 为 required 字段后，state.ts 和 test 中创建 Session 对象缺少该字段，导致 TypeScript 编译错误。此外 state.ts 中 updateSessionMessage 更新内存 messageHistory 后未同步更新 session.messageCount，导致内存中 messageCount 值可能过期。",
+  "summary": "核心功能（migration 005、UPSERT 简化、5 处 messageHistory.length 替换、内存 messageCount 同步）均已正确实现，TypeScript 编译通过。但 test-helpers.ts 中 createTestDb() 只运行 migration 001，缺少 migration 005 导致 sessions 表无 message_count 列，20 个 SessionRepository 测试全部失败。",
   "issues": [
     {
       "severity": "error",
-      "file": "discord/bot/state.ts",
-      "line": 197,
-      "description": "创建新 Session 对象时缺少 required 的 messageCount 字段，TypeScript 编译报错 TS2741。需要添加 messageCount: 0。"
-    },
-    {
-      "severity": "error",
-      "file": "discord/db/repo/__tests__/session-repo.test.ts",
-      "line": 8,
-      "description": "makeSession() 测试辅助函数创建的 Session 缺少 messageCount 字段，TypeScript 编译报错 TS2322。需要添加 messageCount: 0。"
-    },
-    {
-      "severity": "warning",
-      "file": "discord/bot/state.ts",
-      "line": 244,
-      "description": "updateSessionMessage() 向内存 messageHistory 数组 push 后，未同步更新 session.messageCount。DB 中的 message_count 通过 addMessageAndTrim() 正确更新，但内存中的 session.messageCount 会过期。消费方（如 API routes）如果从内存缓存读取 session 而非重新查 DB，会看到旧值。建议在 push 后增加 session.messageCount = session.messageHistory.length。"
+      "file": "discord/db/repo/__tests__/test-helpers.ts",
+      "line": 12,
+      "description": "createTestDb() 只运行 migration001，但 session-repo.ts 的 upsert SQL 引用了 message_count 列（来自 migration005）。所有 20 个 SessionRepository 测试因 'table sessions has no column named message_count' 失败。需要导入并运行所有 migrations（001-005），与 discord/db/index.ts 中的 allMigrations 保持一致。"
     }
   ]
 }
