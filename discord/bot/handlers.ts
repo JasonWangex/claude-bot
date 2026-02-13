@@ -258,6 +258,7 @@ export class MessageHandler {
       if (textBuffer.length === 0) return;
       const drained = textBuffer.splice(0);
       const newContent = drained.join('\n\n');
+      logger.debug(`[${session.name}] flushText: ${drained.length} chunks, ${newContent.length} chars, placeholder=${!!textPlaceholderMsgId}`);
 
       try {
         // 尝试追加到现有占位消息（edit 仅支持 <= 2000 字符，超出会被截断）
@@ -269,6 +270,7 @@ export class MessageHandler {
             mq.edit(threadId, textPlaceholderMsgId, combined);
             textFlushedContent = combined;
             lastTextFlushTime = Date.now();
+            logger.debug(`[${session.name}] flushText: edited placeholder (${combined.length} chars)`);
             return;
           }
           // 超限：不合并历史内容，新发一条消息
@@ -278,14 +280,17 @@ export class MessageHandler {
         if (newContent.length <= 2000) {
           textPlaceholderMsgId = await mq.send(threadId, newContent, { priority: 'high', silent: true });
           textFlushedContent = newContent;
+          logger.debug(`[${session.name}] flushText: sent new msg ${textPlaceholderMsgId?.slice(-6)}`);
         } else {
           await mq.sendLong(threadId, newContent, { priority: 'high', silent: true });
           textPlaceholderMsgId = null;
           textFlushedContent = '';
+          logger.debug(`[${session.name}] flushText: sent long msg (${newContent.length} chars)`);
         }
         await recreateProgress();
         lastTextFlushTime = Date.now();
       } catch (e) {
+        logger.warn(`[${session.name}] flushText failed, restoring ${drained.length} chunks:`, e);
         textBuffer.unshift(...drained);
         throw e;
       }
@@ -471,6 +476,7 @@ export class MessageHandler {
       if (interactiveState.pending) {
         const pi = interactiveState.pending;
 
+        await sendChain;
         await flushTextBuffer();
         await mq.drain(10000);
 
@@ -534,7 +540,9 @@ export class MessageHandler {
         continue;
       }
 
-      // 正常流程
+      // 正常流程：先等 sendChain 完成（防止竞态），再 flush 残留文字
+      logger.debug(`[${session.name}] Completion: sentTextCount=${sentTextCount}, textBuffer=${textBuffer.length}, result=${response.result.length} chars`);
+      await sendChain;
       await flushTextBuffer();
       await mq.drain();
 
@@ -543,6 +551,7 @@ export class MessageHandler {
       }
 
       if (sentTextCount === 0 && response.result.trim()) {
+        logger.debug(`[${session.name}] No text sent during stream, sending result as fallback`);
         await mq.sendLong(threadId, response.result, { silent: true });
       }
 
@@ -593,6 +602,8 @@ export class MessageHandler {
     } catch (error: any) {
       const errorSessionId = session.claudeSessionId;
 
+      // 先等 sendChain 完成（与正常流程一致），再 flush 残留文字
+      await sendChain.catch(() => {});
       await flushTextBuffer().catch(() => {});
       await mq.drain(3000).catch(() => {});
 
@@ -617,7 +628,6 @@ export class MessageHandler {
         return;
       }
 
-      await sendChain.catch(() => {});
       await mq.drain(5000);
 
       logger.error(`[${session.name}] error:`, error.message);
