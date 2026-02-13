@@ -10,6 +10,9 @@
  * POST /api/goals/:goalId/tasks/:taskId/retry   — 重试失败/blocked/paused 任务
  * POST /api/goals/:goalId/tasks/:taskId/pause   — 暂停运行中的任务
  * POST /api/goals/:goalId/tasks/:taskId/resume  — 恢复暂停的任务
+ * POST /api/goals/:goalId/rollback               — 发起回滚评估（需 body.checkpointId）
+ * POST /api/goals/:goalId/confirm-rollback        — 确认执行回滚
+ * POST /api/goals/:goalId/cancel-rollback         — 取消回滚
  */
 
 import { stat } from 'fs/promises';
@@ -217,4 +220,77 @@ export const resumeTask: RouteHandler = async (_req, res, params, deps) => {
   }
 
   sendJson(res, 200, { ok: true, data: { status: 'running' } });
+};
+
+// POST /api/goals/:goalId/rollback
+export const rollback: RouteHandler = async (req, res, params, deps) => {
+  const guildId = requireAuth(res);
+  if (!guildId) return;
+
+  if (!deps.orchestrator) {
+    sendJson(res, 503, { ok: false, error: 'Orchestrator not available' });
+    return;
+  }
+
+  const body = await readJsonBody<{ checkpointId: string }>(req);
+  if (!body?.checkpointId) {
+    sendJson(res, 400, { ok: false, error: 'Required: checkpointId' });
+    return;
+  }
+
+  try {
+    const pending = await deps.orchestrator.rollback(params.goalId, body.checkpointId);
+    if (!pending) {
+      sendJson(res, 400, { ok: false, error: 'Rollback failed — check goal thread for details' });
+      return;
+    }
+
+    sendJson(res, 200, { ok: true, data: pending });
+  } catch (err: any) {
+    logger.error(`[API] rollback failed:`, err.message);
+    sendJson(res, 500, { ok: false, error: err.message });
+  }
+};
+
+// POST /api/goals/:goalId/confirm-rollback
+export const confirmRollback: RouteHandler = async (_req, res, params, deps) => {
+  const guildId = requireAuth(res);
+  if (!guildId) return;
+
+  if (!deps.orchestrator) {
+    sendJson(res, 503, { ok: false, error: 'Orchestrator not available' });
+    return;
+  }
+
+  try {
+    const ok = await deps.orchestrator.confirmRollback(params.goalId);
+    if (!ok) {
+      sendJson(res, 400, { ok: false, error: 'No pending rollback or rollback failed' });
+      return;
+    }
+
+    sendJson(res, 200, { ok: true, data: { status: 'rolled_back' } });
+  } catch (err: any) {
+    logger.error(`[API] confirmRollback failed:`, err.message);
+    sendJson(res, 500, { ok: false, error: err.message });
+  }
+};
+
+// POST /api/goals/:goalId/cancel-rollback
+export const cancelRollback: RouteHandler = async (_req, res, params, deps) => {
+  const guildId = requireAuth(res);
+  if (!guildId) return;
+
+  if (!deps.orchestrator) {
+    sendJson(res, 503, { ok: false, error: 'Orchestrator not available' });
+    return;
+  }
+
+  const ok = await deps.orchestrator.cancelRollback(params.goalId);
+  if (!ok) {
+    sendJson(res, 400, { ok: false, error: 'No pending rollback' });
+    return;
+  }
+
+  sendJson(res, 200, { ok: true, data: { status: 'cancelled' } });
 };

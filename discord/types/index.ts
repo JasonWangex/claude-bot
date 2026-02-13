@@ -302,6 +302,24 @@ export interface PendingReplan {
   checkpointId: string;
 }
 
+/** 待用户确认的回滚操作 */
+export interface PendingRollback {
+  checkpointId: string;
+  /** 被暂停的受影响任务（回滚前状态为 running/dispatched 的任务） */
+  pausedTaskIds: string[];
+  /** 成本评估摘要 */
+  costSummary: string;
+  /** 受影响任务详情 */
+  affectedTasks: Array<{
+    id: string;
+    description: string;
+    previousStatus: GoalTaskStatus;
+    runtime?: number;        // 运行时长 ms
+    diffStat?: string;       // git diff --stat 输出
+  }>;
+  createdAt: number;
+}
+
 export interface GoalDriveState {
   goalId: string;
   goalName: string;
@@ -317,6 +335,9 @@ export interface GoalDriveState {
 
   /** 待用户审批的高影响 replan 变更（仅 impactLevel=high 时有值） */
   pendingReplan?: PendingReplan;
+
+  /** 待用户确认的回滚操作 */
+  pendingRollback?: PendingRollback;
 }
 
 // Goal 快照检查点

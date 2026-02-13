@@ -13,7 +13,7 @@ import { StateManager } from '../bot/state.js';
 import type { ClaudeClient } from '../claude/client.js';
 import type { MessageHandler } from '../bot/handlers.js';
 import { type MessageQueue, EmbedColors, type EmbedColor } from '../bot/message-queue.js';
-import type { DiscordBotConfig, GoalDriveState, GoalTask, GoalTaskFeedback } from '../types/index.js';
+import type { DiscordBotConfig, GoalDriveState, GoalTask, GoalTaskFeedback, PendingRollback } from '../types/index.js';
 import type { IGoalRepo } from '../types/repository.js';
 import { stat, readFile } from 'fs/promises';
 import { join } from 'path';
@@ -37,6 +37,7 @@ import {
   collectCompletedDiffStats,
   handleReplanByImpact,
   applyChanges,
+  updateGoalBodyWithTasks,
   type ReplanContext,
   type ReplanChange,
 } from './replanner.js';
@@ -888,6 +889,433 @@ export class GoalOrchestrator {
     }
 
     return true;
+  }
+
+  // ========== 回滚流程 ==========
+
+  /**
+   * 回滚到指定检查点（第一阶段：评估）
+   *
+   * 1. 加载检查点，确定受影响的任务（在检查点之后 dispatch 的 running/dispatched/completed 任务）
+   * 2. 立即 pause 所有受影响的 running 任务
+   * 3. 评估成本（运行时间、git diff stat）
+   * 4. 将评估结果发送给用户确认
+   * 5. 存入 pendingRollback，等待 confirmRollback / cancelRollback
+   *
+   * @returns 成本评估结果（含 pendingRollback），null 表示失败
+   */
+  async rollback(goalId: string, checkpointId: string): Promise<PendingRollback | null> {
+    return await this.withStateLock(goalId, async () => {
+      const state = await this.getState(goalId);
+      if (!state) {
+        logger.error(`[Orchestrator] rollback: goal ${goalId} not found`);
+        return null;
+      }
+
+      if (state.pendingRollback) {
+        await this.notify(state.goalThreadId,
+          `已有待确认的回滚操作（检查点: \`${state.pendingRollback.checkpointId}\`）\n` +
+          `请先 \`confirm rollback\` 或 \`cancel rollback\``,
+          'warning',
+        );
+        return null;
+      }
+
+      // 1. 加载检查点
+      const checkpoint = await this.deps.checkpointRepo.get(checkpointId);
+      if (!checkpoint) {
+        await this.notify(state.goalThreadId, `检查点 \`${checkpointId}\` 不存在`, 'error');
+        return null;
+      }
+      if (checkpoint.goalId !== goalId) {
+        await this.notify(state.goalThreadId, `检查点 \`${checkpointId}\` 不属于此 Goal`, 'error');
+        return null;
+      }
+      if (!checkpoint.tasksSnapshot) {
+        await this.notify(state.goalThreadId, `检查点 \`${checkpointId}\` 没有任务快照`, 'error');
+        return null;
+      }
+
+      // 2. 确定受影响的任务：快照中不存在 或 快照中状态不是 completed/merged 但现在有进展的任务
+      const snapshotTaskIds = new Set(checkpoint.tasksSnapshot.map(t => t.id));
+      const snapshotTaskMap = new Map(checkpoint.tasksSnapshot.map(t => [t.id, t]));
+
+      const affectedTasks: PendingRollback['affectedTasks'] = [];
+      const pausedTaskIds: string[] = [];
+
+      for (const task of state.tasks) {
+        // 快照中不存在的任务（replan 后新增的）→ 受影响
+        if (!snapshotTaskIds.has(task.id)) {
+          if (task.status === 'running' || task.status === 'dispatched' ||
+              task.status === 'completed' || task.status === 'paused') {
+            affectedTasks.push({
+              id: task.id,
+              description: task.description,
+              previousStatus: task.status,
+              runtime: task.dispatchedAt ? Date.now() - task.dispatchedAt : undefined,
+            });
+          }
+          continue;
+        }
+
+        // 快照中存在的任务：比较状态变化
+        const snapshotTask = snapshotTaskMap.get(task.id)!;
+        const statusChanged = task.status !== snapshotTask.status;
+        const hasProgress = (
+          task.status === 'running' || task.status === 'dispatched' ||
+          (task.status === 'completed' && snapshotTask.status !== 'completed')
+        );
+
+        if (statusChanged && hasProgress) {
+          affectedTasks.push({
+            id: task.id,
+            description: task.description,
+            previousStatus: task.status,
+            runtime: task.dispatchedAt ? Date.now() - task.dispatchedAt : undefined,
+          });
+        }
+      }
+
+      // 3. Pause 所有正在运行的受影响任务
+      const guildId = this.getGuildId();
+      for (const affected of affectedTasks) {
+        const task = state.tasks.find(t => t.id === affected.id);
+        if (!task) continue;
+
+        if (task.status === 'running') {
+          // 中止 Claude 进程
+          if (task.threadId && guildId) {
+            const lockKey = StateManager.threadLockKey(guildId, task.threadId);
+            this.deps.claudeClient.abort(lockKey);
+          }
+          task.status = 'paused';
+          pausedTaskIds.push(task.id);
+        } else if (task.status === 'dispatched') {
+          task.status = 'paused';
+          pausedTaskIds.push(task.id);
+        }
+      }
+
+      // 4. 收集 git diff stats（评估代码产出量）
+      const worktreeListOutput = await this.safeListWorktrees(state.baseCwd);
+      for (const affected of affectedTasks) {
+        const task = state.tasks.find(t => t.id === affected.id);
+        if (!task?.branchName || !worktreeListOutput) continue;
+
+        try {
+          const goalWorktreeDir = this.findWorktreeDir(worktreeListOutput, state.goalBranch);
+          if (goalWorktreeDir) {
+            const diffStat = await execGit(
+              ['diff', '--stat', `${state.goalBranch}...${task.branchName}`],
+              goalWorktreeDir,
+              `rollback: diff stat for ${task.id}`,
+            );
+            if (diffStat.trim()) {
+              affected.diffStat = diffStat.trim();
+            }
+          }
+        } catch {
+          // diff stat 失败不阻塞回滚流程
+        }
+      }
+
+      // 5. 生成成本摘要
+      const costSummary = this.buildRollbackCostSummary(affectedTasks, checkpoint);
+
+      // 6. 构建 PendingRollback 并存入 state
+      const pendingRollback: PendingRollback = {
+        checkpointId,
+        pausedTaskIds,
+        costSummary,
+        affectedTasks,
+        createdAt: Date.now(),
+      };
+
+      state.pendingRollback = pendingRollback;
+      await this.saveState(state);
+
+      // 7. 通知用户确认
+      const confirmMessage =
+        `⏪ **回滚评估：检查点 \`${checkpointId}\`**\n\n` +
+        costSummary + '\n\n' +
+        `── 操作 ──\n` +
+        `回复 \`confirm rollback\` 确认执行回滚\n` +
+        `回复 \`cancel rollback\` 取消并恢复已暂停的任务`;
+
+      await this.notify(state.goalThreadId, confirmMessage, 'warning');
+
+      return pendingRollback;
+    });
+  }
+
+  /**
+   * 确认回滚（第二阶段：执行）
+   *
+   * 1. stop 所有受影响任务的进程
+   * 2. restoreCheckpoint 恢复任务计划
+   * 3. git reset goal 分支到检查点 commit
+   * 4. 清理受影响任务的 worktree/分支/Discord channel
+   * 5. 恢复调度
+   */
+  async confirmRollback(goalId: string): Promise<boolean> {
+    return await this.withStateLock(goalId, async () => {
+      const state = await this.getState(goalId);
+      if (!state) return false;
+
+      const pending = state.pendingRollback;
+      if (!pending) {
+        await this.notify(state.goalThreadId, '没有待确认的回滚操作', 'info');
+        return false;
+      }
+
+      const guildId = this.getGuildId();
+
+      // 1. 恢复检查点的任务快照
+      const snapshotTasks = await this.deps.checkpointRepo.restoreCheckpoint(pending.checkpointId);
+      if (!snapshotTasks) {
+        await this.notify(state.goalThreadId,
+          `回滚失败：检查点 \`${pending.checkpointId}\` 快照数据不可用`,
+          'error',
+        );
+        delete state.pendingRollback;
+        await this.saveState(state);
+        return false;
+      }
+
+      // 2. 收集需要清理的任务（当前 state 中有 branch/thread 但快照中不存在或状态不同的任务）
+      const snapshotTaskMap = new Map(snapshotTasks.map(t => [t.id, t]));
+      const tasksToCleanup: GoalTask[] = [];
+
+      for (const task of state.tasks) {
+        const snapshotTask = snapshotTaskMap.get(task.id);
+
+        // 任务在快照中不存在（replan 新增的）→ 需要清理
+        if (!snapshotTask) {
+          if (task.branchName || task.threadId) {
+            tasksToCleanup.push(task);
+          }
+          continue;
+        }
+
+        // 任务在快照中是 pending 但现在有 branch/thread → 需要清理
+        if (snapshotTask.status === 'pending' && (task.branchName || task.threadId)) {
+          tasksToCleanup.push(task);
+        }
+      }
+
+      // 3. 清理受影响任务的资源（stop 进程 + 删除 worktree/分支 + 删除 Discord channel）
+      const worktreeListOutput = await this.safeListWorktrees(state.baseCwd);
+
+      for (const task of tasksToCleanup) {
+        // 停止进程
+        if (task.threadId && guildId) {
+          const lockKey = StateManager.threadLockKey(guildId, task.threadId);
+          this.deps.claudeClient.abort(lockKey);
+        }
+
+        // 清理 worktree 和分支
+        if (task.branchName && worktreeListOutput) {
+          const subtaskDir = this.findWorktreeDir(worktreeListOutput, task.branchName);
+          if (subtaskDir) {
+            try {
+              await cleanupSubtask(state.baseCwd, subtaskDir, task.branchName);
+            } catch (err: any) {
+              logger.warn(`[Orchestrator] rollback: cleanup failed for ${task.id}: ${err.message}`);
+            }
+          } else {
+            // worktree 可能已不存在，尝试只删除分支
+            try {
+              await execGit(['branch', '-D', task.branchName], state.baseCwd,
+                `rollback: force delete branch ${task.branchName}`);
+            } catch { /* ignore */ }
+          }
+        }
+
+        // 删除 Discord channel
+        if (task.threadId) {
+          if (guildId) {
+            this.deps.stateManager.archiveSession(guildId, task.threadId, undefined, 'rollback');
+          }
+          try {
+            const channel = await this.deps.client.channels.fetch(task.threadId);
+            if (channel && 'delete' in channel) {
+              await (channel as any).delete('Rolled back').catch(() => {});
+            }
+          } catch { /* ignore */ }
+        }
+      }
+
+      // 4. Git reset goal 分支到检查点 commit（如果检查点有 gitRef）
+      const checkpoint = await this.deps.checkpointRepo.get(pending.checkpointId);
+      if (checkpoint?.gitRef && worktreeListOutput) {
+        const goalWorktreeDir = this.findWorktreeDir(worktreeListOutput, state.goalBranch);
+        if (goalWorktreeDir) {
+          try {
+            await execGit(['reset', '--hard', checkpoint.gitRef], goalWorktreeDir,
+              `rollback: reset goal branch to ${checkpoint.gitRef}`);
+            logger.info(`[Orchestrator] rollback: reset ${state.goalBranch} to ${checkpoint.gitRef}`);
+          } catch (err: any) {
+            logger.warn(`[Orchestrator] rollback: git reset failed: ${err.message}`);
+            await this.notify(state.goalThreadId,
+              `Git reset 失败: ${err.message}\n任务计划已恢复，但 git 历史可能需要手动处理`,
+              'warning',
+            );
+          }
+        }
+      }
+
+      // 5. 恢复任务列表
+      state.tasks = snapshotTasks;
+      delete state.pendingRollback;
+
+      // 确保 goal 状态可恢复调度
+      if (state.status === 'paused') {
+        state.status = 'running';
+      }
+
+      // 持久化
+      await this.deps.goalTaskRepo.saveAll(state.goalId, snapshotTasks);
+      await this.saveState(state);
+
+      // 更新 Goal body
+      const goalMeta = await this.deps.goalMetaRepo.get(state.goalId);
+      if (goalMeta) {
+        goalMeta.body = updateGoalBodyWithTasks(goalMeta.body, snapshotTasks);
+        const completed = snapshotTasks.filter(t => t.status === 'completed').length;
+        const active = snapshotTasks.filter(t => t.status !== 'cancelled' && t.status !== 'skipped').length;
+        goalMeta.progress = `${completed}/${active} 子任务完成`;
+        await this.deps.goalMetaRepo.save(goalMeta);
+      }
+
+      const cleanedCount = tasksToCleanup.length;
+      await this.notify(state.goalThreadId,
+        `✅ **回滚完成**\n` +
+        `已恢复到检查点 \`${pending.checkpointId}\`\n` +
+        `清理了 ${cleanedCount} 个受影响任务的资源\n` +
+        `任务计划已恢复，继续调度...`,
+        'success',
+      );
+
+      // 6. 恢复调度
+      if (state.status === 'running') {
+        await this.reviewAndDispatch(state);
+      }
+
+      return true;
+    });
+  }
+
+  /**
+   * 取消回滚：恢复已暂停的任务
+   */
+  async cancelRollback(goalId: string): Promise<boolean> {
+    return await this.withStateLock(goalId, async () => {
+      const state = await this.getState(goalId);
+      if (!state) return false;
+
+      const pending = state.pendingRollback;
+      if (!pending) {
+        await this.notify(state.goalThreadId, '没有待确认的回滚操作', 'info');
+        return false;
+      }
+
+      const guildId = this.getGuildId();
+
+      // 恢复被暂停的任务
+      for (const taskId of pending.pausedTaskIds) {
+        const task = state.tasks.find(t => t.id === taskId);
+        if (!task || task.status !== 'paused') continue;
+
+        // 找回原始状态
+        const affected = pending.affectedTasks.find(a => a.id === taskId);
+        if (affected && (affected.previousStatus === 'running' || affected.previousStatus === 'dispatched')) {
+          // 重新设为 pending 让调度器重新分发
+          task.status = 'pending';
+          task.branchName = undefined;
+          task.threadId = undefined;
+          task.dispatchedAt = undefined;
+        }
+      }
+
+      delete state.pendingRollback;
+      await this.saveState(state);
+
+      await this.notify(state.goalThreadId,
+        `🚫 **回滚已取消**\n已暂停的任务将重新分发`,
+        'info',
+      );
+
+      // 恢复调度
+      if (state.status === 'running') {
+        await this.reviewAndDispatch(state);
+      }
+
+      return true;
+    });
+  }
+
+  /**
+   * 生成回滚成本评估摘要
+   */
+  private buildRollbackCostSummary(
+    affectedTasks: PendingRollback['affectedTasks'],
+    checkpoint: import('../types/index.js').GoalCheckpoint,
+  ): string {
+    const lines: string[] = [];
+
+    const checkpointAge = Date.now() - checkpoint.createdAt;
+    const ageMinutes = Math.floor(checkpointAge / 60_000);
+    const ageStr = ageMinutes < 60
+      ? `${ageMinutes} 分钟前`
+      : `${Math.floor(ageMinutes / 60)} 小时 ${ageMinutes % 60} 分钟前`;
+
+    lines.push(`**检查点信息**`);
+    lines.push(`- 创建时间: ${ageStr}`);
+    lines.push(`- 触发: ${checkpoint.trigger}`);
+    if (checkpoint.reason) {
+      lines.push(`- 原因: ${checkpoint.reason}`);
+    }
+    lines.push('');
+
+    if (affectedTasks.length === 0) {
+      lines.push('**无受影响任务** — 回滚仅恢复任务计划');
+      return lines.join('\n');
+    }
+
+    lines.push(`**受影响任务 (${affectedTasks.length} 个):**`);
+    for (const task of affectedTasks) {
+      const runtimeStr = task.runtime
+        ? ` (运行 ${Math.floor(task.runtime / 60_000)} 分钟)`
+        : '';
+      const diffStr = task.diffStat
+        ? `\n  \`\`\`\n  ${task.diffStat.split('\n').slice(-1)[0]}\n  \`\`\``
+        : '';
+      lines.push(`- **${task.id}** [${task.previousStatus}] ${task.description}${runtimeStr}${diffStr}`);
+    }
+
+    // 汇总
+    const totalRuntime = affectedTasks.reduce((sum, t) => sum + (t.runtime || 0), 0);
+    if (totalRuntime > 0) {
+      lines.push('');
+      lines.push(`**总计运行时间:** ${Math.floor(totalRuntime / 60_000)} 分钟`);
+    }
+
+    return lines.join('\n');
+  }
+
+  /**
+   * 安全获取 worktree 列表，失败返回 null
+   */
+  private async safeListWorktrees(baseCwd: string): Promise<string | null> {
+    try {
+      return await execGit(
+        ['worktree', 'list', '--porcelain'],
+        baseCwd,
+        'rollback: list worktrees',
+      );
+    } catch {
+      return null;
+    }
   }
 
   // ========== Feedback 检测 ==========
