@@ -35,7 +35,7 @@ export function parseIdeaButtonId(customId: string): IdeaButtonAction | null {
 }
 
 /**
- * 为 idea 列表生成「推进到 Goal」按钮组
+ * 为 idea 列表生成「推进」按钮组
  * 每行最多 5 个按钮，最多 5 行（Discord 限制）
  */
 export function buildIdeaPromoteButtons(
@@ -44,7 +44,7 @@ export function buildIdeaPromoteButtons(
   const buttons = ideas.slice(0, 25).map((idea, i) =>
     new ButtonBuilder()
       .setCustomId(`idea:promote:${idea.id}`)
-      .setLabel(`${i + 1}. 推进到 Goal`)
+      .setLabel(`${i + 1}. 推进`)
       .setStyle(ButtonStyle.Primary),
   );
 
@@ -53,4 +53,25 @@ export function buildIdeaPromoteButtons(
     rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(buttons.slice(i, i + 5)));
   }
   return rows;
+}
+
+/**
+ * 为单个 idea 生成「推进方式」选择按钮（第二步）
+ * - 快速开发 (qdev)
+ * - 推进为 Goal
+ */
+export function buildIdeaAdvanceChoiceButtons(
+  ideaId: string,
+): ActionRowBuilder<ButtonBuilder>[] {
+  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`idea:qdev:${ideaId}`)
+      .setLabel('快速开发 (qdev)')
+      .setStyle(ButtonStyle.Secondary),
+    new ButtonBuilder()
+      .setCustomId(`idea:goal:${ideaId}`)
+      .setLabel('推进为 Goal')
+      .setStyle(ButtonStyle.Primary),
+  );
+  return [row];
 }
