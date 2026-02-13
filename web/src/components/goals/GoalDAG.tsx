@@ -9,16 +9,16 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import { TaskNode } from './TaskNode';
-import type { GoalTask } from '@/lib/types';
+import type { GoalTask, GoalTaskStatus } from '@/lib/types';
 
 const nodeTypes = { task: TaskNode };
 
-const NODE_WIDTH = 240;
-const NODE_HEIGHT = 100;
-const HORIZONTAL_GAP = 60;
-const VERTICAL_GAP = 80;
+const NODE_WIDTH = 280;
+const NODE_HEIGHT = 110;
+const HORIZONTAL_GAP = 80;
+const VERTICAL_GAP = 100;
 
-function buildLayout(tasks: GoalTask[]): { nodes: Node[]; edges: Edge[] } {
+function buildLayout(tasks: GoalTask[]): { nodes: Node[]; edges: Edge[]; layerCount: number } {
   const taskMap = new Map(tasks.map(t => [t.id, t]));
 
   const depthCache = new Map<string, number>();
@@ -87,11 +87,35 @@ function buildLayout(tasks: GoalTask[]): { nodes: Node[]; edges: Edge[] } {
     });
   });
 
-  return { nodes, edges };
+  return { nodes, edges, layerCount: sortedLayers.length };
 }
 
-export function GoalDAG({ tasks }: { tasks: GoalTask[] }) {
-  const { nodes, edges } = useMemo(() => buildLayout(tasks), [tasks]);
+interface GoalDAGProps {
+  tasks: GoalTask[];
+  highlightStatuses?: GoalTaskStatus[];
+}
+
+export function GoalDAG({ tasks, highlightStatuses }: GoalDAGProps) {
+  const { nodes, edges, layerCount } = useMemo(() => buildLayout(tasks), [tasks]);
+
+  const displayNodes = useMemo(() => {
+    if (!highlightStatuses || highlightStatuses.length === 0) return nodes;
+    return nodes.map(n => {
+      const task = (n.data as { task: GoalTask }).task;
+      return { ...n, data: { ...n.data, dimmed: !highlightStatuses.includes(task.status) } };
+    });
+  }, [nodes, highlightStatuses]);
+
+  const displayEdges = useMemo(() => {
+    if (!highlightStatuses || highlightStatuses.length === 0) return edges;
+    const highlightedIds = new Set(
+      nodes.filter(n => highlightStatuses.includes((n.data as { task: GoalTask }).task.status)).map(n => n.id),
+    );
+    return edges.map(e => {
+      const dimmed = !highlightedIds.has(e.source) || !highlightedIds.has(e.target);
+      return dimmed ? { ...e, style: { ...e.style, opacity: 0.15 }, animated: false } : e;
+    });
+  }, [edges, nodes, highlightStatuses]);
 
   if (tasks.length === 0) {
     return (
@@ -109,17 +133,19 @@ export function GoalDAG({ tasks }: { tasks: GoalTask[] }) {
     );
   }
 
+  const containerHeight = Math.min(700, Math.max(400, layerCount * (NODE_HEIGHT + VERTICAL_GAP) + 100));
+
   return (
-    <div style={{ height: 500, border: '1px solid #f0f0f0', borderRadius: 8, background: '#fff' }}>
+    <div style={{ height: containerHeight, border: '1px solid #f0f0f0', borderRadius: 8, background: '#fff' }}>
       <ReactFlow
-        nodes={nodes}
-        edges={edges}
+        nodes={displayNodes}
+        edges={displayEdges}
         nodeTypes={nodeTypes}
         fitView
-        fitViewOptions={{ padding: 0.2 }}
-        minZoom={0.3}
+        fitViewOptions={{ padding: 0.3 }}
+        minZoom={0.5}
         maxZoom={2}
-        nodesDraggable={false}
+        nodesDraggable
         nodesConnectable={false}
         elementsSelectable={false}
         proOptions={{ hideAttribution: true }}

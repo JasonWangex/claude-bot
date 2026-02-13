@@ -11,6 +11,7 @@ import { useGoals } from '@/lib/hooks/use-goals';
 import { useTasks } from '@/lib/hooks/use-tasks';
 import { useDevLogs } from '@/lib/hooks/use-devlogs';
 import { useIdeas } from '@/lib/hooks/use-ideas';
+import { formatDateTime } from '@/lib/format';
 
 const { Title, Text } = Typography;
 
@@ -85,7 +86,7 @@ export default function Dashboard() {
                     <Text strong>{log.name}</Text>
                     <br />
                     <Text type="secondary" style={{ fontSize: 12 }}>
-                      {log.project} · {log.commits} commits · {log.date}
+                      {log.project} · {log.commits} commits · {formatDateTime(log.created_at)}
                     </Text>
                   </Card>
                 ))}
