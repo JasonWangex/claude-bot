@@ -32,6 +32,15 @@ import {
 } from './goal-branch.js';
 import { resolveConflictsWithAI } from './conflict-resolver.js';
 import { logger } from '../utils/logger.js';
+import {
+  replanTasks,
+  collectCompletedDiffStats,
+  handleReplanByImpact,
+  applyChanges,
+  type ReplanContext,
+  type ReplanChange,
+} from './replanner.js';
+import type { IGoalMetaRepo, IGoalTaskRepo, IGoalCheckpointRepo } from '../types/repository.js';
 
 interface OrchestratorDeps {
   stateManager: StateManager;
@@ -41,6 +50,9 @@ interface OrchestratorDeps {
   mq: MessageQueue;
   config: DiscordBotConfig;
   goalRepo: IGoalRepo;
+  goalMetaRepo: IGoalMetaRepo;
+  goalTaskRepo: IGoalTaskRepo;
+  checkpointRepo: IGoalCheckpointRepo;
 }
 
 /** startDrive 的入参 */
@@ -457,8 +469,32 @@ export class GoalOrchestrator {
       // 检测 feedback 文件：worktree/feedback/<taskId>.json
       const feedback = await this.checkFeedbackFile(state, task);
       if (feedback) {
-        task.status = 'blocked_feedback';
         task.feedback = feedback;
+
+        // replan 类型的 feedback → 自动触发重规划 + 分级自治
+        if (feedback.type === 'replan') {
+          task.status = 'completed';
+          task.completedAt = Date.now();
+          await this.saveState(state);
+
+          await this.notify(state.goalThreadId,
+            `**Replan feedback:** ${task.id} - ${task.description}\n` +
+            `Reason: ${feedback.reason}`,
+            'info'
+          );
+
+          // 触发重规划 + 分级自治
+          await this.triggerReplan(state, task.id, feedback);
+
+          // replan 后需刷新 state 再继续调度
+          if (task.branchName) await this.mergeAndCleanup(state, task);
+          const refreshed = await this.getState(goalId);
+          if (refreshed && refreshed.status === 'running') await this.dispatchNext(refreshed);
+          return;
+        }
+
+        // 非 replan 类型 → 标记为 blocked_feedback 等待人工处理
+        task.status = 'blocked_feedback';
         await this.saveState(state);
         await this.notify(state.goalThreadId,
           `**Feedback received:** ${task.id} - ${task.description}\n` +
@@ -496,6 +532,149 @@ export class GoalOrchestrator {
       if (state.status === 'running') await this.dispatchNext(state);
     });
   }
+
+  // ========== Replan 分级自治 ==========
+
+  /**
+   * 触发重规划 + 分级自治流程
+   *
+   * 1. 收集已完成任务的 diff stats
+   * 2. 调用 LLM 生成 replan 结果
+   * 3. 根据 impact_level 自动执行或暂停等待审批
+   */
+  private async triggerReplan(
+    state: GoalDriveState,
+    triggerTaskId: string,
+    feedback: GoalTaskFeedback,
+  ): Promise<void> {
+    try {
+      // 1. 收集 diff stats
+      const completedDiffStats = await collectCompletedDiffStats(state);
+
+      // 2. 获取 Goal 元数据
+      const goalMeta = await this.deps.goalMetaRepo.get(state.goalId);
+
+      // 3. 调用 LLM 生成 replan 结果
+      const ctx: ReplanContext = {
+        state,
+        goalMeta,
+        triggerTaskId,
+        feedback,
+        completedDiffStats,
+      };
+
+      const result = await replanTasks(ctx);
+      if (!result || result.changes.length === 0) {
+        await this.notify(state.goalThreadId,
+          `Replan: 无需变更 — ${result?.reasoning ?? 'LLM 未返回结果'}`,
+          'info',
+        );
+        return;
+      }
+
+      // 4. 分级自治处理
+      const handleResult = await handleReplanByImpact(state, result, {
+        goalTaskRepo: this.deps.goalTaskRepo,
+        goalMetaRepo: this.deps.goalMetaRepo,
+        checkpointRepo: this.deps.checkpointRepo,
+        notify: (threadId, message, type) => this.notify(threadId, message, type),
+      });
+
+      if (handleResult.autoApplied) {
+        logger.info(
+          `[Orchestrator] Replan auto-applied (${handleResult.impactLevel}), goal ${state.goalId}`,
+        );
+      } else {
+        // high impact — state.status 保持 running，但 pendingReplan 标记已设置
+        // 等待用户 approve/reject
+        logger.info(
+          `[Orchestrator] Replan pending approval (high impact), goal ${state.goalId}`,
+        );
+      }
+    } catch (err: any) {
+      logger.error(`[Orchestrator] triggerReplan failed: ${err.message}`);
+      await this.notify(state.goalThreadId,
+        `Replan 失败: ${err.message}`,
+        'error',
+      );
+    }
+  }
+
+  /**
+   * 用户审批 replan（approve replan）
+   * 从 state.pendingReplan 读取待审批的变更并应用
+   */
+  async approveReplan(goalId: string): Promise<boolean> {
+    const state = await this.getState(goalId);
+    if (!state) return false;
+
+    if (!state.pendingReplan) {
+      await this.notify(state.goalThreadId, '没有待审批的计划变更', 'info');
+      return false;
+    }
+
+    const pending = state.pendingReplan;
+
+    // 应用变更
+    const applyResult = await applyChanges(state, pending.changes as ReplanChange[], {
+      goalTaskRepo: this.deps.goalTaskRepo,
+      goalMetaRepo: this.deps.goalMetaRepo,
+    });
+
+    // 清除 pending 状态
+    delete state.pendingReplan;
+    await this.saveState(state);
+
+    await this.notify(state.goalThreadId,
+      `✅ **计划变更已批准并执行**\n` +
+      `已应用 ${applyResult.applied.length} 项变更` +
+      (applyResult.rejected.length > 0
+        ? `，${applyResult.rejected.length} 项被拒绝`
+        : '') +
+      `\n快照 ID: \`${pending.checkpointId}\`（可用于回滚）`,
+      'success',
+    );
+
+    // 恢复调度
+    if (state.status === 'running') {
+      await this.dispatchNext(state);
+    }
+
+    return true;
+  }
+
+  /**
+   * 用户拒绝 replan（reject replan）
+   * 丢弃待审批的变更，恢复调度
+   */
+  async rejectReplan(goalId: string): Promise<boolean> {
+    const state = await this.getState(goalId);
+    if (!state) return false;
+
+    const pending = state.pendingReplan;
+    if (!pending) {
+      await this.notify(state.goalThreadId, '没有待审批的计划变更', 'info');
+      return false;
+    }
+
+    // 清除 pending 状态
+    delete state.pendingReplan;
+    await this.saveState(state);
+
+    await this.notify(state.goalThreadId,
+      `🚫 **计划变更已拒绝**\n快照 ID: \`${pending.checkpointId}\``,
+      'info',
+    );
+
+    // 恢复调度
+    if (state.status === 'running') {
+      await this.dispatchNext(state);
+    }
+
+    return true;
+  }
+
+  // ========== Feedback 检测 ==========
 
   /**
    * 检测子任务 worktree 下的 feedback/<taskId>.json

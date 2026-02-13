@@ -8,7 +8,7 @@
  */
 
 import type { GoalDriveState, GoalTask, GoalTaskFeedback } from '../types/index.js';
-import type { Goal, IGoalTaskRepo, IGoalMetaRepo } from '../types/repository.js';
+import type { Goal, IGoalTaskRepo, IGoalMetaRepo, IGoalCheckpointRepo } from '../types/repository.js';
 import { chatCompletion } from '../utils/llm.js';
 import { execGit } from './git-ops.js';
 import { logger } from '../utils/logger.js';
@@ -43,6 +43,25 @@ export interface ApplyResult {
   applied: ReplanChange[];
   rejected: Array<{ change: ReplanChange; reason: string }>;
   updatedTasks: GoalTask[];
+}
+
+/** 分级自治处理的依赖 */
+export interface HandleReplanDeps extends ApplyChangesDeps {
+  checkpointRepo: IGoalCheckpointRepo;
+  notify: (threadId: string, message: string, type?: 'success' | 'error' | 'warning' | 'info') => Promise<void>;
+}
+
+/** 分级自治处理结果 */
+export interface HandleReplanResult {
+  impactLevel: 'low' | 'medium' | 'high';
+  /** 是否已自动应用变更（low/medium 自动应用，high 暂停等待审批） */
+  autoApplied: boolean;
+  /** 人类可读的变更 diff 文本 */
+  changeDiff: string;
+  /** 应用结果（仅当 autoApplied=true 时有值） */
+  applyResult?: ApplyResult & { validationErrors: string[] };
+  /** 快照 ID（用于回滚） */
+  checkpointId?: string;
 }
 
 // ==================== 主入口 ====================
@@ -410,6 +429,247 @@ export async function applyChanges(
   return { ...result, validationErrors: validation.errors };
 }
 
+// ==================== Impact Level 分级自治 ====================
+
+/**
+ * 独立评估 impact_level（覆盖 LLM 自评结果）
+ *
+ * 判断标准：
+ * - low: 影响 ≤1 个未开始任务（description tweaks, dependency reorder）
+ * - medium: 影响 2-3 个未开始任务
+ * - high: 影响 ≥4 个任务 或 有 remove/add 操作改变方向
+ */
+export function assessImpactLevel(
+  changes: ReplanChange[],
+  tasks: GoalTask[],
+): 'low' | 'medium' | 'high' {
+  if (changes.length === 0) return 'low';
+
+  // 收集所有被影响的未开始任务 ID
+  const pendingIds = new Set(
+    tasks.filter(t => t.status === 'pending').map(t => t.id),
+  );
+
+  const affectedPendingIds = new Set<string>();
+  let hasDirectionChange = false;
+
+  for (const change of changes) {
+    switch (change.action) {
+      case 'add':
+        // 新增任务本身算一个影响
+        affectedPendingIds.add(change.task.id);
+        break;
+
+      case 'remove':
+        if (pendingIds.has(change.taskId)) {
+          affectedPendingIds.add(change.taskId);
+        }
+        // remove 操作视为方向变更信号
+        hasDirectionChange = true;
+        break;
+
+      case 'modify': {
+        if (pendingIds.has(change.taskId)) {
+          affectedPendingIds.add(change.taskId);
+        }
+        // 修改 description 可能意味着方向变更
+        if (change.updates.description) {
+          hasDirectionChange = true;
+        }
+        break;
+      }
+
+      case 'reorder':
+        if (pendingIds.has(change.taskId)) {
+          affectedPendingIds.add(change.taskId);
+        }
+        break;
+    }
+  }
+
+  const affectedCount = affectedPendingIds.size;
+
+  // ≥4 个任务 或 方向变更(add+remove 同时存在) → high
+  const hasAdd = changes.some(c => c.action === 'add');
+  const hasRemove = changes.some(c => c.action === 'remove');
+  if (affectedCount >= 4 || (hasAdd && hasRemove && hasDirectionChange)) {
+    return 'high';
+  }
+
+  // 2-3 个 → medium
+  if (affectedCount >= 2) return 'medium';
+
+  // ≤1 → low
+  return 'low';
+}
+
+/**
+ * 生成人类可读的变更计划 diff
+ *
+ * 格式示例：
+ * ```
+ * 📋 计划变更 (impact: medium)
+ * ── 原因 ──
+ * Task t3 报告需要拆分为前后端...
+ *
+ * ── 变更列表 ──
+ * ➕ 新增: t9 — 实现前端表单验证 [depends: t3]
+ * ✏️ 修改: t5 — 更新描述: "..." → "..."
+ * ❌ 移除: t7 — 原因: superseded by t9
+ * 🔀 调序: t6 — 新依赖: [t9], phase 3
+ * ```
+ */
+export function generateChangeDiff(
+  result: ReplanResult,
+  tasks: GoalTask[],
+): string {
+  const taskMap = new Map(tasks.map(t => [t.id, t]));
+  const lines: string[] = [];
+
+  const levelEmoji = { low: '🟢', medium: '🟡', high: '🔴' };
+  lines.push(`📋 **计划变更** ${levelEmoji[result.impactLevel]} impact: **${result.impactLevel}**`);
+  lines.push('');
+  lines.push(`── 原因 ──`);
+  lines.push(result.reasoning);
+  lines.push('');
+  lines.push(`── 变更列表 ──`);
+
+  for (const change of result.changes) {
+    switch (change.action) {
+      case 'add': {
+        const deps = change.task.depends.length > 0
+          ? ` [depends: ${change.task.depends.join(', ')}]`
+          : '';
+        const phase = change.task.phase != null ? ` (phase ${change.task.phase})` : '';
+        lines.push(`➕ 新增: **${change.task.id}** — ${change.task.description}${deps}${phase}`);
+        break;
+      }
+      case 'modify': {
+        const existing = taskMap.get(change.taskId);
+        const parts: string[] = [];
+        if (change.updates.description) {
+          const oldDesc = existing?.description ?? '?';
+          parts.push(`描述: "${oldDesc.slice(0, 40)}" → "${change.updates.description.slice(0, 40)}"`);
+        }
+        if (change.updates.depends) {
+          parts.push(`依赖: [${change.updates.depends.join(', ')}]`);
+        }
+        if (change.updates.type) {
+          parts.push(`类型: ${change.updates.type}`);
+        }
+        if (change.updates.phase !== undefined) {
+          parts.push(`phase: ${change.updates.phase}`);
+        }
+        lines.push(`✏️ 修改: **${change.taskId}** — ${parts.join('; ')}`);
+        break;
+      }
+      case 'remove':
+        lines.push(`❌ 移除: **${change.taskId}** — 原因: ${change.reason}`);
+        break;
+      case 'reorder': {
+        const phase = change.newPhase != null ? `, phase ${change.newPhase}` : '';
+        lines.push(`🔀 调序: **${change.taskId}** — 新依赖: [${change.newDepends.join(', ')}]${phase}`);
+        break;
+      }
+    }
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * 分级自治主流程：根据 impact_level 决定自动执行或等待审批
+ *
+ * - low/medium: 先保存快照 → 自动 applyChanges() → 通知用户（含快照 ID 可回滚）
+ * - high: 暂停分发 → 生成变更 diff → 发审批请求等用户确认
+ */
+export async function handleReplanByImpact(
+  state: GoalDriveState,
+  result: ReplanResult,
+  deps: HandleReplanDeps,
+): Promise<HandleReplanResult> {
+  // 1. 独立评估 impact（覆盖 LLM 自评）
+  const assessed = assessImpactLevel(result.changes, state.tasks);
+  result.impactLevel = assessed;
+
+  // 2. 生成变更 diff
+  const changeDiff = generateChangeDiff(result, state.tasks);
+
+  // 3. 保存快照（所有级别都保存，用于回滚）
+  const checkpointId = `cp-${state.goalId}-${Date.now()}`;
+  await deps.checkpointRepo.saveCheckpoint({
+    id: checkpointId,
+    goalId: state.goalId,
+    trigger: 'replan',
+    triggerTaskId: undefined,
+    reason: result.reasoning.slice(0, 200),
+    tasksSnapshot: state.tasks.map(t => ({ ...t })),
+    gitRef: undefined,
+    changeSummary: changeDiff.slice(0, 500),
+    createdAt: Date.now(),
+  });
+
+  if (assessed === 'high') {
+    // ── HIGH: 暂停分发，等待用户审批 ──
+    logger.info(`[Replanner] HIGH impact — pausing for approval, goal ${state.goalId}`);
+
+    const approvalMessage =
+      `🔴 **需要审批：高影响计划变更**\n\n` +
+      changeDiff + '\n\n' +
+      `── 操作 ──\n` +
+      `回复 \`approve replan\` 确认执行\n` +
+      `回复 \`reject replan\` 拒绝变更\n` +
+      `快照 ID: \`${checkpointId}\``;
+
+    await deps.notify(state.goalThreadId, approvalMessage, 'warning');
+
+    // 将 pending replan 信息存入 state，供后续审批时使用
+    // 使用 state 上的临时字段（通过 GoalDriveState 扩展）
+    state.pendingReplan = {
+      changes: result.changes,
+      reasoning: result.reasoning,
+      impactLevel: assessed,
+      checkpointId,
+    };
+
+    return {
+      impactLevel: assessed,
+      autoApplied: false,
+      changeDiff,
+      checkpointId,
+    };
+  }
+
+  // ── LOW / MEDIUM: 自动执行 ──
+  logger.info(`[Replanner] ${assessed.toUpperCase()} impact — auto-applying, goal ${state.goalId}`);
+
+  const applyResult = await applyChanges(state, result.changes, deps);
+
+  // 发送通知
+  const levelLabel = assessed === 'low' ? '🟢 低影响' : '🟡 中影响';
+  const notifyMessage =
+    `${levelLabel} 计划已自动更新\n\n` +
+    changeDiff + '\n\n' +
+    `已应用 ${applyResult.applied.length} 项变更` +
+    (applyResult.rejected.length > 0
+      ? `，${applyResult.rejected.length} 项被拒绝`
+      : '') +
+    (applyResult.validationErrors.length > 0
+      ? `\n⚠️ 验证警告: ${applyResult.validationErrors.join('; ')}`
+      : '') +
+    `\n快照 ID: \`${checkpointId}\`（可用于回滚）`;
+
+  await deps.notify(state.goalThreadId, notifyMessage, assessed === 'low' ? 'info' : 'warning');
+
+  return {
+    impactLevel: assessed,
+    autoApplied: true,
+    changeDiff,
+    applyResult,
+    checkpointId,
+  };
+}
+
 // ==================== Git diff 工具 ====================
 
 /**
@@ -559,10 +819,11 @@ function buildReplanPrompt(ctx: ReplanContext): string {
     `  "impactLevel": "low" | "medium" | "high"`,
     `}`,
     ``,
-    `Impact levels:`,
-    `- low: minor adjustments (description tweaks, dependency reorder)`,
-    `- medium: task additions/removals that don't change the overall direction`,
-    `- high: significant restructuring, new phases, or direction change`,
+    `Impact levels (assessed by affected pending tasks):`,
+    `- low: affects ≤1 pending task (description tweaks, dependency reorder)`,
+    `- medium: affects 2-3 pending tasks (task additions/removals, but overall direction unchanged)`,
+    `- high: affects ≥4 pending tasks, OR significant restructuring with both add+remove that changes direction`,
+    `Note: low/medium changes are auto-applied; high requires user approval.`,
     ``,
     `Valid task types: 代码, 手动, 调研, 占位`,
     `Valid actions: add, modify, remove, reorder`,

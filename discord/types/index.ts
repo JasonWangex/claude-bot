@@ -294,6 +294,14 @@ export interface GoalTask {
   feedback?: GoalTaskFeedback; // 来自 feedback/<taskId>.json 的反馈内容
 }
 
+/** 待审批的 Replan 变更 */
+export interface PendingReplan {
+  changes: Array<Record<string, any>>;  // ReplanChange[] — 避免循环依赖用 Record
+  reasoning: string;
+  impactLevel: 'low' | 'medium' | 'high';
+  checkpointId: string;
+}
+
 export interface GoalDriveState {
   goalId: string;
   goalName: string;
@@ -306,6 +314,9 @@ export interface GoalDriveState {
   maxConcurrent: number;
 
   tasks: GoalTask[];
+
+  /** 待用户审批的高影响 replan 变更（仅 impactLevel=high 时有值） */
+  pendingReplan?: PendingReplan;
 }
 
 // Goal 快照检查点

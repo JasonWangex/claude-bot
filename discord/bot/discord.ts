@@ -18,7 +18,8 @@ import { logger } from '../utils/logger.js';
 import { ApiServer } from '../api/server.js';
 import { GoalOrchestrator } from '../orchestrator/index.js';
 import { initDb, getDb, closeDb } from '../db/index.js';
-import { GoalRepo } from '../db/repo/index.js';
+import { GoalRepo, GoalTaskRepo, CheckpointRepo } from '../db/repo/index.js';
+import { GoalMetaRepo } from '../db/goal-meta-repo.js';
 import { SessionRepository } from '../db/repo/session-repo.js';
 import { GuildRepository } from '../db/repo/guild-repo.js';
 import { getAuthorizedGuildId, getGeneralChannelId } from '../utils/env.js';
@@ -360,7 +361,11 @@ export class DiscordBot {
     logger.info('Discord Bot started');
 
     // 启动 Orchestrator
-    const goalRepo = new GoalRepo(getDb());
+    const db = getDb();
+    const goalRepo = new GoalRepo(db);
+    const goalMetaRepo = new GoalMetaRepo(db);
+    const goalTaskRepo = new GoalTaskRepo(db);
+    const checkpointRepo = new CheckpointRepo(db);
     const orchestrator = new GoalOrchestrator({
       stateManager: this.stateManager,
       claudeClient: this.claudeClient,
@@ -369,6 +374,9 @@ export class DiscordBot {
       mq: this.messageQueue,
       config: this.config,
       goalRepo,
+      goalMetaRepo,
+      goalTaskRepo,
+      checkpointRepo,
     });
     await orchestrator.restoreRunningDrives();
 
