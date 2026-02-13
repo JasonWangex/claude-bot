@@ -2,7 +2,8 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-SERVICES="claude-discord claude-monitor"
+PROJECT_DIR="$(pwd)"
+SERVICES="claude-discord claude-monitor claude-mcp"
 
 if [ ! -f .env ]; then
   echo "Missing .env file. Please create it from example.env."
@@ -30,11 +31,29 @@ stamp_deploy_time() {
   echo "  DEPLOY_TIME=${ts}"
 }
 
+install_systemd_services() {
+  local svc_src="$PROJECT_DIR/systemd"
+  local svc_dst="$HOME/.config/systemd/user"
+  mkdir -p "$svc_dst"
+  if [ -d "$svc_src" ]; then
+    for f in "$svc_src"/*.service; do
+      [ -f "$f" ] || continue
+      local name
+      name="$(basename "$f")"
+      cp "$f" "$svc_dst/$name"
+      echo "  $name: installed"
+    done
+  fi
+}
+
 do_deploy() {
   stamp_deploy_time
 
   echo "==> Installing skills..."
   bash scripts/install-skills.sh
+
+  echo "==> Installing systemd services..."
+  install_systemd_services
 
   echo "==> Installing cron jobs..."
   install_cron
@@ -97,7 +116,7 @@ do_status() {
 }
 
 do_logs() {
-  journalctl --user -u claude-discord -u claude-monitor -f
+  journalctl --user -u claude-discord -u claude-monitor -u claude-mcp -f
 }
 
 case "${1:-}" in
@@ -115,7 +134,7 @@ case "${1:-}" in
     echo "  stop     Stop services"
     echo "  restart  Restart services"
     echo "  status   Show service status"
-    echo "  logs     Follow logs (discord + monitor)"
+    echo "  logs     Follow logs (discord + monitor + mcp)"
     exit 1
     ;;
 esac
