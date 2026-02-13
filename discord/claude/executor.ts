@@ -4,8 +4,8 @@
 
 import { spawn, ChildProcess, execFile } from 'child_process';
 import { promisify } from 'util';
-import { openSync, closeSync, readSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, statSync } from 'fs';
-import { join, dirname } from 'path';
+import { openSync, closeSync, readSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, statSync, renameSync } from 'fs';
+import { join, dirname, basename } from 'path';
 import { fileURLToPath } from 'url';
 import { ClaudeResponse, ClaudeOptions, StreamEvent, ProgressCallback, ClaudeErrorType, ClaudeExecutionError, ProcessRegistryEntry, ReconnectedResult } from '../types/index.js';
 import { logger } from '../utils/logger.js';
@@ -441,13 +441,12 @@ export class ClaudeExecutor {
 
         updateSessionId();
 
-        // 读取 stderr（在清理文件前）
+        // 读取 stderr（在归档文件前）
         let stderr = '';
         try { stderr = readFileSync(stderrFile, 'utf-8'); } catch {}
 
-        // 清理输出文件
-        try { unlinkSync(outputFile); } catch {}
-        try { unlinkSync(stderrFile); } catch {}
+        // 归档输出文件到 data/sessions/<session_id>/ 目录
+        this.archiveOutputFiles(outputFile, stderrFile, lastSessionId);
 
         if (flags.aborted) {
           reject(new ClaudeExecutionError(
@@ -921,9 +920,50 @@ export class ClaudeExecutor {
     }
   }
 
+  /**
+   * 归档输出文件到 data/sessions/<session_id>/ 目录
+   */
+  private archiveOutputFiles(outputFile: string, stderrFile: string, sessionId: string): void {
+    if (!sessionId) {
+      logger.warn('No session ID, skipping archive');
+      return;
+    }
+
+    const thisDir = dirname(fileURLToPath(import.meta.url));
+    const archiveDir = join(thisDir, '../../data/sessions', sessionId);
+
+    try {
+      mkdirSync(archiveDir, { recursive: true });
+
+      // 移动 .jsonl 文件
+      if (outputFile) {
+        try {
+          const archivePath = join(archiveDir, basename(outputFile));
+          renameSync(outputFile, archivePath);
+          logger.debug(`Archived output file to ${archivePath}`);
+        } catch (e: any) {
+          logger.warn(`Failed to archive output file: ${e.message}`);
+        }
+      }
+
+      // 移动 .stderr 文件
+      if (stderrFile) {
+        try {
+          const archivePath = join(archiveDir, basename(stderrFile));
+          renameSync(stderrFile, archivePath);
+          logger.debug(`Archived stderr file to ${archivePath}`);
+        } catch (e: any) {
+          logger.warn(`Failed to archive stderr file: ${e.message}`);
+        }
+      }
+    } catch (e: any) {
+      logger.error(`Failed to create archive directory: ${e.message}`);
+    }
+  }
+
   private cleanupOutputFiles(entry: ProcessRegistryEntry): void {
-    try { unlinkSync(entry.outputFile); } catch {}
-    try { unlinkSync(entry.stderrFile); } catch {}
+    // 改用归档而非删除
+    this.archiveOutputFiles(entry.outputFile, entry.stderrFile, entry.claudeSessionId || '');
   }
 
   async verify(): Promise<boolean> {
