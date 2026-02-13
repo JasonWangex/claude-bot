@@ -458,6 +458,8 @@ export class MessageHandler {
         guildId,
         threadId,
         images,
+        sessionName: session.name,
+        worktreeBranch: session.worktreeBranch,
       }, onProgress);
       images = undefined;
 

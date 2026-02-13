@@ -53,6 +53,8 @@ export class ClaudeClient {
       guildId?: string;
       threadId?: string;
       images?: import('../types/index.js').ImageAttachment[];
+      sessionName?: string;
+      worktreeBranch?: string;
     } = {},
     onProgress?: ProgressCallback
   ): Promise<ChatResult> {
@@ -108,9 +110,22 @@ export class ClaudeClient {
       guildId?: string;
       threadId?: string;
       images?: import('../types/index.js').ImageAttachment[];
+      sessionName?: string;
+      worktreeBranch?: string;
     },
     onProgress?: ProgressCallback
   ): Promise<ChatResult> {
+    // 构造 Discord 上下文 system prompt
+    let appendSystemPrompt: string | undefined;
+    if (options.threadId) {
+      const lines = [
+        `Discord Thread ID: ${options.threadId}`,
+        `Session: ${options.sessionName || 'unknown'}`,
+      ];
+      if (options.worktreeBranch) lines.push(`Branch: ${options.worktreeBranch}`);
+      appendSystemPrompt = lines.join('\n');
+    }
+
     const claudeOptions: ClaudeOptions = {
       cwd: options.cwd,
       resume: options.sessionId,
@@ -122,6 +137,7 @@ export class ClaudeClient {
       guildId: options.guildId,
       threadId: options.threadId,
       images: options.images,
+      appendSystemPrompt,
     };
 
     logger.debug('Calling Claude with options:', claudeOptions);

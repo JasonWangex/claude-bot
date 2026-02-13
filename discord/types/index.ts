@@ -222,6 +222,7 @@ export interface ClaudeOptions {
   guildId?: string;
   threadId?: string;
   images?: ImageAttachment[];
+  appendSystemPrompt?: string;
 }
 
 // Discord Bot 配置
