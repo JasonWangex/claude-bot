@@ -1,7 +1,7 @@
 ---
 name: idea
 description: >
-  快速记录想法或推进已有想法到开发。有参数时直接记录到本地数据库（Status=Idea）；
+  快速记录想法或推进已有想法到开发。有参数时直接记录到 SQLite（Status=Idea）；
   无参数时列出当前项目的未开发 Ideas，选中后标记 Processing 并走 qdev 流程。
 version: 4.0.0
 ---
@@ -37,18 +37,18 @@ AUTH="Authorization: Bearer $BOT_TOKEN"
 
 ## 记录模式（有参数）
 
-将一句话想法直接写入本地数据库，Status 设为 Idea。
+将一句话想法直接写入 SQLite，Status 设为 Idea。
 
-**不讨论、不确认、不追问**，直接调用 HTTP API 写入：
+**不讨论、不确认、不追问**，直接调用 Bot API 写入：
 
 ```bash
 curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' \
   -d '{
-    "name": "<用户的原始输入>",
+    "name": "{{SKILL_ARGS}}",
     "project": "<项目名>",
     "status": "Idea",
     "date": "<今天日期 yyyy-MM-dd>"
-  }' $API/api/ideas
+  }' "$API/api/ideas"
 ```
 
 写入成功后，简短确认：
@@ -66,6 +66,8 @@ curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' \
 ```bash
 curl -s -H "$AUTH" "$API/api/ideas?project=<项目名>&status=Idea"
 ```
+
+只显示当前项目的 Ideas（根据 cwd 判断 Project）。
 
 ### 2. 展示列表
 
@@ -96,7 +98,8 @@ curl -s -H "$AUTH" "$API/api/ideas?project=<项目名>&status=Idea"
 
 ```bash
 curl -s -X PATCH -H "$AUTH" -H 'Content-Type: application/json' \
-  -d '{"status": "Processing"}' $API/api/ideas/<IDEA_ID>
+  -d '{"status": "Processing"}' \
+  "$API/api/ideas/<idea-id>"
 ```
 
 #### 3.2 执行 qdev 流程

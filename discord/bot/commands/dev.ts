@@ -191,9 +191,7 @@ async function handleIdea(
   if (args) {
     // 记录模式：独立进程，不占用 session
     await interaction.reply('Recording idea...');
-    spawnSkillProcess('idea', prompt, session.cwd, threadId, messageQueue, {
-      allowedTools: 'Bash,mcp__claude_ai_Notion__notion-create-pages,mcp__claude_ai_Notion__notion-search',
-    });
+    spawnSkillProcess('idea', prompt, session.cwd, threadId, messageQueue);
   } else {
     // 列表模式：通过当前 session 交互（支持用户选择）
     await interaction.reply('Querying undeveloped ideas...');

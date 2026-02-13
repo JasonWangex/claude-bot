@@ -2,7 +2,7 @@
 name: merge
 description: >
   合并 worktree 分支到主分支并清理。检查未提交代码、合并分支、删除 worktree、
-  删除 Discord Thread。合并成功后自动写入 Dev Log。
+  删除 Discord Thread。合并成功后自动写入 Dev Log 到 SQLite。
 version: 3.0.0
 ---
 
@@ -86,30 +86,29 @@ echo "- Discord Thread: 已归档"
 
 ## 第二步：写入 Dev Log
 
-**脚本成功后，必须执行此步骤。** 使用 `/devlog` skill 将合并记录写入数据库。脚本输出中的 `DEVLOG_` 开头的信息会被 devlog skill 自动识别使用。
+**脚本成功后，必须执行此步骤。** 使用 `/devlog` skill 将合并记录写入 SQLite。脚本输出中的 `DEVLOG_` 开头的信息会被 devlog skill 自动识别使用。
 
 ## 第三步：标记关联 Idea 为 Done
 
 **devlog 写入成功后，执行此步骤。**
 
-通过 Bot HTTP API 查询 Processing 状态的 Idea：
+通过 Bot API 查询 Processing 状态的 Ideas：
 
 ```bash
 API="http://127.0.0.1:3456"
 BOT_TOKEN=$(grep '^BOT_ACCESS_TOKEN=' /home/jason/projects/claude-bot/.env 2>/dev/null | cut -d= -f2-)
 AUTH="Authorization: Bearer $BOT_TOKEN"
-PROJECT="<当前项目名>"
 
-# 查询 Processing 状态的 Idea
+PROJECT="<项目名>"
 curl -s -H "$AUTH" "$API/api/ideas?project=$PROJECT&status=Processing"
 ```
 
-如果找到匹配的记录（根据分支名或任务描述判断关联性），更新其 Status 为 `Done`：
+如果找到匹配的记录（根据分支名或任务描述判断关联性），更新其状态为 Done：
 
 ```bash
-# 更新 Idea 状态
 curl -s -X PATCH -H "$AUTH" -H 'Content-Type: application/json' \
-  -d '{"status": "Done"}' "$API/api/ideas/<idea-id>"
+  -d '{"status": "Done"}' \
+  "$API/api/ideas/<idea-id>"
 ```
 
 如果没找到 Processing 状态的 Idea，跳过此步骤（不影响 merge 流程）。

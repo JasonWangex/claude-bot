@@ -30,12 +30,13 @@ claude-bot/
 │   ├── bot/           # Bot handlers, commands, state
 │   ├── claude/        # Claude CLI client
 │   ├── api/           # REST API server and routes
+│   ├── db/            # SQLite database layer and repositories
 │   ├── orchestrator/  # Goal auto-scheduling engine
 │   ├── utils/         # Configuration, git, logging
 │   └── types/         # TypeScript type definitions
 ├── monitor/           # Process monitoring daemon
 ├── skills/            # Claude Code skill definitions
-├── data/              # Session data persistence
+├── data/              # SQLite database + process temp files
 └── docs/              # Documentation
 ```
 
@@ -151,6 +152,7 @@ The project runs two systemd services:
 - **Runtime**: Node.js 18+ / TypeScript 5.9
 - **Discord**: discord.js 14.x
 - **Claude**: Claude Code CLI (stream-json)
+- **Database**: SQLite (better-sqlite3, WAL mode)
 - **Monitoring**: Discord REST API (independent daemon)
 
 ## License

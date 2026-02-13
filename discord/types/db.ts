@@ -105,13 +105,11 @@ export interface ArchivedSessionRow extends SessionRow {
 }
 
 // ================================================================
-// goals 表 — 对应 Notion Goals Database + GoalDriveState
-//
-// 合并了 Notion 元数据和本地 Drive 状态
+// goals 表 — Goal 元数据 + GoalDriveState
 // ================================================================
 
 export interface GoalRow {
-  /** Notion Page ID (PRIMARY KEY) */
+  /** UUID (PRIMARY KEY) */
   id: string;
   /** Goal 名称 */
   name: string;
@@ -199,11 +197,11 @@ export interface GoalTaskDepRow {
 }
 
 // ================================================================
-// devlogs 表 — 对应 Notion Dev Log Database
+// devlogs 表
 // ================================================================
 
 export interface DevLogRow {
-  /** 本地 UUID 或 Notion Page ID (PRIMARY KEY) */
+  /** UUID (PRIMARY KEY) */
   id: string;
   /** 功能标题（中文，10字以内） */
   name: string;
@@ -228,11 +226,11 @@ export interface DevLogRow {
 }
 
 // ================================================================
-// ideas 表 — 对应 Notion Ideas Database
+// ideas 表
 // ================================================================
 
 export interface IdeaRow {
-  /** 本地 UUID 或 Notion Page ID (PRIMARY KEY) */
+  /** UUID (PRIMARY KEY) */
   id: string;
   /** 想法标题 */
   name: string;

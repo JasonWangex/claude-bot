@@ -1,7 +1,7 @@
 /**
  * Repository 接口定义
  *
- * 统一的数据访问抽象层，为从 JSON 文件 + Notion 迁移到 SQLite 提供接口契约。
+ * 统一的数据访问抽象层，SQLite 存储后端的接口契约。
  * 所有 Repository 方法返回 Promise 以支持异步存储后端。
  */
 
@@ -16,6 +16,7 @@ import type {
 } from './index.js';
 
 // ==================== 新增实体类型 ====================
+// Goal、DevLog 和 Idea 实体定义
 
 /** Goal 状态 */
 export type GoalStatus = 'Idea' | 'Processing' | 'Active' | 'Paused' | 'Done' | 'Abandoned';
