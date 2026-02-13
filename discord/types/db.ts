@@ -184,6 +184,20 @@ export interface GoalTaskRow {
   notified_blocked: number;
   /** JSON: GoalTaskFeedback（feedback/<taskId>.json 的内容） */
   feedback_json: string | null;
+
+  // Token/cost/time tracking
+  /** 累计输入 token */
+  tokens_in: number | null;
+  /** 累计输出 token */
+  tokens_out: number | null;
+  /** 累计缓存读取 token */
+  cache_read_in: number | null;
+  /** 累计缓存写入 token */
+  cache_write_in: number | null;
+  /** 累计成本（美元） */
+  cost_usd: number | null;
+  /** 累计 Claude 执行时间（ms） */
+  duration_ms: number | null;
 }
 
 // ================================================================
