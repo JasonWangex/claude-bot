@@ -49,6 +49,9 @@ install_systemd_services() {
 do_deploy() {
   stamp_deploy_time
 
+  echo "==> Installing dependencies..."
+  pnpm install --frozen-lockfile
+
   echo "==> Installing skills..."
   bash scripts/install-skills.sh
 

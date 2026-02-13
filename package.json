@@ -20,7 +20,15 @@
     "discord.js": "^14.25.1",
     "dotenv": "^17.2.4",
     "sharp": "^0.34.5",
-    "tsx": "^4.21.0"
+    "tsx": "^4.21.0",
+    "zod": "^4.3.6"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild",
+      "sharp"
+    ]
   },
   "devDependencies": {
     "@types/ali-oss": "^6.23.2",
