@@ -65,7 +65,9 @@ export interface TaskSummary {
   model: string | null;
   has_session: boolean;
   message_count: number;
-  last_active: string | null;
+  created_at: number;
+  last_message: string | null;
+  last_message_at: number | null;
   parent_thread_id: string | null;
   worktree_branch: string | null;
   children: TaskSummary[];
@@ -73,8 +75,12 @@ export interface TaskSummary {
 
 export interface TaskDetail extends TaskSummary {
   claude_session_id: string | null;
-  created_at: string;
   plan_mode: boolean;
+  message_history: Array<{
+    role: 'user' | 'assistant';
+    text: string;
+    timestamp: number;
+  }>;
 }
 
 export interface CreateTaskRequest {
