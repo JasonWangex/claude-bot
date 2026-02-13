@@ -1,21 +1,18 @@
 /**
  * ISessionRepo 的 SQLite 实现
  *
- * 管理 Discord Session 的 CRUD、归档、消息历史。
+ * 管理 Discord Session 的 CRUD、归档。
  * 复合键: (guild_id, thread_id)
- * 消息历史存储在独立的 message_history 表中。
  */
 
 import type Database from 'better-sqlite3';
 import type { ISessionRepo } from '../../types/repository.js';
 import type { Session, ArchivedSession } from '../../types/index.js';
-import type { SessionRow, MessageHistoryRow, ArchivedSessionRow } from '../../types/db.js';
-
-const MAX_HISTORY = 50;
+import type { SessionRow, ArchivedSessionRow } from '../../types/db.js';
 
 // ==================== 转换函数 ====================
 
-function rowToSession(row: SessionRow, history: MessageHistoryRow[]): Session {
+function rowToSession(row: SessionRow): Session {
   return {
     id: row.id,
     name: row.name,
@@ -29,11 +26,7 @@ function rowToSession(row: SessionRow, history: MessageHistoryRow[]): Session {
     lastMessageAt: row.last_message_at ?? undefined,
     planMode: row.plan_mode === 1 ? true : false,
     model: row.model ?? undefined,
-    messageHistory: history.map((h) => ({
-      role: h.role,
-      text: h.text,
-      timestamp: h.timestamp,
-    })),
+    messageHistory: [],
     messageCount: row.message_count,
     parentThreadId: row.parent_thread_id ?? undefined,
     worktreeBranch: row.worktree_branch ?? undefined,
@@ -47,7 +40,7 @@ function rowToArchivedSession(row: ArchivedSessionRow): ArchivedSession {
     try { history = JSON.parse(row.message_history_json); } catch { /* ignore parse errors */ }
   }
   return {
-    ...rowToSession(row, []),
+    ...rowToSession(row),
     messageHistory: history,
     archivedAt: row.archived_at,
     archivedBy: row.archived_by ?? undefined,
@@ -71,7 +64,7 @@ function sessionToParams(session: Session): Record<string, unknown> {
     model: session.model ?? null,
     parent_thread_id: session.parentThreadId ?? null,
     worktree_branch: session.worktreeBranch ?? null,
-    message_count: session.messageHistory.length,
+    message_count: session.messageCount ?? session.messageHistory.length,
   };
 }
 
@@ -89,12 +82,7 @@ export class SessionRepository implements ISessionRepo {
     findByParent: Database.Statement;
     clearParentRef: Database.Statement;
     count: Database.Statement;
-    getHistory: Database.Statement;
-    insertMessage: Database.Statement;
-    deleteHistory: Database.Statement;
-    trimHistory: Database.Statement;
     updateLastMessage: Database.Statement;
-    updateMessageCount: Database.Statement;
     getArchivedByKey: Database.Statement;
     getAllArchivedByGuild: Database.Statement;
     getAllArchived: Database.Statement;
@@ -164,33 +152,8 @@ export class SessionRepository implements ISessionRepo {
 
       count: this.db.prepare(`SELECT COUNT(*) as cnt FROM sessions`),
 
-      getHistory: this.db.prepare(
-        `SELECT * FROM message_history WHERE session_id = ? ORDER BY timestamp ASC`,
-      ),
-
-      insertMessage: this.db.prepare(`
-        INSERT INTO message_history (session_id, role, text, timestamp)
-        VALUES (@session_id, @role, @text, @timestamp)
-      `),
-
-      deleteHistory: this.db.prepare(
-        `DELETE FROM message_history WHERE session_id = ?`,
-      ),
-
-      trimHistory: this.db.prepare(`
-        DELETE FROM message_history WHERE session_id = ? AND id NOT IN (
-          SELECT id FROM message_history WHERE session_id = ? ORDER BY timestamp DESC LIMIT ?
-        )
-      `),
-
       updateLastMessage: this.db.prepare(
         `UPDATE sessions SET last_message = ?, last_message_at = ? WHERE id = ?`,
-      ),
-
-      updateMessageCount: this.db.prepare(
-        `UPDATE sessions SET message_count = (
-          SELECT COUNT(*) FROM message_history WHERE session_id = ?
-        ) WHERE id = ?`,
       ),
 
       getArchivedByKey: this.db.prepare(
@@ -228,26 +191,19 @@ export class SessionRepository implements ISessionRepo {
   async get(guildId: string, threadId: string): Promise<Session | null> {
     const row = this.stmts.getByKey.get(guildId, threadId) as SessionRow | undefined;
     if (!row) return null;
-    const history = this.stmts.getHistory.all(row.id) as MessageHistoryRow[];
-    return rowToSession(row, history);
+    return rowToSession(row);
   }
 
   async getAll(guildId: string): Promise<Session[]> {
     const rows = this.stmts.getAllByGuild.all(guildId) as SessionRow[];
-    return rows.map((row) => {
-      const history = this.stmts.getHistory.all(row.id) as MessageHistoryRow[];
-      return rowToSession(row, history);
-    });
+    return rows.map((row) => rowToSession(row));
   }
 
   async save(session: Session): Promise<void> {
-    // 简化为单条 UPSERT — message_count 从 messageHistory.length 计算
-    // 消息历史的更新由 addMessageAndTrim() 方法优化处理
     this.stmts.upsert.run(sessionToParams(session));
   }
 
   async delete(guildId: string, threadId: string): Promise<boolean> {
-    // CASCADE 自动删除 message_history
     const result = this.stmts.deleteByKey.run(guildId, threadId);
     return result.changes > 0;
   }
@@ -257,16 +213,12 @@ export class SessionRepository implements ISessionRepo {
   async findByClaudeSessionId(guildId: string, claudeSessionId: string): Promise<Session | null> {
     const row = this.stmts.findByClaudeSession.get(guildId, claudeSessionId) as SessionRow | undefined;
     if (!row) return null;
-    const history = this.stmts.getHistory.all(row.id) as MessageHistoryRow[];
-    return rowToSession(row, history);
+    return rowToSession(row);
   }
 
   async findByParentThreadId(guildId: string, parentThreadId: string): Promise<Session[]> {
     const rows = this.stmts.findByParent.all(guildId, parentThreadId) as SessionRow[];
-    return rows.map((row) => {
-      const history = this.stmts.getHistory.all(row.id) as MessageHistoryRow[];
-      return rowToSession(row, history);
-    });
+    return rows.map((row) => rowToSession(row));
   }
 
   // ==================== ISessionRepo 归档 ====================
@@ -276,22 +228,16 @@ export class SessionRepository implements ISessionRepo {
     if (!row) return false;
 
     const archiveTransaction = this.db.transaction(() => {
-      // 先读取 message history（删除 session 后 CASCADE 会清除）
-      const history = this.stmts.getHistory.all(row.id) as MessageHistoryRow[];
-      const historyJson = history.length > 0
-        ? JSON.stringify(history.map(h => ({ role: h.role, text: h.text, timestamp: h.timestamp })))
-        : null;
-
-      // 插入 archived_sessions（含 message history）
+      // 插入 archived_sessions（message_history_json 保持 null，因为 message_history 表已废弃）
       this.stmts.insertArchived.run({
-        ...sessionToParams(rowToSession(row, history)),
+        ...sessionToParams(rowToSession(row)),
         archived_at: Date.now(),
         archived_by: userId ?? null,
         archive_reason: reason ?? null,
-        message_history_json: historyJson,
+        message_history_json: null,
       });
 
-      // 删除 sessions（CASCADE 清理 message_history）
+      // 删除 sessions
       this.stmts.deleteById.run(row.id);
 
       // 清除子 session 的 parentThreadId 引用
@@ -307,7 +253,7 @@ export class SessionRepository implements ISessionRepo {
     if (!row) return false;
 
     const restoreTransaction = this.db.transaction(() => {
-      // 插入回 sessions
+      // 插入回 sessions（message_history 表已废弃，无需恢复历史消息）
       this.stmts.upsert.run({
         id: row.id,
         name: row.name,
@@ -325,21 +271,6 @@ export class SessionRepository implements ISessionRepo {
         worktree_branch: row.worktree_branch,
         message_count: row.message_count,
       });
-
-      // 恢复 message history
-      if (row.message_history_json) {
-        try {
-          const history = JSON.parse(row.message_history_json) as Array<{ role: string; text: string; timestamp: number }>;
-          for (const entry of history) {
-            this.stmts.insertMessage.run({
-              session_id: row.id,
-              role: entry.role,
-              text: entry.text,
-              timestamp: entry.timestamp,
-            });
-          }
-        } catch { /* ignore parse errors */ }
-      }
 
       // 删除 archived_sessions 记录
       this.stmts.deleteArchived.run(guildId, threadId);
@@ -369,48 +300,16 @@ export class SessionRepository implements ISessionRepo {
 
   // ==================== 额外公开方法（StateManager 启动加载用） ====================
 
-  /** 加载所有活跃 sessions（含 message_history），用于启动时填充内存 Map */
+  /** 加载所有活跃 sessions，用于启动时填充内存 Map */
   loadAllSessions(): Session[] {
     const rows = this.stmts.getAll.all() as SessionRow[];
-    return rows.map((row) => {
-      const history = this.stmts.getHistory.all(row.id) as MessageHistoryRow[];
-      return rowToSession(row, history);
-    });
+    return rows.map((row) => rowToSession(row));
   }
 
   /** 加载所有归档 sessions，用于启动时填充内存 Map */
   loadAllArchived(): ArchivedSession[] {
     const rows = this.stmts.getAllArchived.all() as ArchivedSessionRow[];
     return rows.map(rowToArchivedSession);
-  }
-
-  // ==================== 消息历史优化方法 ====================
-
-  /**
-   * 添加一条消息并裁剪历史（比全量 save 更高效）
-   * 同时更新 session 的 last_message/last_message_at
-   */
-  addMessageAndTrim(
-    sessionId: string,
-    entry: { role: 'user' | 'assistant'; text: string; timestamp: number },
-    lastMessage: string | undefined,
-    lastMessageAt: number | undefined,
-  ): void {
-    const addTransaction = this.db.transaction(() => {
-      this.stmts.insertMessage.run({
-        session_id: sessionId,
-        role: entry.role,
-        text: entry.text,
-        timestamp: entry.timestamp,
-      });
-      this.stmts.trimHistory.run(sessionId, sessionId, MAX_HISTORY);
-      if (lastMessage !== undefined) {
-        this.stmts.updateLastMessage.run(lastMessage, lastMessageAt, sessionId);
-      }
-      // 更新 message_count 字段（从 message_history 计数）
-      this.stmts.updateMessageCount.run(sessionId, sessionId);
-    });
-    addTransaction();
   }
 
   /** 清除子 session 的 parentThreadId 引用 */

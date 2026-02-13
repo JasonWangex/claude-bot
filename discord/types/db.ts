@@ -62,21 +62,8 @@ export interface SessionRow {
 }
 
 // ================================================================
-// message_history 表 — 从 Session.messageHistory 拆出
+// message_history 表已废弃 (migration 006)
 // ================================================================
-
-export interface MessageHistoryRow {
-  /** 自增 ID (PRIMARY KEY) */
-  id: number;
-  /** 关联的 session UUID (FOREIGN KEY → sessions.id) */
-  session_id: string;
-  /** 消息角色 */
-  role: 'user' | 'assistant';
-  /** 消息文本（最多 2000 字符） */
-  text: string;
-  /** 消息时间 (Unix ms) */
-  timestamp: number;
-}
 
 // ================================================================
 // guilds 表 — 对应 GuildState 接口
@@ -331,8 +318,8 @@ import type {
 /** Session → SessionRow */
 export type SessionToRow = (session: Session) => SessionRow;
 
-/** SessionRow → Session（需要额外查询 message_history） */
-export type RowToSession = (row: SessionRow, history: MessageHistoryRow[]) => Session;
+/** SessionRow → Session */
+export type RowToSession = (row: SessionRow) => Session;
 
 /** GuildState → GuildRow */
 export type GuildStateToRow = (guild: GuildState) => GuildRow;
