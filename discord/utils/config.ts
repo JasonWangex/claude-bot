@@ -45,6 +45,7 @@ export function loadDiscordConfig(): DiscordBotConfig {
   };
 
   const apiPort = parseIntSafe(process.env.API_PORT, 3456);
+  const apiListen = process.env.API_LISTEN || '127.0.0.1';
 
   return {
     discordToken,
@@ -62,5 +63,6 @@ export function loadDiscordConfig(): DiscordBotConfig {
     topicDirNaming,
     worktreesDir,
     apiPort,
+    apiListen,
   };
 }

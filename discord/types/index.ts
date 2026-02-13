@@ -259,6 +259,7 @@ export interface DiscordBotConfig {
   topicDirNaming: 'kebab-case' | 'snake_case' | 'original';
   worktreesDir: string;
   apiPort: number;
+  apiListen: string;
 }
 
 // ========== Goal Orchestrator ==========

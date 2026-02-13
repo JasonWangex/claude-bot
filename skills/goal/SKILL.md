@@ -12,15 +12,11 @@ version: 2.0.0
 
 **数据存储**: SQLite（通过 Bot API 访问）
 
-**Bot API 鉴权**: 所有 Bot API 调用需要 Bearer token。使用前先初始化：
+**API 初始化**（本地免鉴权）：
 
 ```bash
 API="http://127.0.0.1:3456"
-BOT_TOKEN=$(grep '^BOT_ACCESS_TOKEN=' /home/jason/projects/claude-bot/.env 2>/dev/null | cut -d= -f2-)
-AUTH="Authorization: Bearer $BOT_TOKEN"
 ```
-
-所有 curl 请求携带 `-H "$AUTH"`。
 
 ## API 端点说明
 
@@ -47,9 +43,9 @@ Goal 数据通过 Bot HTTP API 操作（不再使用 Notion MCP）：
 通过 Bot API 查询 Active 和 Paused 的 Goal：
 
 ```bash
-ACTIVE=$(curl -s -H "$AUTH" "$API/api/goals?status=Active")
-PAUSED=$(curl -s -H "$AUTH" "$API/api/goals?status=Paused")
-IDEAS=$(curl -s -H "$AUTH" "$API/api/ideas?status=Idea")
+ACTIVE=$(curl -s "$API/api/goals?status=Active")
+PAUSED=$(curl -s "$API/api/goals?status=Paused")
+IDEAS=$(curl -s "$API/api/ideas?status=Idea")
 ```
 
 展示格式：
@@ -83,7 +79,7 @@ IDEAS=$(curl -s -H "$AUTH" "$API/api/ideas?status=Idea")
 1. **查询所有 Active Goals**
 
    ```bash
-   curl -s -H "$AUTH" "$API/api/goals?status=Active"
+   curl -s "$API/api/goals?status=Active"
    ```
 
 2. **逐个处理每个 Active Goal**
@@ -92,7 +88,7 @@ IDEAS=$(curl -s -H "$AUTH" "$API/api/ideas?status=Idea")
 
    a. 获取 Goal 详情（含子任务）：
       ```bash
-      curl -s -H "$AUTH" "$API/api/goals/<goal-id>"
+      curl -s "$API/api/goals/<goal-id>"
       ```
 
    b. 检查是否有**未完成的 `[代码]` 或 `[调研]` 子任务**（即 status 为 pending 且 type 为 代码 或 调研）
@@ -103,7 +99,7 @@ IDEAS=$(curl -s -H "$AUTH" "$API/api/ideas?status=Idea")
 
    e. 调用 Drive API 启动：
       ```bash
-      curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+      curl -s -X POST -H 'Content-Type: application/json' \
         -d '{"goalName":"<Goal Name>","goalThreadId":"{{THREAD_ID}}","baseCwd":"<当前工作目录>","tasks":[子任务数组],"maxConcurrent":3}' \
         "$API/api/goals/<goal-id>/drive"
       ```
@@ -134,7 +130,7 @@ IDEAS=$(curl -s -H "$AUTH" "$API/api/ideas?status=Idea")
 通过 Bot API 搜索匹配的 Goal：
 
 ```bash
-curl -s -H "$AUTH" "$API/api/goals?q=<用户输入的关键词>"
+curl -s "$API/api/goals?q=<用户输入的关键词>"
 ```
 
 如果找到匹配的 Goal → **继续模式**
@@ -164,7 +160,7 @@ curl -s -H "$AUTH" "$API/api/goals?q=<用户输入的关键词>"
 通过 Bot API 创建 Goal：
 
 ```bash
-curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+curl -s -X POST -H 'Content-Type: application/json' \
   -d '{
     "name": "<Goal 标题（简短，10 字以内）>",
     "status": "Active",
@@ -177,7 +173,7 @@ curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' \
 创建成功后获取返回的 `id`，然后通过 PATCH 更新 body 和其他字段：
 
 ```bash
-curl -s -X PATCH -H "$AUTH" -H 'Content-Type: application/json' \
+curl -s -X PATCH -H 'Content-Type: application/json' \
   -d '{
     "progress": "0/N 子任务完成",
     "next": "<第一个待执行的子任务>",
@@ -233,7 +229,7 @@ curl -s -X PATCH -H "$AUTH" -H 'Content-Type: application/json' \
 通过 Bot API 获取 Goal 详情（含子任务）：
 
 ```bash
-GOAL=$(curl -s -H "$AUTH" "$API/api/goals/<goal-id>")
+GOAL=$(curl -s "$API/api/goals/<goal-id>")
 ```
 
 展示摘要：
@@ -263,7 +259,7 @@ GOAL=$(curl -s -H "$AUTH" "$API/api/goals/<goal-id>")
 
 2. **调用 Drive API** 启动自动调度：
    ```bash
-   curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+   curl -s -X POST -H 'Content-Type: application/json' \
      -d '{"goalName":"<Goal Name>","goalThreadId":"{{THREAD_ID}}","baseCwd":"<当前工作目录>","tasks":[子任务数组],"maxConcurrent":3}' \
      "$API/api/goals/<goal-id>/drive"
    ```
@@ -288,7 +284,7 @@ GOAL=$(curl -s -H "$AUTH" "$API/api/goals/<goal-id>")
 **完成子任务：**
 - 用 PATCH API 更新 Goal 的 body：
   ```bash
-  curl -s -X PATCH -H "$AUTH" -H 'Content-Type: application/json' \
+  curl -s -X PATCH -H 'Content-Type: application/json' \
     -d '{"body":"<更新后的 Markdown>","progress":"<新进度>","next":"<下一步>"}' \
     "$API/api/goals/<goal-id>"
   ```
