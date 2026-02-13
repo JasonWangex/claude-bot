@@ -1,13 +1,15 @@
 import { useState } from 'react';
-import { Layout, Menu } from 'antd';
+import { Layout, Menu, Button } from 'antd';
 import {
   DashboardOutlined,
   AimOutlined,
   UnorderedListOutlined,
   FileTextOutlined,
   BulbOutlined,
+  LogoutOutlined,
 } from '@ant-design/icons';
 import { Outlet, useLocation, useNavigate } from 'react-router';
+import { clearToken } from '@/lib/auth';
 
 const { Sider, Content } = Layout;
 
@@ -28,6 +30,11 @@ export default function MainLayout() {
   const selectedKey = menuItems.find(
     item => item.key !== '/' && location.pathname.startsWith(item.key)
   )?.key ?? '/';
+
+  const handleLogout = () => {
+    clearToken();
+    navigate('/login', { replace: true });
+  };
 
   return (
     <Layout style={{ minHeight: '100vh' }}>
@@ -63,13 +70,26 @@ export default function MainLayout() {
           }}>C</span>
           {!collapsed && <span style={{ marginLeft: 8 }}>Claude Bot</span>}
         </div>
-        <Menu
-          mode="inline"
-          selectedKeys={[selectedKey]}
-          items={menuItems}
-          onClick={({ key }) => navigate(key)}
-          style={{ borderRight: 0 }}
-        />
+        <div style={{ display: 'flex', flexDirection: 'column', height: 'calc(100% - 48px)' }}>
+          <Menu
+            mode="inline"
+            selectedKeys={[selectedKey]}
+            items={menuItems}
+            onClick={({ key }) => navigate(key)}
+            style={{ borderRight: 0, flex: 1 }}
+          />
+          <div style={{ padding: collapsed ? '12px 0' : '12px 16px', textAlign: 'center', borderTop: '1px solid #f0f0f0' }}>
+            <Button
+              type="text"
+              icon={<LogoutOutlined />}
+              onClick={handleLogout}
+              block={!collapsed}
+              danger
+            >
+              {!collapsed && '退出'}
+            </Button>
+          </div>
+        </div>
       </Sider>
       <Content style={{ padding: 24, overflow: 'auto' }}>
         <Outlet />
