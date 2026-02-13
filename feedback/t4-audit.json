@@ -1,0 +1,24 @@
+{
+  "verdict": "fail",
+  "summary": "API 端点实现正确且完整，但单元测试因 migration 版本号跳跃而全部失败，属于 error 级别问题。",
+  "issues": [
+    {
+      "severity": "error",
+      "file": "discord/api/routes/__tests__/tasks-interactions.test.ts",
+      "line": 15,
+      "description": "runMigrations(db, [migration001, migration004]) 跳过了 migration002 和 migration003，导致 runMigrations 的版本号连续性检查抛出 'Migration 版本号不连续: 期望 2，得到 4' 错误，5 个测试全部失败。修复方法：要么导入全部 4 个 migration 传入，要么从 db/index.ts 导入 allMigrations（需先 export）。"
+    },
+    {
+      "severity": "warning",
+      "file": "discord/api/routes/tasks.ts",
+      "line": 414,
+      "description": "每次请求都会 new InteractionLogRepository(db)，会重复 prepare statement。考虑在模块级别或通过依赖注入复用实例，但不影响功能正确性，仅性能建议。"
+    },
+    {
+      "severity": "warning",
+      "file": "discord/api/routes/tasks.ts",
+      "line": 433,
+      "description": "InteractionLogRow 到 TaskInteractionSummary 的字段映射是逐字段手动复制，两者字段完全一致。可以直接返回 row 省去重复映射，但不影响正确性。"
+    }
+  ]
+}
