@@ -153,7 +153,7 @@ export class GoalOrchestrator {
       'success'
     );
 
-    await this.dispatchNext(state);
+    await this.reviewAndDispatch(state);
     return state;
   }
 
@@ -172,7 +172,7 @@ export class GoalOrchestrator {
     state.status = 'running';
     await this.saveState(state);
     await this.notify(state.goalThreadId, `Goal "${state.goalName}" resumed`, 'success');
-    await this.dispatchNext(state);
+    await this.reviewAndDispatch(state);
     return true;
   }
 
@@ -189,7 +189,7 @@ export class GoalOrchestrator {
     task.status = 'skipped';
     await this.saveState(state);
     await this.notify(state.goalThreadId, `Skipped task: ${task.id} - ${task.description}`, 'info');
-    if (state.status === 'running') await this.dispatchNext(state);
+    if (state.status === 'running') await this.reviewAndDispatch(state);
     return true;
   }
 
@@ -202,7 +202,7 @@ export class GoalOrchestrator {
     task.completedAt = Date.now();
     await this.saveState(state);
     await this.notify(state.goalThreadId, `Manual task completed: ${task.id} - ${task.description}`, 'success');
-    if (state.status === 'running') await this.dispatchNext(state);
+    if (state.status === 'running') await this.reviewAndDispatch(state, taskId);
     return true;
   }
 
@@ -219,7 +219,7 @@ export class GoalOrchestrator {
     task.merged = false;
     await this.saveState(state);
     await this.notify(state.goalThreadId, `Retrying task: ${task.id} - ${task.description}`, 'warning');
-    if (state.status === 'running') await this.dispatchNext(state);
+    if (state.status === 'running') await this.reviewAndDispatch(state);
     return true;
   }
 
@@ -276,7 +276,7 @@ export class GoalOrchestrator {
 
       this.activeDrives.set(state.goalId, state);
       logger.info(`[Orchestrator] Restored drive: ${state.goalName} (${state.goalId})`);
-      await this.dispatchNext(state);
+      await this.reviewAndDispatch(state);
     }
     if (states.length > 0) {
       logger.info(`[Orchestrator] Restored ${states.length} running drives`);
@@ -292,6 +292,129 @@ export class GoalOrchestrator {
   private async saveState(state: GoalDriveState): Promise<void> {
     state.updatedAt = Date.now();
     await this.deps.goalRepo.save(state);
+  }
+
+  /**
+   * 增强型任务分发 — 在 dispatchNext() 前增加审查层
+   *
+   * 审查顺序：
+   * 1. 占位任务检查：待分发队列若包含占位任务 → 强制 replan
+   * 2. 调研任务深度审查：刚完成的调研任务（无显式 replan feedback）→ 触发深度审查 + replan
+   * 3. Feedback 分发：有 blocked_feedback 状态的任务 → 按 feedback.type 路由
+   * 4. 无触发条件 → 走原有 dispatchNext() 正常分发
+   *
+   * @param completedTaskId - 刚完成的任务 ID（可选，用于调研任务审查）
+   */
+  private async reviewAndDispatch(
+    state: GoalDriveState,
+    completedTaskId?: string,
+  ): Promise<void> {
+    if (state.status !== 'running') return;
+
+    // ── 审查 1: 占位任务拦截 ──
+    // 查看待分发队列中是否有占位任务变为可达状态（依赖已满足）
+    const pendingPlaceholders = state.tasks.filter(t =>
+      t.status === 'pending' && t.type === '占位' &&
+      t.depends.every(depId => {
+        const dep = state.tasks.find(d => d.id === depId);
+        return dep && (dep.status === 'completed' || dep.status === 'skipped' || dep.status === 'cancelled');
+      })
+    );
+    if (pendingPlaceholders.length > 0) {
+      const placeholderIds = pendingPlaceholders.map(t => t.id).join(', ');
+      logger.info(`[Orchestrator] Placeholder tasks ready: ${placeholderIds} — forcing replan`);
+      await this.notify(state.goalThreadId,
+        `**占位任务触发重规划:** ${placeholderIds}\n` +
+        `占位任务的依赖已满足，需要重新规划将其替换为具体任务。`,
+        'info',
+      );
+
+      // 用第一个占位任务触发 replan
+      const trigger = pendingPlaceholders[0];
+      await this.triggerReplan(state, trigger.id, {
+        type: 'replan',
+        reason: `占位任务 ${placeholderIds} 的依赖已满足，需要将占位任务替换为具体可执行任务`,
+        details: `placeholder_ids: ${placeholderIds}`,
+      });
+
+      // replan 后刷新 state 再继续调度（replan 可能改变了任务图）
+      const refreshed = await this.getState(state.goalId);
+      if (refreshed && refreshed.status === 'running') {
+        await this.dispatchNext(refreshed);
+      }
+      return;
+    }
+
+    // ── 审查 2: 调研任务深度审查 ──
+    // 刚完成的调研任务如果没有写 replan feedback，主动触发深度审查
+    if (completedTaskId) {
+      const completedTask = state.tasks.find(t => t.id === completedTaskId);
+      if (
+        completedTask &&
+        completedTask.type === '调研' &&
+        completedTask.status === 'completed' &&
+        (!completedTask.feedback || completedTask.feedback.type !== 'replan')
+      ) {
+        logger.info(
+          `[Orchestrator] Research task ${completedTaskId} completed without replan feedback — triggering deep review`,
+        );
+        await this.notify(state.goalThreadId,
+          `**调研任务深度审查:** ${completedTask.id} - ${completedTask.description}\n` +
+          `调研任务完成但未提交 replan feedback，自动触发深度审查。`,
+          'info',
+        );
+
+        await this.triggerReplan(state, completedTask.id, {
+          type: 'replan',
+          reason: `调研任务 ${completedTask.id} 已完成，自动触发深度审查以评估调研结果对后续任务的影响`,
+        });
+
+        const refreshed = await this.getState(state.goalId);
+        if (refreshed && refreshed.status === 'running') {
+          await this.dispatchNext(refreshed);
+        }
+        return;
+      }
+    }
+
+    // ── 审查 3: Feedback 待处理任务路由 ──
+    // 检查是否有 blocked_feedback 状态的任务需要按 type 路由处理
+    const feedbackTasks = state.tasks.filter(t => t.status === 'blocked_feedback' && t.feedback);
+    for (const task of feedbackTasks) {
+      const fb = task.feedback!;
+      switch (fb.type) {
+        case 'blocked':
+          // blocked 类型：通知用户手动干预，不自动恢复
+          // （已在 onTaskCompleted 中通知过，此处跳过避免重复通知）
+          break;
+
+        case 'clarify':
+          // clarify 类型：通知用户需要澄清，不自动恢复
+          break;
+
+        case 'replan':
+          // replan 类型正常应该在 onTaskCompleted 中已处理
+          // 这里作为兜底：如果意外到达此状态，触发 replan
+          logger.warn(`[Orchestrator] Unexpected replan feedback in blocked_feedback state: ${task.id}`);
+          task.status = 'completed';
+          task.completedAt = Date.now();
+          await this.saveState(state);
+          await this.triggerReplan(state, task.id, fb);
+          const refreshed = await this.getState(state.goalId);
+          if (refreshed && refreshed.status === 'running') {
+            await this.dispatchNext(refreshed);
+          }
+          return;
+
+        default:
+          // 未知 feedback 类型：记录日志，不阻塞调度
+          logger.warn(`[Orchestrator] Unknown feedback type "${fb.type}" on task ${task.id}`);
+          break;
+      }
+    }
+
+    // ── 审查通过：走正常分发 ──
+    await this.dispatchNext(state);
   }
 
   private async dispatchNext(state: GoalDriveState): Promise<void> {
@@ -489,7 +612,7 @@ export class GoalOrchestrator {
           // replan 后需刷新 state 再继续调度
           if (task.branchName) await this.mergeAndCleanup(state, task);
           const refreshed = await this.getState(goalId);
-          if (refreshed && refreshed.status === 'running') await this.dispatchNext(refreshed);
+          if (refreshed && refreshed.status === 'running') await this.reviewAndDispatch(refreshed, taskId);
           return;
         }
 
@@ -503,6 +626,8 @@ export class GoalOrchestrator {
           (feedback.details ? `\nDetails: ${feedback.details}` : ''),
           'warning'
         );
+        // blocked_feedback 后也经过审查层，让 reviewAndDispatch 处理路由
+        if (state.status === 'running') await this.reviewAndDispatch(state);
         return;
       }
 
@@ -512,7 +637,7 @@ export class GoalOrchestrator {
       await this.notify(state.goalThreadId, `Completed: ${task.id} - ${task.description}`, 'success');
       if (task.branchName) await this.mergeAndCleanup(state, task);
       const refreshed = await this.getState(goalId);
-      if (refreshed && refreshed.status === 'running') await this.dispatchNext(refreshed);
+      if (refreshed && refreshed.status === 'running') await this.reviewAndDispatch(refreshed, taskId);
     });
   }
 
@@ -529,7 +654,7 @@ export class GoalOrchestrator {
         `Failed: ${task.id} - ${task.description}\nError: ${error}\n\nReply "retry ${task.id}" to retry.`,
         'error'
       );
-      if (state.status === 'running') await this.dispatchNext(state);
+      if (state.status === 'running') await this.reviewAndDispatch(state);
     });
   }
 
@@ -635,9 +760,9 @@ export class GoalOrchestrator {
       'success',
     );
 
-    // 恢复调度
+    // 恢复调度（经过审查层，replan 后可能引入新占位任务）
     if (state.status === 'running') {
-      await this.dispatchNext(state);
+      await this.reviewAndDispatch(state);
     }
 
     return true;
@@ -668,7 +793,7 @@ export class GoalOrchestrator {
 
     // 恢复调度
     if (state.status === 'running') {
-      await this.dispatchNext(state);
+      await this.reviewAndDispatch(state);
     }
 
     return true;
