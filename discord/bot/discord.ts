@@ -18,7 +18,7 @@ import { logger } from '../utils/logger.js';
 import { ApiServer } from '../api/server.js';
 import { GoalOrchestrator } from '../orchestrator/index.js';
 import { parseGoalButtonId, GOAL_MODAL_PREFIX, buildApproveWithModsModal } from '../orchestrator/goal-buttons.js';
-import { parseIdeaButtonId } from './idea-buttons.js';
+import { parseIdeaButtonId, buildIdeaAdvanceChoiceButtons } from './idea-buttons.js';
 import { initDb, getDb, closeDb } from '../db/index.js';
 import { GoalRepo, GoalTaskRepo, CheckpointRepo } from '../db/repo/index.js';
 import { GoalMetaRepo } from '../db/goal-meta-repo.js';
@@ -503,7 +503,26 @@ export class DiscordBot {
     try {
       switch (action) {
         case 'promote': {
-          await interaction.update({ content: '正在准备推进到 Goal...', components: [] }).catch(() => {});
+          // 第一步：展示推进方式选择按钮
+          const db0 = getDb();
+          const ideaRepo0 = new IdeaRepository(db0);
+          const idea0 = await ideaRepo0.get(ideaId);
+          if (!idea0) {
+            await interaction.update({ content: 'Idea not found', components: [] }).catch(() => {});
+            return;
+          }
+
+          const choiceRows = buildIdeaAdvanceChoiceButtons(ideaId);
+          await interaction.update({
+            content: `**${escapeMarkdown(idea0.name)}**\n选择推进方式：`,
+            components: choiceRows,
+          }).catch(() => {});
+          break;
+        }
+
+        case 'qdev': {
+          // 快速开发：走 idea skill 的 qdev 流程
+          await interaction.update({ content: '正在启动快速开发...', components: [] }).catch(() => {});
 
           const db = getDb();
           const ideaRepo = new IdeaRepository(db);
@@ -513,12 +532,10 @@ export class DiscordBot {
             return;
           }
 
-          // 更新 idea 状态为 Processing
           idea.status = 'Processing';
           idea.updatedAt = Date.now();
           await ideaRepo.save(idea);
 
-          // 加载 idea skill，用选中的 idea 信息作为参数
           const { readFile } = await import('fs/promises');
           const { homedir } = await import('os');
           const { join } = await import('path');
@@ -533,11 +550,51 @@ export class DiscordBot {
 
           const bodyMatch = skillContent.match(/^---[\s\S]*?---\s*([\s\S]*)$/);
           const prompt = (bodyMatch ? bodyMatch[1] : skillContent)
-            .replace('{{SKILL_ARGS}}', `推进 Idea "${idea.name}" (project: ${idea.project}, id: ${idea.id}) 到 Goal`);
+            .replace('{{SKILL_ARGS}}', `推进 Idea "${idea.name}" (project: ${idea.project}, id: ${idea.id}) 到开发`);
 
           this.messageHandler.handleBackgroundChat(guildId, threadId, prompt).catch((err) => {
-            logger.error('idea promote failed:', err.message);
-            this.messageQueue.sendLong(threadId, `idea promote failed: ${err.message}`).catch(() => {});
+            logger.error('idea qdev failed:', err.message);
+            this.messageQueue.sendLong(threadId, `idea qdev failed: ${err.message}`).catch(() => {});
+          });
+          break;
+        }
+
+        case 'goal': {
+          // 推进为 Goal：加载 goal skill，传入 idea 名称进入创建模式
+          await interaction.update({ content: '正在推进为 Goal...', components: [] }).catch(() => {});
+
+          const db = getDb();
+          const ideaRepo = new IdeaRepository(db);
+          const idea = await ideaRepo.get(ideaId);
+          if (!idea) {
+            await interaction.followUp({ content: 'Idea not found', ephemeral: true }).catch(() => {});
+            return;
+          }
+
+          idea.status = 'Processing';
+          idea.updatedAt = Date.now();
+          await ideaRepo.save(idea);
+
+          const { readFile } = await import('fs/promises');
+          const { homedir } = await import('os');
+          const { join } = await import('path');
+          const goalSkillPath = join(homedir(), '.claude/skills/goal/SKILL.md');
+          let goalSkillContent: string;
+          try {
+            goalSkillContent = await readFile(goalSkillPath, 'utf-8');
+          } catch {
+            await interaction.followUp({ content: 'Skill file not found: ~/.claude/skills/goal/SKILL.md', ephemeral: true }).catch(() => {});
+            return;
+          }
+
+          const goalBodyMatch = goalSkillContent.match(/^---[\s\S]*?---\s*([\s\S]*)$/);
+          const goalPrompt = (goalBodyMatch ? goalBodyMatch[1] : goalSkillContent)
+            .replace('{{SKILL_ARGS}}', idea.name)
+            .replace('{{THREAD_ID}}', threadId);
+
+          this.messageHandler.handleBackgroundChat(guildId, threadId, goalPrompt).catch((err) => {
+            logger.error('idea to goal failed:', err.message);
+            this.messageQueue.sendLong(threadId, `idea to goal failed: ${err.message}`).catch(() => {});
           });
           break;
         }
