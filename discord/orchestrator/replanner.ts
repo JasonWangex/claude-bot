@@ -8,7 +8,7 @@
  */
 
 import type { GoalDriveState, GoalTask, GoalTaskFeedback } from '../types/index.js';
-import type { Goal } from '../types/repository.js';
+import type { Goal, IGoalTaskRepo, IGoalMetaRepo } from '../types/repository.js';
 import { chatCompletion } from '../utils/llm.js';
 import { execGit } from './git-ops.js';
 import { logger } from '../utils/logger.js';
@@ -145,6 +145,14 @@ export function applyReplanChanges(
           rejected.push({ change, reason: `Cannot modify task in ${task.status} status` });
           break;
         }
+        // 验证新依赖引用有效
+        if (change.updates.depends) {
+          const invalidDeps = change.updates.depends.filter(d => !taskMap.has(d));
+          if (invalidDeps.length > 0) {
+            rejected.push({ change, reason: `Invalid depends: ${invalidDeps.join(', ')}` });
+            break;
+          }
+        }
         if (change.updates.description) task.description = change.updates.description;
         if (change.updates.type) task.type = change.updates.type as GoalTask['type'];
         if (change.updates.depends) task.depends = change.updates.depends;
@@ -178,6 +186,12 @@ export function applyReplanChanges(
           rejected.push({ change, reason: `Cannot reorder task in ${task.status} status` });
           break;
         }
+        // 验证新依赖引用有效
+        const invalidReorderDeps = change.newDepends.filter(d => !taskMap.has(d));
+        if (invalidReorderDeps.length > 0) {
+          rejected.push({ change, reason: `Invalid depends: ${invalidReorderDeps.join(', ')}` });
+          break;
+        }
         task.depends = change.newDepends;
         if (change.newPhase !== undefined) task.phase = change.newPhase;
         applied.push(change);
@@ -187,6 +201,213 @@ export function applyReplanChanges(
   }
 
   return { applied, rejected, updatedTasks };
+}
+
+// ==================== 依赖一致性验证 ====================
+
+/** 依赖验证结果 */
+export interface DependencyValidation {
+  valid: boolean;
+  errors: string[];
+}
+
+/**
+ * 验证任务图的依赖一致性：
+ * 1. 所有依赖引用的任务必须存在（非 cancelled）
+ * 2. 不能存在循环依赖
+ */
+export function validateDependencies(tasks: GoalTask[]): DependencyValidation {
+  const errors: string[] = [];
+  const activeTaskIds = new Set(
+    tasks.filter(t => t.status !== 'cancelled').map(t => t.id),
+  );
+
+  // 1. 检查悬空引用（忽略 cancelled 任务的依赖）
+  for (const task of tasks) {
+    if (task.status === 'cancelled') continue;
+    for (const dep of task.depends) {
+      if (!activeTaskIds.has(dep)) {
+        errors.push(`Task ${task.id} depends on non-existent/cancelled task ${dep}`);
+      }
+    }
+  }
+
+  // 2. 检查循环依赖（DFS 拓扑排序）
+  const cycle = detectCycle(tasks.filter(t => t.status !== 'cancelled'));
+  if (cycle) {
+    errors.push(`Circular dependency detected: ${cycle.join(' → ')}`);
+  }
+
+  return { valid: errors.length === 0, errors };
+}
+
+/**
+ * DFS 检测循环依赖，返回环路径或 null
+ */
+function detectCycle(tasks: GoalTask[]): string[] | null {
+  const adj = new Map<string, string[]>();
+  for (const task of tasks) {
+    adj.set(task.id, task.depends);
+  }
+
+  // 0 = unvisited, 1 = in stack (visiting), 2 = done
+  const state = new Map<string, 0 | 1 | 2>();
+  for (const task of tasks) state.set(task.id, 0);
+
+  const path: string[] = [];
+
+  function dfs(nodeId: string): string[] | null {
+    const s = state.get(nodeId);
+    if (s === 2) return null;  // already fully processed
+    if (s === 1) {
+      // Found cycle — extract the cycle path
+      const cycleStart = path.indexOf(nodeId);
+      return [...path.slice(cycleStart), nodeId];
+    }
+
+    state.set(nodeId, 1);
+    path.push(nodeId);
+
+    for (const dep of adj.get(nodeId) ?? []) {
+      if (!adj.has(dep)) continue; // skip refs to non-existent tasks (handled separately)
+      const cycle = dfs(dep);
+      if (cycle) return cycle;
+    }
+
+    path.pop();
+    state.set(nodeId, 2);
+    return null;
+  }
+
+  for (const task of tasks) {
+    const cycle = dfs(task.id);
+    if (cycle) return cycle;
+  }
+  return null;
+}
+
+// ==================== Goal body 子任务列表更新 ====================
+
+/**
+ * 将任务列表渲染为 Markdown 文本，用于更新 Goal body 中的子任务部分。
+ *
+ * 格式：
+ * ```
+ * ## 子任务
+ * | ID | 类型 | 描述 | 依赖 | 状态 |
+ * |---|---|---|---|---|
+ * | t1 | 代码 | 创建数据模型 | — | ✅ completed |
+ * | t2 | 代码 | 实现 API | t1 | 🔄 running |
+ * ```
+ */
+export function renderTaskListMarkdown(tasks: GoalTask[]): string {
+  const statusEmoji: Record<string, string> = {
+    pending: '⏳',
+    dispatched: '📤',
+    running: '🔄',
+    completed: '✅',
+    failed: '❌',
+    blocked: '🚧',
+    blocked_feedback: '💬',
+    paused: '⏸️',
+    cancelled: '🚫',
+    skipped: '⏭️',
+  };
+
+  const lines: string[] = [
+    '## 子任务',
+    '',
+    '| ID | 类型 | 描述 | 依赖 | 状态 |',
+    '|---|---|---|---|---|',
+  ];
+
+  for (const task of tasks) {
+    const emoji = statusEmoji[task.status] || '';
+    const deps = task.depends.length > 0 ? task.depends.join(', ') : '—';
+    const desc = task.description.replace(/\|/g, '\\|');
+    lines.push(`| ${task.id} | ${task.type} | ${desc} | ${deps} | ${emoji} ${task.status} |`);
+  }
+
+  return lines.join('\n');
+}
+
+/**
+ * 更新 Goal body 中的子任务列表部分。
+ *
+ * 如果 body 中已有 "## 子任务" 段落，则替换；否则追加。
+ */
+export function updateGoalBodyWithTasks(body: string | null, tasks: GoalTask[]): string {
+  const taskSection = renderTaskListMarkdown(tasks);
+
+  if (!body) return taskSection;
+
+  // 匹配 "## 子任务" 到下一个 ## 或文件末尾
+  const sectionRegex = /## 子任务[\s\S]*?(?=\n## [^子]|\n## $|$)/;
+  if (sectionRegex.test(body)) {
+    return body.replace(sectionRegex, taskSection);
+  }
+
+  // 没有现有子任务段落 → 追加
+  return body.trimEnd() + '\n\n' + taskSection;
+}
+
+// ==================== applyChanges() 完整流程 ====================
+
+/** applyChanges 的依赖参数 */
+export interface ApplyChangesDeps {
+  goalTaskRepo: IGoalTaskRepo;
+  goalMetaRepo: IGoalMetaRepo;
+}
+
+/**
+ * 完整的变更应用流程：
+ *
+ * 1. 调用 applyReplanChanges() 将变更应用到内存任务图
+ * 2. 验证依赖一致性（悬空引用 + 循环依赖）
+ * 3. 通过 GoalTaskRepo 持久化任务列表
+ * 4. 更新 Goal body 中的子任务列表
+ *
+ * @returns ApplyResult + 验证信息
+ */
+export async function applyChanges(
+  state: GoalDriveState,
+  changes: ReplanChange[],
+  deps: ApplyChangesDeps,
+): Promise<ApplyResult & { validationErrors: string[] }> {
+  // 1. 应用变更到内存
+  const result = applyReplanChanges(state.tasks, changes);
+
+  // 2. 验证依赖一致性
+  const validation = validateDependencies(result.updatedTasks);
+  if (!validation.valid) {
+    logger.warn(`[Replanner] Dependency validation failed: ${validation.errors.join('; ')}`);
+    // 依赖验证失败不阻止持久化，但记录错误供调用者处理
+  }
+
+  // 3. 更新内存 state
+  state.tasks = result.updatedTasks;
+  state.updatedAt = Date.now();
+
+  // 4. 持久化到 GoalTaskRepo
+  await deps.goalTaskRepo.saveAll(state.goalId, result.updatedTasks);
+
+  // 5. 更新 Goal body
+  const goalMeta = await deps.goalMetaRepo.get(state.goalId);
+  if (goalMeta) {
+    goalMeta.body = updateGoalBodyWithTasks(goalMeta.body, result.updatedTasks);
+    // 更新进度信息
+    const completed = result.updatedTasks.filter(t => t.status === 'completed').length;
+    const active = result.updatedTasks.filter(t => t.status !== 'cancelled' && t.status !== 'skipped').length;
+    goalMeta.progress = `${completed}/${active} 子任务完成`;
+    await deps.goalMetaRepo.save(goalMeta);
+  }
+
+  logger.info(
+    `[Replanner] Applied ${result.applied.length} changes, rejected ${result.rejected.length}` +
+    (validation.errors.length > 0 ? `, validation warnings: ${validation.errors.length}` : ''),
+  );
+
+  return { ...result, validationErrors: validation.errors };
 }
 
 // ==================== Git diff 工具 ====================
