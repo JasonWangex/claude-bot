@@ -24,6 +24,7 @@ import { listGoals, createGoal, getGoal, updateGoal } from './routes/goal-crud.j
 import { qdev } from './routes/qdev.js';
 import { listDevLogs, getDevLog, createDevLog } from './routes/devlogs.js';
 import { listIdeas, createIdea, getIdea, updateIdea, deleteIdea } from './routes/ideas.js';
+import { listKnowledgeBase, createKnowledgeBase, getKnowledgeBaseEntry, updateKnowledgeBase, deleteKnowledgeBase } from './routes/knowledge-base.js';
 
 function defineRoutes(): Route[] {
   const r = (method: string, path: string, handler: Route['handler']): Route => {
@@ -94,6 +95,13 @@ function defineRoutes(): Route[] {
     r('GET',    '/api/ideas/:id', getIdea),
     r('PATCH',  '/api/ideas/:id', updateIdea),
     r('DELETE', '/api/ideas/:id', deleteIdea),
+
+    // Knowledge Base CRUD
+    r('GET',    '/api/kb', listKnowledgeBase),
+    r('POST',   '/api/kb', createKnowledgeBase),
+    r('GET',    '/api/kb/:id', getKnowledgeBaseEntry),
+    r('PATCH',  '/api/kb/:id', updateKnowledgeBase),
+    r('DELETE', '/api/kb/:id', deleteKnowledgeBase),
   ];
 }
 

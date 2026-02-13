@@ -306,6 +306,31 @@ export interface InteractionLogRow {
 }
 
 // ================================================================
+// knowledge_base 表
+// ================================================================
+
+export interface KnowledgeBaseRow {
+  /** UUID (PRIMARY KEY) */
+  id: string;
+  /** 标题 */
+  title: string;
+  /** Markdown 正文 */
+  content: string;
+  /** 分类 (如 Architecture, Troubleshooting, API, Design) */
+  category: string | null;
+  /** 标签 (JSON 数组) */
+  tags: string | null;
+  /** 项目名 */
+  project: string;
+  /** 来源 (如关联的 Goal 名称或任务) */
+  source: string | null;
+  /** 创建时间 (Unix ms) */
+  created_at: number;
+  /** 更新时间 (Unix ms) */
+  updated_at: number;
+}
+
+// ================================================================
 // 运行时类型转换辅助
 // ================================================================
 

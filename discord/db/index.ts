@@ -20,6 +20,7 @@ import migration004 from './migrations/004_add_goal_seq.js';
 import migration005 from './migrations/005_add_interaction_log.js';
 import migration006 from './migrations/006_add_message_count.js';
 import migration007 from './migrations/007_drop_message_history.js';
+import migration008 from './migrations/008_add_knowledge_base.js';
 
 const allMigrations: Migration[] = [
   migration001,
@@ -29,6 +30,7 @@ const allMigrations: Migration[] = [
   migration005,
   migration006,
   migration007,
+  migration008,
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -120,3 +122,4 @@ export { GoalMetaRepo } from './goal-meta-repo.js';
 export { GoalRepo, GoalTaskRepo, CheckpointRepo } from './repo/index.js';
 export { SessionRepository, GuildRepository } from './repo/index.js';
 export { InteractionLogRepository } from './interaction-log-repo.js';
+export { KnowledgeBaseRepository } from './knowledge-base-repo.js';
