@@ -1,0 +1,48 @@
+{
+  "verdict": "fail",
+  "summary": "DB 层 message_count 字段和 save() 简化已完成，但任务描述要求的「替代 messageHistory.length 的 5 处引用」完全未执行。代码未提交。还有一个 archive 路径的 bug 修复是附带的正确改进。",
+  "issues": [
+    {
+      "severity": "error",
+      "file": "discord/api/routes/status.ts",
+      "line": 16,
+      "description": "message_count 仍使用 s.messageHistory.length 而非 DB 字段。任务要求替代这 5 处引用，但此处未改。"
+    },
+    {
+      "severity": "error",
+      "file": "discord/api/routes/tasks.ts",
+      "line": 45,
+      "description": "message_count 仍使用 s.messageHistory.length 而非 DB 字段。同上。"
+    },
+    {
+      "severity": "error",
+      "file": "discord/bot/commands/general.ts",
+      "line": 222,
+      "description": "消息数显示仍使用 s.messageHistory.length。如果 save() 不再写入 messageHistory 到 DB，那么 getAll() 加载时 messageHistory 仍然是完整的（从 message_history 表查询），所以功能上不会出错。但任务明确要求替代这些引用。"
+    },
+    {
+      "severity": "error",
+      "file": "discord/bot/commands/task.ts",
+      "line": 305,
+      "description": "同上，session.messageHistory.length 未替换。"
+    },
+    {
+      "severity": "warning",
+      "file": "discord/types/index.ts",
+      "line": 24,
+      "description": "Session 运行时类型缺少 messageCount 字段。如果要让消费方使用 DB 字段而非 messageHistory.length，需要在 Session 接口中暴露此字段，或提供替代访问方式。"
+    },
+    {
+      "severity": "warning",
+      "file": "discord/db/repo/session-repo.ts",
+      "line": 18,
+      "description": "rowToSession() 未将 row.message_count 映射到 Session 对象。虽然 SessionRow 有 message_count，但转换为 Session 时丢失了。"
+    },
+    {
+      "severity": "warning",
+      "file": "general",
+      "line": 0,
+      "description": "代码变更未提交（全部在 working tree），无 commit 记录。"
+    }
+  ]
+}
