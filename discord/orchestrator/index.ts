@@ -45,6 +45,7 @@ import {
   buildReplanApprovalButtons,
   buildReplanRollbackButton,
   buildRollbackConfirmButtons,
+  buildTaskFailedButtons,
 } from './goal-buttons.js';
 import type { IGoalMetaRepo, IGoalTaskRepo, IGoalCheckpointRepo } from '../types/repository.js';
 
@@ -265,6 +266,325 @@ export class GoalOrchestrator {
     await this.notify(state.goalThreadId, `Retrying task: ${this.getTaskLabel(state, task.id)} - ${task.description}`, 'warning');
     if (state.status === 'running') await this.reviewAndDispatch(state);
     return true;
+  }
+
+  /**
+   * 轻量重试：保留 branch/thread 上下文，从 audit 阶段重新开始修复
+   * 适用于 audit fix 耗尽但代码本身大部分完成的场景
+   */
+  async refixTask(goalId: string, taskId: string): Promise<boolean> {
+    const state = await this.getState(goalId);
+    if (!state) return false;
+    const task = state.tasks.find(t => t.id === taskId);
+    if (!task) return false;
+    // refix 只对 failed 且有 threadId 的任务有效（即有代码上下文）
+    if (task.status !== 'failed' || !task.threadId) return false;
+
+    const guildId = this.getGuildId();
+    if (!guildId) return false;
+
+    // 中止可能残留的进程
+    const lockKey = StateManager.threadLockKey(guildId, task.threadId);
+    this.deps.claudeClient.abort(lockKey);
+
+    // 保留 branch/thread/dispatchedAt，只重置 fix 相关状态
+    task.status = 'running';
+    task.error = undefined;
+    task.pipelinePhase = 'fix';
+    task.auditRetries = 0;
+    await this.saveState(state);
+
+    await this.notify(state.goalThreadId,
+      `Refixing task: ${this.getTaskLabel(state, task.id)} - ${task.description}`,
+      'warning',
+    );
+
+    // 直接触发 audit → fix 循环（不经过 reviewAndDispatch）
+    this.startRefixPipeline(goalId, taskId, guildId, task.threadId, task, state);
+    return true;
+  }
+
+  /**
+   * refix 流水线：在已有 thread 上重新 audit → fix 循环
+   */
+  private startRefixPipeline(
+    goalId: string, taskId: string, guildId: string, threadId: string,
+    task: GoalTask, state: GoalDriveState,
+  ): void {
+    (async () => {
+      try {
+        // 先跑一次 audit，拿到最新 issues
+        const auditResult = await this.runAudit(goalId, taskId, guildId, threadId, task, state);
+        if (auditResult.verdict === 'pass') {
+          await this.onTaskCompleted(goalId, taskId);
+          return;
+        }
+        // 进入标准 fix 循环
+        await this.auditFixLoop(goalId, taskId, guildId, threadId, task, state, auditResult.issues, auditResult.verifyCommands);
+      } catch (err: any) {
+        const stillRunning = await this.isTaskStillRunning(goalId, taskId);
+        if (!stillRunning) return;
+        try {
+          await this.onTaskFailed(goalId, taskId, err.message);
+        } catch (cbErr: any) {
+          logger.error(`[Orchestrator] startRefixPipeline onTaskFailed also failed:`, cbErr.message);
+        }
+      }
+    })();
+  }
+
+  // ========== Feedback 智能调查 ==========
+
+  /**
+   * 启动 AI 调查 blocked/clarify feedback
+   *
+   * 流程：
+   * 1. 在已有 thread 中发送调查 prompt（Sonnet 快速分析）
+   * 2. Claude 分析 blocked 原因、检查依赖状态/代码上下文
+   * 3. 写结论到 feedback/<taskId>-investigate.json
+   * 4. 根据结论自动路由：continue（继续修复）/ retry / replan / escalate
+   */
+  private startFeedbackInvestigation(
+    state: GoalDriveState,
+    task: GoalTask,
+    guildId: string,
+  ): void {
+    const goalId = state.goalId;
+    const taskId = task.id;
+    const threadId = task.threadId!;
+
+    (async () => {
+      try {
+        // 使用 Sonnet 做调查（快速且够用）
+        const { pipelineSonnetModel: sonnetModel } = this.deps.config;
+        this.switchSessionModel(guildId, threadId, sonnetModel);
+        await this.updatePipelinePhase(goalId, taskId, 'fix');
+
+        await this.notify(state.goalThreadId,
+          `[Pipeline] ${taskId}: AI 调查 blocked feedback...`,
+          'pipeline',
+        );
+
+        const prompt = this.buildFeedbackInvestigationPrompt(task, state);
+        logger.info(`[Orchestrator] Pipeline ${taskId}: feedback investigation started`);
+        await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, prompt);
+
+        // 读取调查结论
+        const conclusion = await this.readInvestigationResult(state, task);
+        logger.info(`[Orchestrator] Pipeline ${taskId}: investigation conclusion = ${conclusion.action}`);
+
+        if (!await this.isTaskStillRunning(goalId, taskId)) return;
+
+        switch (conclusion.action) {
+          case 'continue':
+            // Claude 已在调查中修复了问题 → 走 audit → fix 循环验证
+            await this.notify(state.goalThreadId,
+              `[Pipeline] ${taskId}: 调查结论 — 问题已修复，进入审计验证`,
+              'info',
+            );
+            this.startRefixPipeline(goalId, taskId, guildId, threadId, task, state);
+            break;
+
+          case 'retry':
+            // 需要完全重试
+            await this.notify(state.goalThreadId,
+              `[Pipeline] ${taskId}: 调查结论 — 需要完全重试\n原因: ${conclusion.reason}`,
+              'warning',
+            );
+            await this.withStateLock(goalId, async () => {
+              const freshState = await this.getState(goalId);
+              if (!freshState) return;
+              const freshTask = freshState.tasks.find(t => t.id === taskId);
+              if (!freshTask) return;
+              // retryTask 要求 failed 状态，先改回 failed 再调用
+              freshTask.status = 'failed';
+              await this.saveState(freshState);
+            });
+            await this.retryTask(goalId, taskId);
+            break;
+
+          case 'replan':
+            // 需要重新规划
+            await this.notify(state.goalThreadId,
+              `[Pipeline] ${taskId}: 调查结论 — 需要重新规划\n原因: ${conclusion.reason}`,
+              'info',
+            );
+            await this.withStateLock(goalId, async () => {
+              const freshState = await this.getState(goalId);
+              if (!freshState) return;
+              const freshTask = freshState.tasks.find(t => t.id === taskId);
+              if (!freshTask) return;
+              freshTask.status = 'completed';
+              freshTask.completedAt = Date.now();
+              await this.saveState(freshState);
+              await this.triggerReplan(freshState, taskId, {
+                type: 'replan',
+                reason: conclusion.reason,
+                details: conclusion.details,
+              });
+              const refreshed = await this.getState(goalId);
+              if (refreshed && refreshed.status === 'running') {
+                await this.reviewAndDispatch(refreshed, taskId);
+              }
+            });
+            break;
+
+          case 'escalate':
+          default:
+            // 无法自动解决，交给用户
+            await this.withStateLock(goalId, async () => {
+              const freshState = await this.getState(goalId);
+              if (!freshState) return;
+              const freshTask = freshState.tasks.find(t => t.id === taskId);
+              if (!freshTask) return;
+              freshTask.status = 'blocked_feedback';
+              freshTask.pipelinePhase = undefined;
+              await this.saveState(freshState);
+              await this.notify(freshState.goalThreadId,
+                `[Pipeline] ${taskId}: AI 调查无法自动解决\n原因: ${conclusion.reason}\n需要人工干预。`,
+                'error',
+              );
+            });
+            break;
+        }
+      } catch (err: any) {
+        const stillRunning = await this.isTaskStillRunning(goalId, taskId);
+        if (!stillRunning) return;
+        logger.error(`[Orchestrator] Feedback investigation failed for ${taskId}:`, err.message);
+        // 调查本身失败 → 回到 blocked_feedback 等用户处理
+        try {
+          await this.withStateLock(goalId, async () => {
+            const freshState = await this.getState(goalId);
+            if (!freshState) return;
+            const freshTask = freshState.tasks.find(t => t.id === taskId);
+            if (!freshTask) return;
+            freshTask.status = 'blocked_feedback';
+            freshTask.pipelinePhase = undefined;
+            await this.saveState(freshState);
+            await this.notify(freshState.goalThreadId,
+              `[Pipeline] ${taskId}: AI 调查出错: ${err.message}\n已回退到 blocked_feedback，需要人工干预。`,
+              'error',
+            );
+          });
+        } catch (cbErr: any) {
+          logger.error(`[Orchestrator] startFeedbackInvestigation cleanup also failed:`, cbErr.message);
+        }
+      }
+    })();
+  }
+
+  /**
+   * 构建 feedback 调查 prompt
+   */
+  private buildFeedbackInvestigationPrompt(task: GoalTask, state: GoalDriveState): string {
+    const fb = task.feedback!;
+
+    // 收集依赖任务状态
+    const depInfos = task.depends.map(depId => {
+      const dep = state.tasks.find(t => t.id === depId);
+      if (!dep) return `  - ${depId}: (unknown)`;
+      return `  - ${this.getTaskLabel(state, dep.id)}: ${dep.description} (status: ${dep.status}, merged: ${dep.merged ?? false})`;
+    });
+
+    const lines: string[] = [
+      `You are investigating a blocked task for Goal "${state.goalName}".`,
+      ``,
+      `## Blocked Task`,
+      `ID: ${this.getTaskLabel(state, task.id)}`,
+      `Description: ${task.description}`,
+      ``,
+      `## Feedback (written by the previous executor)`,
+      `Type: ${fb.type}`,
+      `Reason: ${fb.reason}`,
+      ...(fb.details ? [`Details: ${fb.details}`] : []),
+    ];
+
+    if (depInfos.length > 0) {
+      lines.push(``, `## Dependencies`, ...depInfos);
+    }
+
+    lines.push(
+      ``,
+      `## Your Job`,
+      `1. **Understand** the feedback: What exactly is blocking this task?`,
+      `2. **Investigate** the codebase: Check if the blocker is still valid`,
+      `   - If it's a dependency issue (e.g. code from a dependency task is not available), check if the dependency has been merged into the goal branch`,
+      `   - If it's a missing file/API/module issue, search the codebase to see if it exists now`,
+      `   - If it's a clarification question, try to infer the answer from context`,
+      `3. **Fix if possible**: If you can resolve the blocker, do so:`,
+      `   - Pull latest from goal branch: \`git merge ${state.goalBranch}\` (to get merged dependency code)`,
+      `   - Make the necessary code changes to unblock and complete the task`,
+      `   - Run build/test to verify`,
+      `   - Commit your changes`,
+      `4. **Write your conclusion** to \`feedback/${task.id}-investigate.json\``,
+      ``,
+      `## Conclusion File Format (feedback/${task.id}-investigate.json)`,
+      '```json',
+      `{`,
+      `  "action": "continue" | "retry" | "replan" | "escalate",`,
+      `  "reason": "Brief explanation of what you found and did",`,
+      `  "details": "Optional additional context"`,
+      `}`,
+      '```',
+      ``,
+      `## Action Meanings`,
+      `- **continue**: You fixed the issue and the code is ready for audit verification`,
+      `- **retry**: The task needs to start completely from scratch (e.g. wrong approach, branch is corrupted)`,
+      `- **replan**: The task definition itself needs to change (e.g. scope was wrong, task should be split)`,
+      `- **escalate**: Cannot be resolved automatically — needs human intervention`,
+      ``,
+      `## Rules`,
+      `- Prefer "continue" if you can fix the issue — this saves the most work`,
+      `- Use "retry" only if the existing code is unsalvageable`,
+      `- Use "escalate" only as last resort when you truly cannot determine the right action`,
+      `- After writing the conclusion file: \`git add feedback/${task.id}-investigate.json && git commit -m "investigate: ${this.getTaskLabel(state, task.id)}"\``,
+    );
+
+    return lines.join('\n');
+  }
+
+  /**
+   * 读取调查结论文件 feedback/<taskId>-investigate.json
+   */
+  private async readInvestigationResult(
+    state: GoalDriveState,
+    task: GoalTask,
+  ): Promise<{ action: string; reason: string; details?: string }> {
+    const defaultResult = { action: 'escalate', reason: 'Investigation result file not found or unreadable' };
+
+    if (!task.branchName) {
+      logger.warn(`[Orchestrator] readInvestigationResult(${task.id}): no branchName`);
+      return defaultResult;
+    }
+
+    try {
+      const stdout = await execGit(
+        ['worktree', 'list', '--porcelain'],
+        state.baseCwd,
+        `readInvestigationResult(${task.id}): list worktrees`,
+      );
+      const subtaskDir = this.findWorktreeDir(stdout, task.branchName);
+      if (!subtaskDir) {
+        logger.warn(`[Orchestrator] readInvestigationResult(${task.id}): worktree not found`);
+        return defaultResult;
+      }
+
+      const resultPath = join(subtaskDir, 'feedback', `${task.id}-investigate.json`);
+      const content = await readFile(resultPath, 'utf-8');
+      const parsed = JSON.parse(content);
+
+      const validActions = ['continue', 'retry', 'replan', 'escalate'];
+      const action = validActions.includes(parsed.action) ? parsed.action : 'escalate';
+
+      return {
+        action,
+        reason: parsed.reason || 'No reason provided',
+        details: parsed.details,
+      };
+    } catch (err: any) {
+      logger.warn(`[Orchestrator] readInvestigationResult(${task.id}): ${err.message}`);
+      return defaultResult;
+    }
   }
 
   /**
@@ -499,13 +819,22 @@ export class GoalOrchestrator {
       const fb = task.feedback!;
       switch (fb.type) {
         case 'blocked':
-          // blocked 类型：通知用户手动干预，不自动恢复
-          // （已在 onTaskCompleted 中通知过，此处跳过避免重复通知）
+        case 'clarify': {
+          // blocked/clarify：如果有 thread 上下文，启动 AI 调查
+          if (task.threadId) {
+            const guildId = this.getGuildId();
+            if (guildId) {
+              task.status = 'running';
+              task.pipelinePhase = 'fix';
+              await this.saveState(state);
+              this.startFeedbackInvestigation(state, task, guildId);
+              // 不 return —— 继续处理其他任务，调查异步进行
+              continue;
+            }
+          }
+          // 没有 thread 上下文，只能等用户干预
           break;
-
-        case 'clarify':
-          // clarify 类型：通知用户需要澄清，不自动恢复
-          break;
+        }
 
         case 'replan':
           // replan 类型正常应该在 onTaskCompleted 中已处理
@@ -850,6 +1179,14 @@ export class GoalOrchestrator {
       return;
     }
 
+    // 检查 feedback 文件：如果 Sonnet 写了 feedback（blocked/clarify），跳过 audit
+    const preFeedback = await this.checkFeedbackFile(state, task);
+    if (preFeedback) {
+      logger.info(`[Orchestrator] Pipeline ${taskId}: feedback detected after execute, skipping audit`);
+      await this.onTaskCompleted(goalId, taskId);
+      return;
+    }
+
     // Phase 2: Opus audit
     const auditResult = await this.runAudit(goalId, taskId, guildId, threadId, task, state);
 
@@ -921,6 +1258,14 @@ export class GoalOrchestrator {
 
     if (!await this.isTaskStillRunning(goalId, taskId)) {
       logger.info(`[Orchestrator] Pipeline ${taskId}: task no longer running after execute, aborting pipeline`);
+      return;
+    }
+
+    // 检查 feedback 文件：如果 Sonnet 写了 feedback（blocked/clarify），跳过 audit
+    const preFeedback = await this.checkFeedbackFile(state, task);
+    if (preFeedback) {
+      logger.info(`[Orchestrator] Pipeline ${taskId}: feedback detected after execute, skipping audit`);
+      await this.onTaskCompleted(goalId, taskId);
       return;
     }
 
@@ -1428,9 +1773,18 @@ export class GoalOrchestrator {
       task.status = 'failed';
       task.error = error;
       await this.saveState(state);
+
+      const hasContext = !!task.threadId;
+      const hint = hasContext
+        ? `Reply "retry ${task.id}" to restart, or "refix ${task.id}" to fix in-place.`
+        : `Reply "retry ${task.id}" to retry.`;
+      const buttons = hasContext
+        ? buildTaskFailedButtons(goalId, task.id)
+        : undefined;
       await this.notify(state.goalThreadId,
-        `Failed: ${this.getTaskLabel(state, task.id)} - ${task.description}\nError: ${error}\n\nReply "retry ${task.id}" to retry.`,
-        'error'
+        `Failed: ${this.getTaskLabel(state, task.id)} - ${task.description}\nError: ${error}\n\n${hint}`,
+        'error',
+        buttons ? { components: buttons } : undefined,
       );
       if (state.status === 'running') await this.reviewAndDispatch(state);
     });
