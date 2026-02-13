@@ -9,7 +9,7 @@
  */
 
 import { ChannelType, EmbedBuilder, type Client } from 'discord.js';
-import type { StateManager } from '../bot/state.js';
+import { StateManager } from '../bot/state.js';
 import type { ClaudeClient } from '../claude/client.js';
 import type { MessageHandler } from '../bot/handlers.js';
 import { type MessageQueue, EmbedColors, type EmbedColor } from '../bot/message-queue.js';
@@ -185,7 +185,17 @@ export class GoalOrchestrator {
     if (!state) return false;
     const task = state.tasks.find(t => t.id === taskId);
     if (!task) return false;
-    if (task.status !== 'pending' && task.status !== 'blocked' && task.status !== 'failed') return false;
+    if (task.status !== 'pending' && task.status !== 'blocked' && task.status !== 'failed' && task.status !== 'paused') return false;
+
+    // paused 任务可能有关联的进程，先清理
+    if (task.status === 'paused' && task.threadId) {
+      const guildId = this.getGuildId();
+      if (guildId) {
+        const lockKey = StateManager.threadLockKey(guildId, task.threadId);
+        this.deps.claudeClient.abort(lockKey);
+      }
+    }
+
     task.status = 'skipped';
     await this.saveState(state);
     await this.notify(state.goalThreadId, `Skipped task: ${task.id} - ${task.description}`, 'info');
@@ -210,15 +220,96 @@ export class GoalOrchestrator {
     const state = await this.getState(goalId);
     if (!state) return false;
     const task = state.tasks.find(t => t.id === taskId);
-    if (!task || task.status !== 'failed') return false;
+    if (!task) return false;
+    if (task.status !== 'failed' && task.status !== 'blocked_feedback' && task.status !== 'paused') return false;
+
+    // paused 任务可能还有运行中的进程（理论上不会，但防御性处理）
+    if (task.status === 'paused' && task.threadId) {
+      const guildId = this.getGuildId();
+      if (guildId) {
+        const lockKey = StateManager.threadLockKey(guildId, task.threadId);
+        this.deps.claudeClient.abort(lockKey);
+      }
+    }
+
     task.status = 'pending';
     task.error = undefined;
     task.branchName = undefined;
     task.threadId = undefined;
     task.dispatchedAt = undefined;
     task.merged = false;
+    task.feedback = undefined;
     await this.saveState(state);
     await this.notify(state.goalThreadId, `Retrying task: ${task.id} - ${task.description}`, 'warning');
+    if (state.status === 'running') await this.dispatchNext(state);
+    return true;
+  }
+
+  /**
+   * 暂停正在运行的任务：中止 Claude 子进程，保留 branch/thread/session 上下文
+   */
+  async pauseTask(goalId: string, taskId: string): Promise<boolean> {
+    const state = await this.getState(goalId);
+    if (!state) return false;
+    const task = state.tasks.find(t => t.id === taskId);
+    if (!task || task.status !== 'running') return false;
+
+    // 中止运行中的 Claude 进程（保留队列，但任务暂停后不需要队列）
+    if (task.threadId) {
+      const guildId = this.getGuildId();
+      if (guildId) {
+        const lockKey = StateManager.threadLockKey(guildId, task.threadId);
+        this.deps.claudeClient.abort(lockKey);
+      }
+    }
+
+    task.status = 'paused';
+    // 保留 branchName, threadId, dispatchedAt — 恢复时复用
+    await this.saveState(state);
+    await this.notify(state.goalThreadId,
+      `Paused task: ${task.id} - ${task.description}\nBranch/thread preserved for resume.`,
+      'warning'
+    );
+    return true;
+  }
+
+  /**
+   * 恢复暂停的任务：使用保留的 branch/thread 重新执行
+   */
+  async resumeTask(goalId: string, taskId: string): Promise<boolean> {
+    const state = await this.getState(goalId);
+    if (!state) return false;
+    const task = state.tasks.find(t => t.id === taskId);
+    if (!task || task.status !== 'paused') return false;
+
+    const guildId = this.getGuildId();
+    if (!guildId) return false;
+
+    // 任务有保留的 thread 和 branch → 在原有 thread 中继续执行
+    if (task.threadId && task.branchName) {
+      task.status = 'running';
+      await this.saveState(state);
+      await this.notify(state.goalThreadId,
+        `Resumed task: ${task.id} - ${task.description}`,
+        'success'
+      );
+
+      const taskPrompt = `[Resumed] Continue working on this task. Your previous progress has been preserved.\n\n` +
+        this.buildTaskPrompt(task, state);
+      this.executeTaskInBackground(state.goalId, task.id, guildId, task.threadId, taskPrompt);
+      return true;
+    }
+
+    // 没有保留上下文 → 重置为 pending，重新派发
+    task.status = 'pending';
+    task.branchName = undefined;
+    task.threadId = undefined;
+    task.dispatchedAt = undefined;
+    await this.saveState(state);
+    await this.notify(state.goalThreadId,
+      `Resumed task: ${task.id} - ${task.description} (re-dispatch)`,
+      'success'
+    );
     if (state.status === 'running') await this.dispatchNext(state);
     return true;
   }
