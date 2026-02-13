@@ -1,3 +1,5 @@
+import { getToken, clearToken } from './auth';
+
 const API_BASE = import.meta.env.VITE_API_URL || '';
 
 export async function apiFetch<T>(endpoint: string, init?: RequestInit): Promise<T> {
@@ -5,7 +7,16 @@ export async function apiFetch<T>(endpoint: string, init?: RequestInit): Promise
   if (init?.headers) Object.assign(headers, init.headers);
   if (init?.body) headers['Content-Type'] = 'application/json';
 
+  const token = getToken();
+  if (token) headers['Authorization'] = `Bearer ${token}`;
+
   const res = await fetch(`${API_BASE}${endpoint}`, { ...init, headers });
+
+  if (res.status === 401) {
+    clearToken();
+    window.location.href = '/login';
+    throw new Error('Unauthorized');
+  }
 
   if (!res.ok) {
     let message = `HTTP ${res.status}`;
