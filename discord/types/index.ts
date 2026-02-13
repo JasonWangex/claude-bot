@@ -15,6 +15,7 @@ export type {
   IGoalRepo,
   IGoalMetaRepo,
   IGoalTaskRepo,
+  IGoalCheckpointRepo,
   IDevLogRepo,
   IIdeaRepo,
 } from './repository.js';
@@ -305,6 +306,19 @@ export interface GoalDriveState {
   maxConcurrent: number;
 
   tasks: GoalTask[];
+}
+
+// Goal 快照检查点
+export interface GoalCheckpoint {
+  id: string;
+  goalId: string;
+  trigger: string;
+  triggerTaskId?: string;
+  reason?: string;
+  tasksSnapshot?: GoalTask[];
+  gitRef?: string;
+  changeSummary?: string;
+  createdAt: number;
 }
 
 // Thread 归档会话
