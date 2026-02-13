@@ -1,0 +1,19 @@
+{
+  "verdict": "fail",
+  "summary": "任务未实现。分支上仅有一个 feedback/t7.json 标记任务为 blocked（依赖 g7t6 未完成），但 g7t6 已在 goal 分支上完成（commit 79ac529）。t7 的实际工作（migration DROP TABLE、清理 prepared statements、移除 addMessageAndTrim）从未开始。",
+  "verifyCommands": ["npx tsc --noEmit", "npx vitest run"],
+  "issues": [
+    {
+      "severity": "error",
+      "file": "N/A",
+      "line": 0,
+      "description": "任务完全未实现：没有创建 migration 003 DROP TABLE message_history，没有清理 SessionRepository 中的 6 个 prepared statements，没有移除 addMessageAndTrim() 方法。分支 diff 仅包含 feedback/t7.json 一个文件。依赖 g7t6 已在 goal 分支完成，阻塞已解除，但实际工作未开始。"
+    },
+    {
+      "severity": "warning",
+      "file": "discord/api/routes/__tests__/tasks-interactions.test.ts",
+      "line": 65,
+      "description": "预存在的测试失败（非本分支引入）：InteractionLogRepository 测试中 role 排序断言失败（expected 'user' got 'assistant'）。此问题存在于 goal 分支，应在其他任务中修复。"
+    }
+  ]
+}
