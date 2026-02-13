@@ -100,7 +100,8 @@ export async function createSubtaskBranch(
 /**
  * 合并子任务分支到 goal 分支
  *
- * 在 goal worktree 中执行 merge 操作
+ * 在 goal worktree 中执行 merge 操作。
+ * 冲突时保留冲突状态（不自动 abort），让调用者决定是否用 AI 解决。
  */
 export async function mergeSubtaskBranch(
   goalWorktreeDir: string,
@@ -110,18 +111,37 @@ export async function mergeSubtaskBranch(
     await execGit(['merge', subtaskBranch, '--no-edit'], goalWorktreeDir, 'mergeSubtaskBranch');
     return { success: true };
   } catch (err: any) {
-    // 检查是否为合并冲突
     const msg = err.message || '';
     if (msg.includes('CONFLICT') || msg.includes('Automatic merge failed')) {
-      // 回滚 merge
-      try {
-        await execGit(['merge', '--abort'], goalWorktreeDir, 'mergeSubtaskBranch: abort');
-      } catch {
-        // merge --abort 也可能失败
-      }
+      // 不自动 abort，保留冲突状态让调用者处理
       return { success: false, conflict: true, error: msg };
     }
     return { success: false, error: msg };
+  }
+}
+
+/** 中止合并，恢复到 merge 之前的状态 */
+export async function abortMerge(cwd: string): Promise<void> {
+  try {
+    await execGit(['merge', '--abort'], cwd, 'abortMerge');
+  } catch {
+    // merge --abort 可能失败（如已经不在 merge 状态）
+  }
+}
+
+/** 获取冲突文件列表 */
+export async function getConflictFiles(cwd: string): Promise<string[]> {
+  const stdout = await execGit(['diff', '--name-only', '--diff-filter=U'], cwd, 'getConflictFiles');
+  return stdout.trim().split('\n').filter(Boolean);
+}
+
+/** 检查工作区是否仍有冲突标记 */
+export async function hasConflictMarkers(cwd: string): Promise<boolean> {
+  try {
+    await execGit(['diff', '--check'], cwd, 'hasConflictMarkers');
+    return false;
+  } catch {
+    return true;
   }
 }
 
