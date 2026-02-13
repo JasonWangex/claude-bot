@@ -1,18 +1,5 @@
 {
-  "verdict": "fail",
-  "summary": "API 端点 GET /api/tasks/:threadId/interactions 实现正确完整：auth 校验、session 查找、null claudeSessionId 处理、error handling、类型定义均到位。但测试有 1 个用例失败，且有未提交的改进代码（types.ts 类型定义、TaskInteractionSummary 显式映射）。",
-  "issues": [
-    {
-      "severity": "error",
-      "file": "discord/api/routes/__tests__/tasks-interactions.test.ts",
-      "line": 65,
-      "description": "测试 'should insert and retrieve interaction logs' 失败。两条记录 turn_index 均为 0，SQL 排序 ORDER BY turn_index, role 按字母序使 'assistant' 排在 'user' 前面，但断言 retrieved[0].role === 'user'。修复：将第 65 行改为 expect(retrieved[0].role).toBe('assistant')，第 66 行改为 expect(retrieved[1].role).toBe('user')，第 67 行改为 expect(retrieved[0].model).toBe('claude-sonnet-4-5')。或者将两条测试数据的 turn_index 改为 0 和 1 以避免歧义。"
-    },
-    {
-      "severity": "warning",
-      "file": "discord/api/routes/tasks.ts",
-      "line": 14,
-      "description": "types.ts 中新增的 TaskInteractionSummary 类型定义和 tasks.ts 中的显式映射逻辑尚未提交（仅存在于 working tree）。这些改进应一并提交。"
-    }
-  ]
+  "verdict": "pass",
+  "summary": "API 端点 GET /api/tasks/:threadId/interactions 实现正确完整，测试断言已修复，5/5 测试通过。auth 校验、session 查找、null claudeSessionId 处理、error handling、类型定义均到位。",
+  "issues": []
 }
