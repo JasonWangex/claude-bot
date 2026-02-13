@@ -1,7 +1,7 @@
 import type { Migration } from '../migrate.js';
 
 const migration: Migration = {
-  version: 6,
+  version: 7,
   name: 'drop_message_history',
 
   up(db) {

@@ -1,7 +1,7 @@
 import type { Migration } from '../migrate.js';
 
 const migration: Migration = {
-  version: 5,
+  version: 6,
   name: 'add_message_count',
 
   up(db) {

@@ -1,7 +1,7 @@
 import type { Migration } from '../migrate.js';
 
 const migration: Migration = {
-  version: 4,
+  version: 5,
   name: 'add_interaction_log',
 
   up(db) {

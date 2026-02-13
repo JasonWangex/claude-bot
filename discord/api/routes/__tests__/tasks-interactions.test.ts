@@ -9,12 +9,13 @@ import { InteractionLogRepository } from '../../../db/interaction-log-repo.js';
 import migration001 from '../../../db/migrations/001_initial_schema.js';
 import migration002 from '../../../db/migrations/002_add_goal_checkpoints.js';
 import migration003 from '../../../db/migrations/003_add_pipeline_fields.js';
-import migration004 from '../../../db/migrations/004_add_interaction_log.js';
+import migration004 from '../../../db/migrations/004_add_goal_seq.js';
+import migration005 from '../../../db/migrations/005_add_interaction_log.js';
 
 function createTestDb(): Database.Database {
   const db = new Database(':memory:');
   db.pragma('foreign_keys = ON');
-  runMigrations(db, [migration001, migration002, migration003, migration004]);
+  runMigrations(db, [migration001, migration002, migration003, migration004, migration005]);
   return db;
 }
 
