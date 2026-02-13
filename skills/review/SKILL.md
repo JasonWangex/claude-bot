@@ -18,12 +18,10 @@ version: 2.0.0
 
 ## 第一步：收集数据
 
-### Bot API 鉴权
+### API 初始化（本地免鉴权）
 
 ```bash
 API="http://127.0.0.1:3456"
-BOT_TOKEN=$(grep '^BOT_ACCESS_TOKEN=' /home/jason/projects/claude-bot/.env 2>/dev/null | cut -d= -f2-)
-AUTH="Authorization: Bearer $BOT_TOKEN"
 ```
 
 ### 1.1 从 DevLog 收集
@@ -33,11 +31,11 @@ AUTH="Authorization: Bearer $BOT_TOKEN"
 ```bash
 # 日报：查询今天的 DevLog
 TODAY=$(date +%Y-%m-%d)
-curl -s -H "$AUTH" "$API/api/devlogs?date=$TODAY"
+curl -s "$API/api/devlogs?date=$TODAY"
 
 # 周报：查询本周的 DevLog
 MONDAY=$(date -d "last monday" +%Y-%m-%d 2>/dev/null || date -v-monday +%Y-%m-%d)
-curl -s -H "$AUTH" "$API/api/devlogs?start=$MONDAY&end=$TODAY"
+curl -s "$API/api/devlogs?start=$MONDAY&end=$TODAY"
 ```
 
 对搜索到的每条 DevLog 记录，提取：
@@ -54,7 +52,7 @@ curl -s -H "$AUTH" "$API/api/devlogs?start=$MONDAY&end=$TODAY"
 
 ```bash
 # 查询 Active Goals
-curl -s -H "$AUTH" "$API/api/goals?status=Active"
+curl -s "$API/api/goals?status=Active"
 ```
 
 对每个 Active Goal 提取：

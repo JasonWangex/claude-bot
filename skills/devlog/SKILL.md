@@ -10,12 +10,10 @@ version: 3.0.0
 
 将开发成果记录到本地 SQLite 数据库（通过 Bot API）。
 
-**Bot API 鉴权**: 所有 API 调用需要 Bearer token。使用前先初始化：
+**API 初始化**（本地免鉴权）：
 
 ```bash
 API="http://127.0.0.1:3456"
-BOT_TOKEN=$(grep '^BOT_ACCESS_TOKEN=' /home/jason/projects/claude-bot/.env 2>/dev/null | cut -d= -f2-)
-AUTH="Authorization: Bearer $BOT_TOKEN"
 ```
 
 ## 信息收集
@@ -98,11 +96,7 @@ git log ${BASE}..HEAD --pretty=format:"%h %s (%ai)"
 通过 Bot API 写入 DevLog：
 
 ```bash
-API="http://127.0.0.1:3456"
-BOT_TOKEN=$(grep '^BOT_ACCESS_TOKEN=' /home/jason/projects/claude-bot/.env 2>/dev/null | cut -d= -f2-)
-AUTH="Authorization: Bearer $BOT_TOKEN"
-
-curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+curl -s -X POST -H 'Content-Type: application/json' \
   -d '{
     "name": "<功能标题（中文，10字以内）>",
     "date": "<今天日期 yyyy-MM-dd>",
@@ -121,7 +115,7 @@ curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' \
 如果需要关联 Goal，先查询 Active Goals：
 
 ```bash
-GOALS=$(curl -s -H "$AUTH" "$API/api/goals?status=Active")
+GOALS=$(curl -s "$API/api/goals?status=Active")
 ```
 
 如果 commit 内容明显属于某个 Active Goal 则填写其名称；否则留空。

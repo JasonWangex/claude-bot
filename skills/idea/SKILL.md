@@ -10,12 +10,10 @@ version: 4.0.0
 
 ## API 初始化
 
-所有操作通过 Bot HTTP API 完成：
+所有操作通过 Bot HTTP API 完成（本地免鉴权）：
 
 ```bash
 API="http://127.0.0.1:3456"
-BOT_TOKEN=$(grep '^BOT_ACCESS_TOKEN=' /home/jason/projects/claude-bot/.env 2>/dev/null | cut -d= -f2-)
-AUTH="Authorization: Bearer $BOT_TOKEN"
 ```
 
 ## 模式判断
@@ -24,14 +22,6 @@ AUTH="Authorization: Bearer $BOT_TOKEN"
 
 - **不为空** → 记录模式（写入新 Idea）
 - **为空** → 列表模式（查看并推进已有 Idea）
-
-**Bot API 鉴权**:
-
-```bash
-API="http://127.0.0.1:3456"
-BOT_TOKEN=$(grep '^BOT_ACCESS_TOKEN=' /home/jason/projects/claude-bot/.env 2>/dev/null | cut -d= -f2-)
-AUTH="Authorization: Bearer $BOT_TOKEN"
-```
 
 ---
 
@@ -42,7 +32,7 @@ AUTH="Authorization: Bearer $BOT_TOKEN"
 **不讨论、不确认、不追问**，直接调用 Bot API 写入：
 
 ```bash
-curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+curl -s -X POST -H 'Content-Type: application/json' \
   -d '{
     "name": "{{SKILL_ARGS}}",
     "project": "<项目名>",
@@ -64,7 +54,7 @@ curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' \
 ### 1. 查询未开发的 Ideas
 
 ```bash
-curl -s -H "$AUTH" "$API/api/ideas?project=<项目名>&status=Idea"
+curl -s "$API/api/ideas?project=<项目名>&status=Idea"
 ```
 
 只显示当前项目的 Ideas（根据 cwd 判断 Project）。
@@ -97,7 +87,7 @@ curl -s -H "$AUTH" "$API/api/ideas?project=<项目名>&status=Idea"
 #### 3.1 更新 Idea 状态
 
 ```bash
-curl -s -X PATCH -H "$AUTH" -H 'Content-Type: application/json' \
+curl -s -X PATCH -H 'Content-Type: application/json' \
   -d '{"status": "Processing"}' \
   "$API/api/ideas/<idea-id>"
 ```
@@ -116,7 +106,7 @@ curl -s -X PATCH -H "$AUTH" -H 'Content-Type: application/json' \
 **查找 root task：**
 
 ```bash
-curl -s -H "$AUTH" $API/api/tasks
+curl -s $API/api/tasks
 ```
 
 从返回的 task 列表中：
@@ -127,7 +117,7 @@ curl -s -H "$AUTH" $API/api/tasks
 **Fork root task：**
 
 ```bash
-curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+curl -s -X POST -H 'Content-Type: application/json' \
   -d '{"branch": "<生成的分支名>"}' $API/api/tasks/<ROOT_TASK_ID>/fork
 ```
 
@@ -136,7 +126,7 @@ curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' \
 **发送任务描述：**
 
 ```bash
-curl -s -X POST -H "$AUTH" -H 'Content-Type: application/json' \
+curl -s -X POST -H 'Content-Type: application/json' \
   -d '{"text": "<Idea 的 Name>"}' $API/api/tasks/<FORK_TASK_ID>/message
 ```
 
