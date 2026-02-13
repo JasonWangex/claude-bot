@@ -88,3 +88,10 @@ export function getAuthorizedGuildId(): string | undefined {
 export function getGeneralChannelId(): string | undefined {
   return process.env.GENERAL_CHANNEL_ID || undefined;
 }
+
+/**
+ * 获取 Goal Log Channel ID（用于 pipeline 执行日志的独立输出）
+ */
+export function getGoalLogChannelId(): string | undefined {
+  return process.env.GOAL_LOG_CHANNEL_ID || undefined;
+}

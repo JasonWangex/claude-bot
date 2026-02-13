@@ -147,6 +147,13 @@ setup_discord() {
   echo ""
   prompt_value GENERAL_CHANNEL_ID "General Channel ID" ""
 
+  echo ""
+  echo -e "  ${CYAN}Goal Log Channel ID${NC} (可选)"
+  echo "  Goal Pipeline 日志独立输出频道。配置后 pipeline 执行日志将单独发到此频道。"
+  echo "  获取: 同上开发者模式 → 右键频道 → 复制频道 ID"
+  echo ""
+  prompt_value GOAL_LOG_CHANNEL_ID "Goal Log Channel ID" ""
+
   ok "Discord configuration done"
 }
 
@@ -228,6 +235,7 @@ DISCORD_APPLICATION_ID=${DISCORD_APPLICATION_ID}
 BOT_ACCESS_TOKEN=${BOT_ACCESS_TOKEN}
 AUTHORIZED_GUILD_ID=${AUTHORIZED_GUILD_ID:-}
 GENERAL_CHANNEL_ID=${GENERAL_CHANNEL_ID:-}
+GOAL_LOG_CHANNEL_ID=${GOAL_LOG_CHANNEL_ID:-}
 DEFAULT_WORK_DIR=${DEFAULT_WORK_DIR}
 PROJECTS_ROOT=${PROJECTS_ROOT}
 WORKTREES_DIR=${WORKTREES_DIR}
@@ -510,6 +518,7 @@ case "${1:-init}" in
     BOT_ACCESS_TOKEN="${BOT_ACCESS_TOKEN:-}"
     AUTHORIZED_GUILD_ID="${AUTHORIZED_GUILD_ID:-}"
     GENERAL_CHANNEL_ID="${GENERAL_CHANNEL_ID:-}"
+    GOAL_LOG_CHANNEL_ID="${GOAL_LOG_CHANNEL_ID:-}"
     DEFAULT_WORK_DIR="${DEFAULT_WORK_DIR:-$HOME/assistant}"
     PROJECTS_ROOT="${PROJECTS_ROOT:-$HOME/projects}"
     WORKTREES_DIR="${WORKTREES_DIR:-$HOME/projects/worktrees}"
