@@ -264,8 +264,8 @@ export interface DiscordBotConfig {
 // ========== Goal Orchestrator ==========
 
 export type GoalDriveStatus = 'running' | 'paused' | 'completed' | 'failed';
-export type GoalTaskStatus = 'pending' | 'dispatched' | 'running' | 'completed' | 'failed' | 'blocked' | 'skipped';
-export type GoalTaskType = '代码' | '手动' | '调研';
+export type GoalTaskStatus = 'pending' | 'dispatched' | 'running' | 'completed' | 'failed' | 'blocked' | 'blocked_feedback' | 'paused' | 'cancelled' | 'skipped';
+export type GoalTaskType = '代码' | '手动' | '调研' | '占位';
 
 export interface GoalTask {
   id: string;

@@ -164,11 +164,11 @@ export interface GoalTaskRow {
   /** 任务描述 */
   description: string;
   /** 任务类型 */
-  type: '代码' | '手动' | '调研';
+  type: '代码' | '手动' | '调研' | '占位';
   /** 阶段编号 */
   phase: number | null;
   /** 执行状态 */
-  status: 'pending' | 'dispatched' | 'running' | 'completed' | 'failed' | 'blocked' | 'skipped';
+  status: 'pending' | 'dispatched' | 'running' | 'completed' | 'failed' | 'blocked' | 'blocked_feedback' | 'paused' | 'cancelled' | 'skipped';
   /** git 分支名 */
   branch_name: string | null;
   /** 对应的 Discord Thread ID */
