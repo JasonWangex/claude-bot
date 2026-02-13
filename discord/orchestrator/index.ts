@@ -13,9 +13,10 @@ import type { StateManager } from '../bot/state.js';
 import type { ClaudeClient } from '../claude/client.js';
 import type { MessageHandler } from '../bot/handlers.js';
 import { type MessageQueue, EmbedColors, type EmbedColor } from '../bot/message-queue.js';
-import type { DiscordBotConfig, GoalDriveState, GoalTask } from '../types/index.js';
+import type { DiscordBotConfig, GoalDriveState, GoalTask, GoalTaskFeedback } from '../types/index.js';
 import type { IGoalRepo } from '../types/repository.js';
-import { stat } from 'fs/promises';
+import { stat, readFile } from 'fs/promises';
+import { join } from 'path';
 import { getAuthorizedGuildId } from '../utils/env.js';
 import { generateTopicTitle } from '../utils/llm.js';
 import { execGit, resolveMainWorktree } from './git-ops.js';
@@ -452,6 +453,23 @@ export class GoalOrchestrator {
       if (!state) return;
       const task = state.tasks.find(t => t.id === taskId);
       if (!task) return;
+
+      // 检测 feedback 文件：worktree/feedback/<taskId>.json
+      const feedback = await this.checkFeedbackFile(state, task);
+      if (feedback) {
+        task.status = 'blocked_feedback';
+        task.feedback = feedback;
+        await this.saveState(state);
+        await this.notify(state.goalThreadId,
+          `**Feedback received:** ${task.id} - ${task.description}\n` +
+          `Type: ${feedback.type}\n` +
+          `Reason: ${feedback.reason}` +
+          (feedback.details ? `\nDetails: ${feedback.details}` : ''),
+          'warning'
+        );
+        return;
+      }
+
       task.status = 'completed';
       task.completedAt = Date.now();
       await this.saveState(state);
@@ -477,6 +495,43 @@ export class GoalOrchestrator {
       );
       if (state.status === 'running') await this.dispatchNext(state);
     });
+  }
+
+  /**
+   * 检测子任务 worktree 下的 feedback/<taskId>.json
+   * 存在且合法则返回 feedback 内容，否则返回 null
+   */
+  private async checkFeedbackFile(state: GoalDriveState, task: GoalTask): Promise<GoalTaskFeedback | null> {
+    if (!task.branchName) return null;
+
+    try {
+      const stdout = await execGit(
+        ['worktree', 'list', '--porcelain'],
+        state.baseCwd,
+        `checkFeedbackFile(${task.id}): list worktrees`
+      );
+      const subtaskDir = this.findWorktreeDir(stdout, task.branchName);
+      if (!subtaskDir) return null;
+
+      const feedbackPath = join(subtaskDir, 'feedback', `${task.id}.json`);
+      const content = await readFile(feedbackPath, 'utf-8');
+      const parsed = JSON.parse(content);
+
+      // 校验必须字段
+      if (!parsed.type || !parsed.reason) {
+        logger.warn(`[Orchestrator] Invalid feedback file for ${task.id}: missing type or reason`);
+        return null;
+      }
+
+      return {
+        type: parsed.type,
+        reason: parsed.reason,
+        details: parsed.details,
+      };
+    } catch {
+      // 文件不存在或读取/解析失败 → 无 feedback
+      return null;
+    }
   }
 
   private async mergeAndCleanup(state: GoalDriveState, task: GoalTask): Promise<void> {

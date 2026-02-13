@@ -267,6 +267,13 @@ export type GoalDriveStatus = 'running' | 'paused' | 'completed' | 'failed';
 export type GoalTaskStatus = 'pending' | 'dispatched' | 'running' | 'completed' | 'failed' | 'blocked' | 'blocked_feedback' | 'paused' | 'cancelled' | 'skipped';
 export type GoalTaskType = '代码' | '手动' | '调研' | '占位';
 
+/** Feedback 文件内容结构（feedback/<taskId>.json） */
+export interface GoalTaskFeedback {
+  type: string;        // e.g. 'needs_revision' | 'question' | 'blocked'
+  reason: string;      // 简短原因
+  details?: string;    // 详细说明
+}
+
 export interface GoalTask {
   id: string;
   description: string;
@@ -283,6 +290,7 @@ export interface GoalTask {
   error?: string;
   merged?: boolean;
   notifiedBlocked?: boolean;
+  feedback?: GoalTaskFeedback; // 来自 feedback/<taskId>.json 的反馈内容
 }
 
 export interface GoalDriveState {
