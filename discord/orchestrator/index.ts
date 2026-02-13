@@ -28,6 +28,7 @@ import {
   hasUncommittedChanges,
   autoCommit,
 } from './goal-branch.js';
+import { resolveConflictsWithAI } from './conflict-resolver.js';
 import { logger } from '../utils/logger.js';
 
 interface OrchestratorDeps {
@@ -503,15 +504,55 @@ export class GoalOrchestrator {
           }
         }
       } else if (result.conflict) {
+        // 尝试 AI 自动解决冲突
         await this.notify(state.goalThreadId,
-          `Merge conflict: \`${branchName}\` → \`${state.goalBranch}\`\n` +
-          `Manual resolution needed.\n` +
-          `Reply "done ${task.id}" when resolved.`,
-          'error'
+          `Merge conflict: \`${branchName}\` → \`${state.goalBranch}\`, trying AI resolution...`,
+          'warning'
         );
-        task.status = 'blocked';
-        task.error = 'merge conflict';
-        saveState(state);
+
+        const resolution = await resolveConflictsWithAI(
+          this.deps.claudeClient,
+          goalWorktreeDir,
+          branchName,
+          task.description,
+        );
+
+        if (resolution.resolved) {
+          task.merged = true;
+          saveState(state);
+          await this.notify(state.goalThreadId,
+            `AI resolved conflict and merged: \`${branchName}\` → \`${state.goalBranch}\``,
+            'success'
+          );
+
+          if (subtaskDir) {
+            await cleanupSubtask(state.baseCwd, subtaskDir, branchName);
+          }
+
+          if (task.threadId) {
+            const guildId = this.getGuildId();
+            if (guildId) {
+              this.deps.stateManager.archiveSession(guildId, task.threadId, undefined, 'merged');
+              try {
+                const channel = await this.deps.client.channels.fetch(task.threadId);
+                if (channel && 'delete' in channel) {
+                  await (channel as any).delete('Task merged and cleaned up').catch(() => {});
+                }
+              } catch { /* ignore */ }
+            }
+          }
+        } else {
+          // AI 无法解决，fallback 到人工干预
+          await this.notify(state.goalThreadId,
+            `AI could not resolve conflict: \`${branchName}\` → \`${state.goalBranch}\`\n` +
+            `Reason: ${resolution.error}\n` +
+            `Manual resolution needed. Reply "done ${task.id}" when resolved.`,
+            'error'
+          );
+          task.status = 'blocked';
+          task.error = 'merge conflict (AI resolution failed)';
+          saveState(state);
+        }
       } else {
         await this.notify(state.goalThreadId, `Merge failed: ${branchName}\nError: ${result.error}`, 'error');
       }
