@@ -45,7 +45,7 @@ describe('InteractionLogRepository', () => {
       },
       {
         session_id: sessionId,
-        turn_index: 0,
+        turn_index: 1,
         role: 'assistant' as const,
         content_type: 'text',
         summary_text: 'Sure! How can I help?',
