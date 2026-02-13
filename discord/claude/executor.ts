@@ -538,6 +538,10 @@ export class ClaudeExecutor {
       args.push('--model', options.model);
     }
 
+    if (options.appendSystemPrompt) {
+      args.push('--append-system-prompt', options.appendSystemPrompt);
+    }
+
     return args;
   }
 
