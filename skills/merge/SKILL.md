@@ -3,7 +3,7 @@ name: merge
 description: >
   合并 worktree 分支到主分支并清理。检查未提交代码、合并分支、删除 worktree、
   删除 Discord Thread。合并成功后自动写入 Dev Log 到 SQLite。
-version: 3.0.0
+version: 4.0.0
 ---
 
 # Merge & Cleanup - 分支合并与清理
@@ -90,24 +90,19 @@ echo "- Discord Thread: 已归档"
 
 **devlog 写入成功后，执行此步骤。**
 
-通过 Bot API 查询 Processing 状态的 Ideas：
+查询 Processing 状态的 Ideas：
 
-```bash
-API="http://127.0.0.1:3456"
-
-PROJECT="<项目名>"
-curl -s "$API/api/ideas?project=$PROJECT&status=Processing"
+```
+bot_list_ideas(project="<项目名>", status="Processing")
 ```
 
 如果找到匹配的记录（根据分支名或任务描述判断关联性），更新其状态为 Done：
 
-```bash
-curl -s -X PATCH -H 'Content-Type: application/json' \
-  -d '{"status": "Done"}' \
-  "$API/api/ideas/<idea-id>"
+```
+bot_update_idea(idea_id="<id>", status="Done")
 ```
 
-如果没找到 Processing 状态的 Idea，跳过此步骤（不影响 merge 流程）。
+如果没找到 Processing 状态的 Idea，跳过此步骤。
 
 ## 安全规则
 

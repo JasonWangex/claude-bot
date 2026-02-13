@@ -14,6 +14,17 @@ fi
 
 mkdir -p "$SKILLS_DST"
 
+# 清理指向本项目但源目录已不存在的旧符号链接
+for link in "$SKILLS_DST"/*/; do
+  [ -L "${link%/}" ] || continue
+  link_target="$(readlink -f "${link%/}" 2>/dev/null || true)"
+  # 只清理指向本项目 skills/ 的链接
+  if [[ "$link_target" == "$SKILLS_SRC"/* ]] && [ ! -d "$link_target" ]; then
+    rm -f "${link%/}"
+    echo "  $(basename "${link%/}"): removed (source deleted)"
+  fi
+done
+
 installed=0
 for skill_dir in "$SKILLS_SRC"/*/; do
   [ -d "$skill_dir" ] || continue

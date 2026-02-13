@@ -15,6 +15,6 @@
     "rootDir": ".",
     "lib": ["ES2022"]
   },
-  "include": ["discord/**/*", "monitor/**/*", "scripts/**/*"],
+  "include": ["discord/**/*", "monitor/**/*", "scripts/**/*", "mcp/**/*"],
   "exclude": ["node_modules", "dist"]
 }

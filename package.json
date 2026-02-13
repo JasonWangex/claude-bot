@@ -7,10 +7,13 @@
     "dev": "tsx watch discord/index.ts",
     "dev:monitor": "tsx watch monitor/index.ts",
     "start": "NODE_ENV=production tsx discord/index.ts",
+    "mcp": "tsx mcp/server.ts",
+    "mcp:dev": "tsx watch mcp/server.ts",
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.26.0",
     "ali-oss": "^6.23.0",
     "better-sqlite3": "^12.6.2",
     "chokidar": "^5.0.0",
