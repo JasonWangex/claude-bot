@@ -1,46 +1,46 @@
 {
   "verdict": "fail",
-  "summary": "TaskRepo 替代 GoalTaskRepo 的核心重构基本正确，但存在 5 个新 TypeScript 编译错误：3 处 orchestrator 中属性名未从 goalTaskRepo 更名为 taskRepo，2 处 TaskRow.status(string) 到 TaskStatus(union) 的类型不兼容。这些错误会导致运行时 replan/approval 流程调用失败。",
+  "summary": "TaskRepo 替代 GoalTaskRepo 的核心重构逻辑正确，测试全部通过(115 tests)。但已提交的代码引入了 5 个新 TypeScript 编译错误：3 处 orchestrator 中传入 HandleReplanDeps/ApplyChangesDeps 的属性名仍为 'goalTaskRepo' 而接口已改为 'taskRepo'；2 处 status 类型从 string 无法赋值给 TaskStatus。工作目录有未提交的修复（goal-repo.ts、task-repo.ts、orchestrator/index.ts），应用后 TS 错误回到基线水平(8个均为预先存在)。需要将这些修复提交。",
   "verifyCommands": [
-    "/home/jason/projects/claude-bot/node_modules/.bin/tsc --noEmit 2>&1 | grep -vE '(Cannot find module|Cannot find name|Cannot find namespace|implicitly has an .any. type|not exist on type .ImportMeta.|lib. compiler option)'",
-    "npx vitest run"
+    "pnpm tsc --noEmit",
+    "pnpm vitest run"
   ],
   "issues": [
     {
       "severity": "error",
       "file": "discord/orchestrator/index.ts",
       "line": 1920,
-      "description": "属性名 'goalTaskRepo' 在 HandleReplanDeps 中不存在，应改为 'taskRepo'。replanner.ts 中 HandleReplanDeps 继承自 ApplyChangesDeps，后者定义了 'taskRepo' 属性。导致 triggerReplan() 运行时 taskRepo 为 undefined。"
+      "description": "属性名 'goalTaskRepo' 在 HandleReplanDeps 中不存在，应改为 'taskRepo'。未提交的工作目录修复已存在，需要 commit。"
     },
     {
       "severity": "error",
       "file": "discord/orchestrator/index.ts",
       "line": 1963,
-      "description": "属性名 'goalTaskRepo' 在 ApplyChangesDeps 中不存在，应改为 'taskRepo'。导致 approveReplan() 运行时 taskRepo 为 undefined。"
+      "description": "属性名 'goalTaskRepo' 在 ApplyChangesDeps 中不存在，应改为 'taskRepo'。未提交的工作目录修复已存在，需要 commit。"
     },
     {
       "severity": "error",
       "file": "discord/orchestrator/index.ts",
       "line": 2030,
-      "description": "属性名 'goalTaskRepo' 在 ApplyChangesDeps 中不存在，应改为 'taskRepo'。导致 approveReplanWithModifications() 运行时 taskRepo 为 undefined。"
+      "description": "属性名 'goalTaskRepo' 在 ApplyChangesDeps 中不存在，应改为 'taskRepo'。未提交的工作目录修复已存在，需要 commit。"
     },
     {
       "severity": "error",
       "file": "discord/db/repo/goal-repo.ts",
-      "line": 247,
-      "description": "TaskRow.status 类型为 string，但 Task.status 要求 TaskStatus 联合类型。需要添加 'as TaskStatus' 类型断言或修改 TaskRow.status 的类型定义。"
+      "line": 244,
+      "description": "rowsToGoalDriveState() 中 t.status (string) 赋值给 Task.status (TaskStatus) 类型不兼容。需要 'as TaskStatus' 断言。未提交的工作目录修复已存在。"
     },
     {
       "severity": "error",
       "file": "discord/db/repo/task-repo.ts",
       "line": 289,
-      "description": "TaskRow.status 类型为 string，但 Task.status 要求 TaskStatus 联合类型。同上，需要类型断言或修改 TaskRow 类型定义。"
+      "description": "rowToTask() 中 row.status (string) 赋值给 Task.status (TaskStatus) 类型不兼容。需要 'as TaskStatus' 断言。未提交的工作目录修复已存在。"
     },
     {
       "severity": "warning",
       "file": "discord/types/db.ts",
       "line": 426,
-      "description": "TaskRow.status 定义为 string 而非具体的 TaskStatus 联合类型。建议改为与 GoalTaskRow.status 一样使用字面量联合类型，从根本上解决上面两个类型不兼容问题。"
+      "description": "TaskRow.status 定义为 string 而非 TaskStatus 联合类型。建议从根本上修改类型定义，避免各处都需要类型断言。"
     }
   ]
 }
