@@ -1,6 +1,5 @@
 /**
- * Task 管理命令: /task, /close, /info, /cd
- * /task — 创建 Category + Text Channel
+ * Task 管理命令: /close, /info, /cd
  * /close — 关闭当前 task channel 并清理 worktree/分支
  * /info — 查看当前线程详情
  * /cd — 切换工作目录
@@ -35,19 +34,6 @@ export const MODEL_OPTIONS = [
 
 export const taskCommands = [
   new SlashCommandBuilder()
-    .setName('task')
-    .setDescription('Create a new task (Text Channel under Category)')
-    .addStringOption(opt =>
-      opt.setName('name').setDescription('Task name').setRequired(true)
-    )
-    .addStringOption(opt =>
-      opt.setName('path').setDescription('Custom working directory path').setRequired(false)
-    )
-    .addStringOption(opt =>
-      opt.setName('category').setDescription('Category name (defaults to repo name)').setRequired(false)
-    ),
-
-  new SlashCommandBuilder()
     .setName('close')
     .setDescription('Close current task channel and cleanup worktree/branch')
     .addBooleanOption(opt =>
@@ -71,116 +57,12 @@ export async function handleTaskCommand(
   deps: CommandDeps,
 ): Promise<void> {
   switch (interaction.commandName) {
-    case 'task':
-      return handleTask(interaction, deps);
     case 'close':
       return handleClose(interaction, deps);
     case 'info':
       return handleInfo(interaction, deps);
     case 'cd':
       return handleCd(interaction, deps);
-  }
-}
-
-// ========== /task ==========
-
-async function handleTask(
-  interaction: ChatInputCommandInteraction,
-  deps: CommandDeps,
-): Promise<void> {
-  if (!requireAuth(interaction)) return;
-
-  const guildId = interaction.guildId!;
-  const { stateManager, client, config } = deps;
-
-  const taskName = interaction.options.getString('name', true);
-  const customCwd = interaction.options.getString('path');
-  const categoryName = interaction.options.getString('category');
-
-  await interaction.deferReply();
-
-  try {
-    // 解析工作目录
-    let cwd: string;
-    let dirCreated = false;
-
-    if (customCwd) {
-      cwd = resolveCustomPath(customCwd, stateManager.getGuildDefaultCwd(guildId));
-      const dirResult = await ensureProjectDir(cwd, config.autoCreateProjectDir);
-      dirCreated = dirResult.created;
-
-      if (!dirResult.exists && !config.autoCreateProjectDir) {
-        await interaction.editReply(
-          `Directory does not exist: \`${cwd}\`\n\n` +
-          `Create it first, or set AUTO_CREATE_PROJECT_DIR=true.`
-        );
-        return;
-      }
-    } else {
-      const occupiedPaths = stateManager.getOccupiedWorkDirs(guildId);
-      cwd = await resolveTopicWorkDir(
-        taskName,
-        config.projectsRoot,
-        config.topicDirNaming,
-        occupiedPaths,
-      );
-      const dirResult = await ensureProjectDir(cwd, config.autoCreateProjectDir);
-      dirCreated = dirResult.created;
-
-      if (!dirResult.exists && !config.autoCreateProjectDir) {
-        await interaction.editReply(
-          `Resolved directory does not exist: \`${cwd}\`\n\n` +
-          `Use \`/task ${taskName} <path>\` to specify manually,\n` +
-          `or set AUTO_CREATE_PROJECT_DIR=true.`
-        );
-        return;
-      }
-    }
-
-    // 查找或创建 Category
-    const guild = await client.guilds.fetch(guildId);
-    const targetCategoryName = categoryName || getCategoryNameFromCwd(cwd);
-    let category = guild.channels.cache.find(
-      c => c.type === ChannelType.GuildCategory && c.name === targetCategoryName,
-    );
-
-    if (!category) {
-      category = await guild.channels.create({
-        name: targetCategoryName,
-        type: ChannelType.GuildCategory,
-        reason: `Auto-created by Claude Bot for project: ${targetCategoryName}`,
-      });
-      logger.info(`Created Category: ${targetCategoryName}`);
-    }
-
-    // 创建 Text Channel (under Category)
-    const textChannel = await guild.channels.create({
-      name: taskName.slice(0, 100),
-      type: ChannelType.GuildText,
-      parent: category.id,
-      reason: `Task: ${taskName}`,
-    });
-
-    // 发送初始消息
-    const initEmbed = new EmbedBuilder()
-      .setColor(EmbedColors.PURPLE)
-      .setDescription(`[task] Task created: \`${taskName}\`\nWorking directory: \`${cwd}\`${dirCreated ? '\nDirectory auto-created' : ''}`.slice(0, 4096));
-    await textChannel.send({ embeds: [initEmbed] });
-
-    // 初始化 Session
-    stateManager.getOrCreateSession(guildId, textChannel.id, {
-      name: taskName,
-      cwd,
-    });
-
-    await interaction.editReply(
-      `**Task created:** ${taskName}\n` +
-      `Channel: <#${textChannel.id}>\n` +
-      `Working directory: \`${cwd}\`${dirCreated ? '\nDirectory auto-created' : ''}`
-    );
-  } catch (error: any) {
-    logger.error('Failed to create task:', error);
-    await interaction.editReply(`Failed to create task: ${error.message}`);
   }
 }
 

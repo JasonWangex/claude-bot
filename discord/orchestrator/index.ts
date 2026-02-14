@@ -47,7 +47,7 @@ import {
   buildRollbackConfirmButtons,
   buildTaskFailedButtons,
 } from './goal-buttons.js';
-import type { IGoalMetaRepo, IGoalTaskRepo, IGoalCheckpointRepo } from '../types/repository.js';
+import type { IGoalMetaRepo, ITaskRepo, IGoalCheckpointRepo } from '../types/repository.js';
 
 interface OrchestratorDeps {
   stateManager: StateManager;
@@ -58,7 +58,7 @@ interface OrchestratorDeps {
   config: DiscordBotConfig;
   goalRepo: IGoalRepo;
   goalMetaRepo: IGoalMetaRepo;
-  goalTaskRepo: IGoalTaskRepo;
+  taskRepo: ITaskRepo;
   checkpointRepo: IGoalCheckpointRepo;
 }
 
@@ -1917,7 +1917,7 @@ export class GoalOrchestrator {
 
       // 4. 分级自治处理
       const handleResult = await handleReplanByImpact(state, result, {
-        goalTaskRepo: this.deps.goalTaskRepo,
+        goalTaskRepo: this.deps.taskRepo,
         goalMetaRepo: this.deps.goalMetaRepo,
         checkpointRepo: this.deps.checkpointRepo,
         notify: (threadId, message, type, options) => this.notify(threadId, message, type, options),
@@ -1960,7 +1960,7 @@ export class GoalOrchestrator {
 
     // 应用变更
     const applyResult = await applyChanges(state, pending.changes as ReplanChange[], {
-      goalTaskRepo: this.deps.goalTaskRepo,
+      goalTaskRepo: this.deps.taskRepo,
       goalMetaRepo: this.deps.goalMetaRepo,
     });
 
@@ -2027,7 +2027,7 @@ export class GoalOrchestrator {
 
     // 应用修改后的变更
     const applyResult = await applyChanges(state, modifiedChanges, {
-      goalTaskRepo: this.deps.goalTaskRepo,
+      goalTaskRepo: this.deps.taskRepo,
       goalMetaRepo: this.deps.goalMetaRepo,
     });
 
@@ -2371,7 +2371,7 @@ export class GoalOrchestrator {
       }
 
       // 持久化
-      await this.deps.goalTaskRepo.saveAll(state.goalId, snapshotTasks);
+      await this.deps.taskRepo.saveAll(snapshotTasks, state.goalId);
       await this.saveState(state);
 
       // 更新 Goal body

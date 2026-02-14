@@ -8,7 +8,7 @@
  */
 
 import type { GoalDriveState, GoalTask, GoalTaskFeedback } from '../types/index.js';
-import type { Goal, IGoalTaskRepo, IGoalMetaRepo, IGoalCheckpointRepo } from '../types/repository.js';
+import type { Goal, ITaskRepo, IGoalMetaRepo, IGoalCheckpointRepo } from '../types/repository.js';
 import { chatCompletion } from '../utils/llm.js';
 import { execGit } from './git-ops.js';
 import { logger } from '../utils/logger.js';
@@ -382,7 +382,7 @@ export function updateGoalBodyWithTasks(body: string | null, tasks: GoalTask[]):
 
 /** applyChanges 的依赖参数 */
 export interface ApplyChangesDeps {
-  goalTaskRepo: IGoalTaskRepo;
+  taskRepo: ITaskRepo;
   goalMetaRepo: IGoalMetaRepo;
 }
 
@@ -415,8 +415,8 @@ export async function applyChanges(
   state.tasks = result.updatedTasks;
   state.updatedAt = Date.now();
 
-  // 4. 持久化到 GoalTaskRepo
-  await deps.goalTaskRepo.saveAll(state.goalId, result.updatedTasks);
+  // 4. 持久化到 TaskRepo
+  await deps.taskRepo.saveAll(result.updatedTasks, state.goalId);
 
   // 5. 更新 Goal body
   const goalMeta = await deps.goalMetaRepo.get(state.goalId);

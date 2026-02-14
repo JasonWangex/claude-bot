@@ -20,7 +20,7 @@ import { GoalOrchestrator } from '../orchestrator/index.js';
 import { parseGoalButtonId, GOAL_MODAL_PREFIX, buildApproveWithModsModal } from '../orchestrator/goal-buttons.js';
 import { parseIdeaButtonId, buildIdeaAdvanceChoiceButtons } from './idea-buttons.js';
 import { initDb, getDb, closeDb } from '../db/index.js';
-import { GoalRepo, GoalTaskRepo, CheckpointRepo } from '../db/repo/index.js';
+import { GoalRepo, TaskRepo, CheckpointRepo } from '../db/repo/index.js';
 import { GoalMetaRepo } from '../db/goal-meta-repo.js';
 import { IdeaRepository } from '../db/idea-repo.js';
 import { SessionRepository } from '../db/repo/session-repo.js';
@@ -738,7 +738,7 @@ export class DiscordBot {
     const db = getDb();
     const goalRepo = new GoalRepo(db);
     const goalMetaRepo = new GoalMetaRepo(db);
-    const goalTaskRepo = new GoalTaskRepo(db);
+    const taskRepo = new TaskRepo(db);
     const checkpointRepo = new CheckpointRepo(db);
     const orchestrator = new GoalOrchestrator({
       stateManager: this.stateManager,
@@ -749,7 +749,7 @@ export class DiscordBot {
       config: this.config,
       goalRepo,
       goalMetaRepo,
-      goalTaskRepo,
+      taskRepo,
       checkpointRepo,
     });
     this.orchestrator = orchestrator;

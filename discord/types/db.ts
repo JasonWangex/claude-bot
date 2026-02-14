@@ -150,8 +150,10 @@ export interface GoalRow {
 // ================================================================
 // goal_tasks 表 — 对应 GoalTask 接口
 // @deprecated - 已重命名为 TaskRow（migration 010）
+// Use TaskRow instead
 // ================================================================
 
+/** @deprecated Use TaskRow from migration 010 */
 export interface GoalTaskRow {
   /** 任务 ID，如 "t1", "t2" — Goal 内唯一。对外命名时带 goal seq 前缀如 "g2t1" */
   id: string;
@@ -206,8 +208,10 @@ export interface GoalTaskRow {
 // ================================================================
 // goal_task_deps 表 — GoalTask.depends 多对多关系
 // @deprecated - 已重命名为 TaskDepRow（migration 010）
+// Use TaskDepRow instead
 // ================================================================
 
+/** @deprecated Use TaskDepRow from migration 010 */
 export interface GoalTaskDepRow {
   /** 任务 ID (FOREIGN KEY → goal_tasks) */
   task_id: string;

@@ -14,6 +14,7 @@ export type {
   IGuildRepo,
   IGoalRepo,
   IGoalMetaRepo,
+  ITaskRepo,
   IGoalTaskRepo,
   IGoalCheckpointRepo,
   IDevLogRepo,
@@ -280,33 +281,34 @@ export interface DiscordBotConfig {
 // ========== Goal Orchestrator ==========
 
 export type GoalDriveStatus = 'running' | 'paused' | 'completed' | 'failed';
-export type GoalTaskStatus = 'pending' | 'dispatched' | 'running' | 'completed' | 'failed' | 'blocked' | 'blocked_feedback' | 'paused' | 'cancelled' | 'skipped';
-export type GoalTaskType = '代码' | '手动' | '调研' | '占位';
+export type TaskStatus = 'pending' | 'dispatched' | 'running' | 'completed' | 'failed' | 'blocked' | 'blocked_feedback' | 'paused' | 'cancelled' | 'skipped';
+export type TaskType = '代码' | '手动' | '调研' | '占位';
 
 /** Feedback 文件内容结构（feedback/<taskId>.json） */
-export interface GoalTaskFeedback {
+export interface TaskFeedback {
   type: string;        // e.g. 'needs_revision' | 'question' | 'blocked'
   reason: string;      // 简短原因
   details?: string;    // 详细说明
 }
 
-export type GoalTaskComplexity = 'simple' | 'complex';
-export type GoalPipelinePhase = 'plan' | 'execute' | 'audit' | 'fix';
+export type TaskComplexity = 'simple' | 'complex';
+export type PipelinePhase = 'plan' | 'execute' | 'audit' | 'fix';
 
-export interface GoalTask {
+export interface Task {
   id: string;
+  goalId?: string | null;  // 关联 Goal（null 表示独立任务）
   description: string;
-  type: GoalTaskType;
+  type: TaskType;
   depends: string[];
   phase?: number;
 
   // 多模型流水线
-  complexity?: GoalTaskComplexity;   // 代码任务复杂度，Goal 创建时标注
-  pipelinePhase?: GoalPipelinePhase; // 当前阶段: 'plan' | 'execute' | 'audit' | 'fix'
-  auditRetries?: number;             // audit 重试计数（最多 2）
+  complexity?: TaskComplexity;   // 代码任务复杂度，Goal 创建时标注
+  pipelinePhase?: PipelinePhase; // 当前阶段: 'plan' | 'execute' | 'audit' | 'fix'
+  auditRetries?: number;         // audit 重试计数（最多 2）
 
   // 执行状态
-  status: GoalTaskStatus;
+  status: TaskStatus;
   branchName?: string;
   threadId?: string;          // 对应的 Discord Thread ID
   dispatchedAt?: number;
@@ -314,7 +316,7 @@ export interface GoalTask {
   error?: string;
   merged?: boolean;
   notifiedBlocked?: boolean;
-  feedback?: GoalTaskFeedback; // 来自 feedback/<taskId>.json 的反馈内容
+  feedback?: TaskFeedback;    // 来自 feedback/<taskId>.json 的反馈内容
 
   // Token/cost/time tracking（pipeline 各阶段累加）
   tokensIn?: number;
@@ -324,6 +326,20 @@ export interface GoalTask {
   costUsd?: number;
   durationMs?: number;
 }
+
+// ========== Deprecated aliases ==========
+/** @deprecated Use TaskStatus */
+export type GoalTaskStatus = TaskStatus;
+/** @deprecated Use TaskType */
+export type GoalTaskType = TaskType;
+/** @deprecated Use TaskFeedback */
+export type GoalTaskFeedback = TaskFeedback;
+/** @deprecated Use TaskComplexity */
+export type GoalTaskComplexity = TaskComplexity;
+/** @deprecated Use PipelinePhase */
+export type GoalPipelinePhase = PipelinePhase;
+/** @deprecated Use Task */
+export type GoalTask = Task;
 
 /** 待审批的 Replan 变更 */
 export interface PendingReplan {
@@ -363,7 +379,7 @@ export interface GoalDriveState {
   updatedAt: number;
   maxConcurrent: number;
 
-  tasks: GoalTask[];
+  tasks: Task[];
 
   /** 待用户审批的高影响 replan 变更（仅 impactLevel=high 时有值） */
   pendingReplan?: PendingReplan;

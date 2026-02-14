@@ -123,7 +123,9 @@ export type { Migration } from './migrate.js';
 export { DevLogRepository } from './devlog-repo.js';
 export { IdeaRepository } from './idea-repo.js';
 export { GoalMetaRepo } from './goal-meta-repo.js';
-export { GoalRepo, GoalTaskRepo, CheckpointRepo } from './repo/index.js';
+export { GoalRepo, TaskRepo, CheckpointRepo } from './repo/index.js';
+/** @deprecated Use TaskRepo */
+export { TaskRepo as GoalTaskRepo } from './repo/index.js';
 export { SessionRepository, GuildRepository } from './repo/index.js';
 export { ChannelRepository, ClaudeSessionRepository, SyncCursorRepository } from './repo/index.js';
 export { InteractionLogRepository } from './interaction-log-repo.js';
