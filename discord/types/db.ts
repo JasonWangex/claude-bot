@@ -301,37 +301,6 @@ export interface GoalCheckpointRow {
 }
 
 // ================================================================
-// interaction_log 表 — 存储每轮交互的结构化摘要
-// ================================================================
-
-export interface InteractionLogRow {
-  /** 自增 ID (PRIMARY KEY) */
-  id: number;
-  /** Claude CLI session_id */
-  session_id: string;
-  /** 交互轮次索引（从 0 开始） */
-  turn_index: number;
-  /** 消息角色 */
-  role: 'user' | 'assistant';
-  /** 内容类型（如 'text', 'tool_use', 'tool_result'） */
-  content_type: string | null;
-  /** 摘要文本（精简内容，如工具名、简短消息等） */
-  summary_text: string | null;
-  /** Claude 模型名称 */
-  model: string | null;
-  /** 输入 token 数 */
-  tokens_input: number | null;
-  /** 输出 token 数 */
-  tokens_output: number | null;
-  /** 成本（美元） */
-  cost_usd: number | null;
-  /** JSONL 文件路径（相对于项目根目录） */
-  jsonl_path: string | null;
-  /** 创建时间 (Unix ms) */
-  created_at: number;
-}
-
-// ================================================================
 // knowledge_base 表
 // ================================================================
 

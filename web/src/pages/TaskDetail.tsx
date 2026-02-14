@@ -3,7 +3,6 @@ import { Typography, Breadcrumb, Card, Descriptions, Spin, Space, Alert, Tabs } 
 import { BranchesOutlined, FolderOutlined, ClockCircleOutlined, RobotOutlined } from '@ant-design/icons';
 import { Link } from 'react-router';
 import { TaskTree } from '@/components/tasks/TaskTree';
-import { InteractionLog } from '@/components/tasks/InteractionLog';
 import { useTask } from '@/lib/hooks/use-tasks';
 import { formatDistanceToNow } from '@/lib/format';
 
@@ -57,21 +56,18 @@ export default function TaskDetail() {
         </Descriptions>
       </Card>
 
-      <Tabs
-        defaultActiveKey="interactions"
-        items={[
-          {
-            key: 'interactions',
-            label: '交互日志',
-            children: <InteractionLog channelId={channelId} />,
-          },
-          ...(task.children?.length ? [{
-            key: 'children',
-            label: `子任务 (${task.children.length})`,
-            children: <TaskTree tasks={task.children} />,
-          }] : []),
-        ]}
-      />
+      {task.children?.length ? (
+        <Tabs
+          defaultActiveKey="children"
+          items={[
+            {
+              key: 'children',
+              label: `子任务 (${task.children.length})`,
+              children: <TaskTree tasks={task.children} />,
+            },
+          ]}
+        />
+      ) : null}
     </Space>
   );
 }

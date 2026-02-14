@@ -24,16 +24,6 @@ import {
 } from '../../utils/topic-path.js';
 import { forkTaskCore } from '../../utils/fork-task.js';
 import { logger } from '../../utils/logger.js';
-import { getDb, InteractionLogRepository } from '../../db/index.js';
-
-// 模块级别复用 InteractionLogRepository 实例，避免重复 prepare statement
-let interactionRepo: InteractionLogRepository | null = null;
-function getInteractionRepo(): InteractionLogRepository {
-  if (!interactionRepo) {
-    interactionRepo = new InteractionLogRepository(getDb());
-  }
-  return interactionRepo;
-}
 
 function sessionToSummary(s: Session, children: TaskSummary[]): TaskSummary {
   return {
@@ -408,50 +398,6 @@ export const forkTask: RouteHandler = async (req, res, params, deps) => {
     });
   } catch (error: any) {
     sendJson(res, 500, { ok: false, error: `Fork failed: ${error.message}` });
-  }
-};
-
-// GET /api/tasks/:threadId/interactions
-export const getTaskInteractions: RouteHandler = async (_req, res, params, deps) => {
-  const guildId = requireAuth(res);
-  if (!guildId) return;
-
-  const channelId = params.channelId;
-  const session = deps.stateManager.getSession(guildId, channelId);
-  if (!session) {
-    sendJson(res, 404, { ok: false, error: 'Task not found' });
-    return;
-  }
-
-  try {
-    const interactionRepo = getInteractionRepo();
-
-    // 如果没有 claudeSessionId，返回空列表
-    if (!session.claudeSessionId) {
-      sendJson(res, 200, {
-        ok: true,
-        data: {
-          task_id: channelId,
-          session_id: null,
-          interactions: [],
-        },
-      });
-      return;
-    }
-
-    const interactions = interactionRepo.findBySession(session.claudeSessionId);
-
-    sendJson(res, 200, {
-      ok: true,
-      data: {
-        task_id: channelId,
-        session_id: session.claudeSessionId,
-        interactions,
-      },
-    });
-  } catch (error: any) {
-    logger.error(`Failed to get task interactions: ${error.message}`, error);
-    sendJson(res, 500, { ok: false, error: `Failed to get interactions: ${error.message}` });
   }
 };
 

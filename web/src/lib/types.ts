@@ -103,28 +103,6 @@ export interface TaskDetail extends TaskSummary {
   plan_mode: boolean;
 }
 
-// 交互日志
-export interface InteractionLogEntry {
-  id: number;
-  session_id: string;
-  turn_index: number;
-  role: 'user' | 'assistant';
-  content_type: string | null;   // 'text' | 'tool_use' | 'tool_result'
-  summary_text: string | null;
-  model: string | null;
-  tokens_input: number | null;
-  tokens_output: number | null;
-  cost_usd: number | null;
-  jsonl_path: string | null;
-  created_at: number;
-}
-
-export interface InteractionLogResponse {
-  task_id: string;
-  session_id: string | null;
-  interactions: InteractionLogEntry[];
-}
-
 // DevLog
 export interface DevLog {
   id: string;

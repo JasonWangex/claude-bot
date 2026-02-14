@@ -1,6 +1,6 @@
 import useSWR from 'swr';
 import { apiFetch } from '@/lib/api';
-import type { TaskSummary, TaskDetail, SystemStatus, InteractionLogResponse } from '@/lib/types';
+import type { TaskSummary, TaskDetail, SystemStatus } from '@/lib/types';
 
 export function useTasks() {
   return useSWR<TaskSummary[]>('/api/tasks', apiFetch, {
@@ -13,14 +13,6 @@ export function useTask(channelId: string | null) {
     channelId ? `/api/tasks/${channelId}` : null,
     apiFetch,
     { refreshInterval: 5000 }
-  );
-}
-
-export function useTaskInteractions(channelId: string | null) {
-  return useSWR<InteractionLogResponse>(
-    channelId ? `/api/tasks/${channelId}/interactions` : null,
-    apiFetch,
-    { refreshInterval: 10000 }
   );
 }
 

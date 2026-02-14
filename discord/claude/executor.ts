@@ -9,8 +9,6 @@ import { join, dirname, basename, relative } from 'path';
 import { fileURLToPath } from 'url';
 import { ClaudeResponse, ClaudeOptions, StreamEvent, ProgressCallback, ClaudeErrorType, ClaudeExecutionError, ProcessRegistryEntry, ReconnectedResult } from '../types/index.js';
 import { logger } from '../utils/logger.js';
-import { parseJsonlFile } from './jsonl-parser.js';
-import { getDb, InteractionLogRepository } from '../db/index.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -451,12 +449,7 @@ export class ClaudeExecutor {
         try { stderr = readFileSync(stderrFile, 'utf-8'); } catch {}
 
         // 归档输出文件到 data/sessions/<session_id>/ 目录
-        const archivedJsonlPath = this.archiveOutputFiles(outputFile, stderrFile, lastSessionId);
-
-        // 解析 JSONL 写入 interaction_log
-        if (archivedJsonlPath && lastSessionId) {
-          this.processInteractionLog(archivedJsonlPath, lastSessionId);
-        }
+        this.archiveOutputFiles(outputFile, stderrFile, lastSessionId);
 
         // 同步到 claude_sessions 表
         if (lastSessionId && this.onSessionSync) {
@@ -943,25 +936,6 @@ export class ClaudeExecutor {
   }
 
   /**
-   * 解析 JSONL 文件并写入 interaction_log 表
-   */
-  private processInteractionLog(jsonlPath: string, sessionId: string): void {
-    try {
-      const db = getDb();
-      const repo = new InteractionLogRepository(db);
-      const thisDir = dirname(fileURLToPath(import.meta.url));
-      const relativePath = relative(join(thisDir, '../..'), jsonlPath);
-      const rows = parseJsonlFile(jsonlPath, relativePath, sessionId);
-      if (rows.length > 0) {
-        repo.insertBatch(rows);
-        logger.debug(`Saved ${rows.length} interaction_log rows for session ${sessionId}`);
-      }
-    } catch (e: any) {
-      logger.warn(`Failed to process interaction log: ${e.message}`);
-    }
-  }
-
-  /**
    * 归档输出文件到 data/sessions/<session_id>/ 目录
    * @returns 归档后的 JSONL 文件路径（绝对路径），失败时返回 null
    */
@@ -1010,12 +984,7 @@ export class ClaudeExecutor {
   private cleanupOutputFiles(entry: ProcessRegistryEntry): void {
     // 改用归档而非删除
     const sessionId = entry.claudeSessionId || '';
-    const archivedJsonlPath = this.archiveOutputFiles(entry.outputFile, entry.stderrFile, sessionId);
-
-    // 解析 JSONL 写入 interaction_log
-    if (archivedJsonlPath && sessionId) {
-      this.processInteractionLog(archivedJsonlPath, sessionId);
-    }
+    this.archiveOutputFiles(entry.outputFile, entry.stderrFile, sessionId);
 
     // 同步到 claude_sessions 表（重连场景）
     if (sessionId && this.onSessionSync) {
