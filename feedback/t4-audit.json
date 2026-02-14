@@ -1,5 +1,46 @@
 {
-  "verdict": "pass",
-  "summary": "API 端点 GET /api/tasks/:threadId/interactions 实现正确完整，测试断言已修复，5/5 测试通过。auth 校验、session 查找、null claudeSessionId 处理、error handling、类型定义均到位。",
-  "issues": []
+  "verdict": "fail",
+  "summary": "TaskRepo 替代 GoalTaskRepo 的核心重构基本正确，但存在 5 个新 TypeScript 编译错误：3 处 orchestrator 中属性名未从 goalTaskRepo 更名为 taskRepo，2 处 TaskRow.status(string) 到 TaskStatus(union) 的类型不兼容。这些错误会导致运行时 replan/approval 流程调用失败。",
+  "verifyCommands": [
+    "/home/jason/projects/claude-bot/node_modules/.bin/tsc --noEmit 2>&1 | grep -vE '(Cannot find module|Cannot find name|Cannot find namespace|implicitly has an .any. type|not exist on type .ImportMeta.|lib. compiler option)'",
+    "npx vitest run"
+  ],
+  "issues": [
+    {
+      "severity": "error",
+      "file": "discord/orchestrator/index.ts",
+      "line": 1920,
+      "description": "属性名 'goalTaskRepo' 在 HandleReplanDeps 中不存在，应改为 'taskRepo'。replanner.ts 中 HandleReplanDeps 继承自 ApplyChangesDeps，后者定义了 'taskRepo' 属性。导致 triggerReplan() 运行时 taskRepo 为 undefined。"
+    },
+    {
+      "severity": "error",
+      "file": "discord/orchestrator/index.ts",
+      "line": 1963,
+      "description": "属性名 'goalTaskRepo' 在 ApplyChangesDeps 中不存在，应改为 'taskRepo'。导致 approveReplan() 运行时 taskRepo 为 undefined。"
+    },
+    {
+      "severity": "error",
+      "file": "discord/orchestrator/index.ts",
+      "line": 2030,
+      "description": "属性名 'goalTaskRepo' 在 ApplyChangesDeps 中不存在，应改为 'taskRepo'。导致 approveReplanWithModifications() 运行时 taskRepo 为 undefined。"
+    },
+    {
+      "severity": "error",
+      "file": "discord/db/repo/goal-repo.ts",
+      "line": 247,
+      "description": "TaskRow.status 类型为 string，但 Task.status 要求 TaskStatus 联合类型。需要添加 'as TaskStatus' 类型断言或修改 TaskRow.status 的类型定义。"
+    },
+    {
+      "severity": "error",
+      "file": "discord/db/repo/task-repo.ts",
+      "line": 289,
+      "description": "TaskRow.status 类型为 string，但 Task.status 要求 TaskStatus 联合类型。同上，需要类型断言或修改 TaskRow 类型定义。"
+    },
+    {
+      "severity": "warning",
+      "file": "discord/types/db.ts",
+      "line": 426,
+      "description": "TaskRow.status 定义为 string 而非具体的 TaskStatus 联合类型。建议改为与 GoalTaskRow.status 一样使用字面量联合类型，从根本上解决上面两个类型不兼容问题。"
+    }
+  ]
 }
