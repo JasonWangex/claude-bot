@@ -1,25 +1,25 @@
 {
   "verdict": "fail",
-  "summary": "Logger 多 Transport 架构设计合理，ConsoleTransport / DiscordTransport / createLogger 工厂方法实现正确，测试全部通过。但全局 logger 实例初始化时没有注册任何 Transport，导致 Bot 构造函数 setupLogger() 之前的所有日志调用（如 index.ts:13 的启动日志）被静默丢弃，破坏了旧代码的行为契约。",
-  "verifyCommands": ["npx tsc --noEmit", "npx vitest run"],
+  "summary": "Logger 多 Transport 架构设计合理，ConsoleTransport / DiscordTransport / createLogger 工厂方法实现正确，测试全部通过（8/8），TypeScript 编译无新错误。但 setupLogger() 中重复添加 ConsoleTransport 导致所有日志会输出到控制台两次。",
+  "verifyCommands": ["npx tsc --noEmit", "npx vitest run discord/utils/__tests__/logger.test.ts"],
   "issues": [
     {
       "severity": "error",
-      "file": "discord/utils/logger.ts",
-      "line": 86,
-      "description": "全局 logger 实例 `new Logger()` 没有默认 Transport。旧代码中 logger 始终输出到 console，但新实现在 setupLogger() 调用前（如 index.ts:13 'Starting Discord Bot...'）所有日志被静默丢弃。应在创建全局实例时默认添加 ConsoleTransport，例如: `export const logger = createLogger({ transports: [new ConsoleTransport(!!process.env.DEBUG)] });`"
+      "file": "discord/bot/discord.ts",
+      "line": 88,
+      "description": "重复 ConsoleTransport：全局 logger 实例在 logger.ts:88 初始化时已添加了 ConsoleTransport，但 setupLogger() 又调用 logger.addTransport(new ConsoleTransport(...))，导致每条日志输出到控制台两次。修复方案：setupLogger() 中移除 ConsoleTransport 的添加，只添加 DiscordTransport。"
     },
     {
       "severity": "warning",
       "file": "discord/utils/transports/discord-transport.ts",
       "line": 65,
-      "description": "潜在的循环日志风险：MessageQueue 内部使用 logger.error() 记录失败（如 message-queue.ts:460），而 DiscordTransport 会调用 MessageQueue.send()。若 send 的异步处理失败并触发 logger.error，可能产生递归日志。虽然当前因为异步分离不太可能导致栈溢出，但建议在 DiscordTransport 中加一个 isSending 防重入标志。"
+      "description": "潜在的循环日志风险：MessageQueue 内部可能使用 logger 记录失败，而 DiscordTransport 调用 MessageQueue.send()。虽然当前因异步分离不太可能导致栈溢出，但建议关注。"
     },
     {
       "severity": "warning",
-      "file": "discord/bot/discord.ts",
-      "line": 87,
-      "description": "setupLogger() 中 new ConsoleTransport(!!process.env.DEBUG) 会在全局 logger 上添加 Console Transport。如果修复了全局默认 Transport 的问题（issue #1），setupLogger() 需要避免重复添加 ConsoleTransport，否则日志会输出两次。"
+      "file": "discord/utils/env.ts",
+      "line": 98,
+      "description": "getBotLogsChannelId() 函数未被任何代码引用（config.ts 直接读取 process.env.BOT_LOGS_CHANNEL_ID）。可考虑移除或在 config.ts 中使用它。"
     }
   ]
 }
