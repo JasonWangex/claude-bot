@@ -22,6 +22,7 @@ import { generateTopicTitle } from '../utils/llm.js';
 import { execGit, resolveMainWorktree } from './git-ops.js';
 import { parseTasks, goalNameToBranch, translateToBranchName } from './goal-state.js';
 import { getNextBatch, isGoalComplete, isGoalStuck, getProgressSummary } from './task-scheduler.js';
+import { parseTaskDetailPlans, formatDetailPlanForPrompt, type TaskDetailPlan } from './goal-body-parser.js';
 import {
   createGoalBranch,
   createSubtaskBranch,
@@ -333,14 +334,36 @@ export class GoalOrchestrator {
   ): void {
     (async () => {
       try {
+        // 初始化 usage 累积器
+        const usage: ChatUsageResult = {
+          input_tokens: 0,
+          output_tokens: 0,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 0,
+          total_cost_usd: 0,
+          duration_ms: 0,
+        };
+
+        // 获取并解析 Goal body 中的子任务详细计划
+        let taskDetailPlan: TaskDetailPlan | undefined;
+        try {
+          const goalMeta = await this.deps.goalMetaRepo.get(state.goalId);
+          if (goalMeta?.body) {
+            const plans = parseTaskDetailPlans(goalMeta.body);
+            taskDetailPlan = plans.get(task.id);
+          }
+        } catch (err: any) {
+          logger.warn(`[Orchestrator] Failed to parse task detail plan for ${taskId}: ${err.message}`);
+        }
+
         // 先跑一次 audit，拿到最新 issues
-        const auditResult = await this.runAudit(goalId, taskId, guildId, threadId, task, state);
+        const auditResult = await this.runAudit(goalId, taskId, guildId, threadId, task, state, usage, taskDetailPlan);
         if (auditResult.verdict === 'pass') {
-          await this.onTaskCompleted(goalId, taskId);
+          await this.onTaskCompleted(goalId, taskId, usage);
           return;
         }
         // 进入标准 fix 循环
-        await this.auditFixLoop(goalId, taskId, guildId, threadId, task, state, auditResult.issues, auditResult.verifyCommands);
+        await this.auditFixLoop(goalId, taskId, guildId, threadId, task, state, auditResult.summary, auditResult.issues, auditResult.verifyCommands, usage, taskDetailPlan);
       } catch (err: any) {
         const stillRunning = await this.isTaskStillRunning(goalId, taskId);
         if (!stillRunning) return;
@@ -1134,13 +1157,25 @@ export class GoalOrchestrator {
     const usage = this.emptyUsage();
     (async () => {
       try {
+        // 获取并解析 Goal body 中的子任务详细计划
+        let taskDetailPlan: TaskDetailPlan | undefined;
+        try {
+          const goalMeta = await this.deps.goalMetaRepo.get(state.goalId);
+          if (goalMeta?.body) {
+            const plans = parseTaskDetailPlans(goalMeta.body);
+            taskDetailPlan = plans.get(task.id);
+          }
+        } catch (err: any) {
+          logger.warn(`[Orchestrator] Failed to parse task detail plan for ${taskId}: ${err.message}`);
+        }
+
         if (task.type === '调研') {
-          await this.pipelineResearch(goalId, taskId, guildId, threadId, task, state, usage);
+          await this.pipelineResearch(goalId, taskId, guildId, threadId, task, state, usage, taskDetailPlan);
         } else if (task.type === '代码' && task.complexity === 'complex') {
-          await this.pipelineComplexCode(goalId, taskId, guildId, threadId, task, state, usage);
+          await this.pipelineComplexCode(goalId, taskId, guildId, threadId, task, state, usage, taskDetailPlan);
         } else {
           // 默认路径：代码(simple/无标注) 和其他类型
-          await this.pipelineSimpleCode(goalId, taskId, guildId, threadId, task, state, usage);
+          await this.pipelineSimpleCode(goalId, taskId, guildId, threadId, task, state, usage, taskDetailPlan);
         }
       } catch (err: any) {
         logger.error(`[Orchestrator] Pipeline ${taskId} failed:`, err.message);
@@ -1171,6 +1206,7 @@ export class GoalOrchestrator {
     task: GoalTask,
     state: GoalDriveState,
     usage: ChatUsageResult,
+    taskDetailPlan?: TaskDetailPlan,
   ): Promise<void> {
     const opusModel = this.deps.config.pipelineOpusModel;
     this.switchSessionModel(guildId, threadId, opusModel);
@@ -1181,7 +1217,7 @@ export class GoalOrchestrator {
       'pipeline',
     );
 
-    const taskPrompt = this.buildTaskPrompt(task, state);
+    const taskPrompt = this.buildTaskPrompt(task, state, taskDetailPlan);
     logger.info(`[Orchestrator] Pipeline ${taskId}: research → Opus execute`);
     const u = await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, taskPrompt);
     this.accumulateUsage(usage, u);
@@ -1204,6 +1240,7 @@ export class GoalOrchestrator {
     task: GoalTask,
     state: GoalDriveState,
     usage: ChatUsageResult,
+    taskDetailPlan?: TaskDetailPlan,
   ): Promise<void> {
     const { pipelineSonnetModel: sonnetModel } = this.deps.config;
 
@@ -1216,7 +1253,7 @@ export class GoalOrchestrator {
       'pipeline',
     );
 
-    const taskPrompt = this.buildTaskPrompt(task, state);
+    const taskPrompt = this.buildTaskPrompt(task, state, taskDetailPlan);
     logger.info(`[Orchestrator] Pipeline ${taskId}: simple code → Sonnet execute`);
     const execUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, taskPrompt);
     this.accumulateUsage(usage, execUsage);
@@ -1236,7 +1273,7 @@ export class GoalOrchestrator {
     }
 
     // Phase 2: Opus audit
-    const auditResult = await this.runAudit(goalId, taskId, guildId, threadId, task, state, usage);
+    const auditResult = await this.runAudit(goalId, taskId, guildId, threadId, task, state, usage, taskDetailPlan);
 
     if (auditResult.verdict === 'pass') {
       await this.onTaskCompleted(goalId, taskId, usage);
@@ -1244,7 +1281,7 @@ export class GoalOrchestrator {
     }
 
     // Audit 失败 → Sonnet 修复（最多 2 次）
-    await this.auditFixLoop(goalId, taskId, guildId, threadId, task, state, auditResult.issues, auditResult.verifyCommands, usage);
+    await this.auditFixLoop(goalId, taskId, guildId, threadId, task, state, auditResult.summary, auditResult.issues, auditResult.verifyCommands, usage, taskDetailPlan);
   }
 
   /**
@@ -1258,6 +1295,7 @@ export class GoalOrchestrator {
     task: GoalTask,
     state: GoalDriveState,
     usage: ChatUsageResult,
+    taskDetailPlan?: TaskDetailPlan,
   ): Promise<void> {
     const { pipelineOpusModel: opusModel, pipelineSonnetModel: sonnetModel } = this.deps.config;
 
@@ -1270,7 +1308,7 @@ export class GoalOrchestrator {
       'pipeline',
     );
 
-    const planPrompt = this.buildPlanPrompt(task, state);
+    const planPrompt = this.buildPlanPrompt(task, state, taskDetailPlan);
     logger.info(`[Orchestrator] Pipeline ${taskId}: complex code → Opus plan`);
     const planUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, planPrompt);
     this.accumulateUsage(usage, planUsage);
@@ -1301,8 +1339,8 @@ export class GoalOrchestrator {
 
     // 根据 plan 是否存在选择不同的 prompt
     const executePrompt = planExists
-      ? this.buildExecuteWithPlanPrompt(task, state)
-      : this.buildTaskPrompt(task, state);
+      ? this.buildExecuteWithPlanPrompt(task, state, taskDetailPlan)
+      : this.buildTaskPrompt(task, state, taskDetailPlan);
     logger.info(`[Orchestrator] Pipeline ${taskId}: complex code → Sonnet execute with plan`);
     const execUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, executePrompt);
     this.accumulateUsage(usage, execUsage);
@@ -1321,7 +1359,7 @@ export class GoalOrchestrator {
     }
 
     // Phase 3: Opus audit
-    const auditResult = await this.runAudit(goalId, taskId, guildId, threadId, task, state, usage);
+    const auditResult = await this.runAudit(goalId, taskId, guildId, threadId, task, state, usage, taskDetailPlan);
 
     if (auditResult.verdict === 'pass') {
       await this.onTaskCompleted(goalId, taskId, usage);
@@ -1329,7 +1367,7 @@ export class GoalOrchestrator {
     }
 
     // Audit 失败 → Sonnet 修复
-    await this.auditFixLoop(goalId, taskId, guildId, threadId, task, state, auditResult.issues, auditResult.verifyCommands, usage);
+    await this.auditFixLoop(goalId, taskId, guildId, threadId, task, state, auditResult.summary, auditResult.issues, auditResult.verifyCommands, usage, taskDetailPlan);
   }
 
   /**
@@ -1342,9 +1380,11 @@ export class GoalOrchestrator {
     threadId: string,
     task: GoalTask,
     state: GoalDriveState,
+    auditSummary: string | undefined,
     issues: string[],
     verifyCommands: string[] = [],
     usage: ChatUsageResult,
+    taskDetailPlan?: TaskDetailPlan,
   ): Promise<void> {
     const { pipelineSonnetModel: sonnetModel } = this.deps.config;
     const maxRetries = 2;
@@ -1366,17 +1406,19 @@ export class GoalOrchestrator {
         'pipeline',
       );
 
-      const fixPrompt = this.buildFixPrompt(task, state, issues, verifyCommands);
+      const fixPrompt = this.buildFixPrompt(task, state, auditSummary, issues, verifyCommands, taskDetailPlan);
       logger.info(`[Orchestrator] Pipeline ${taskId}: Sonnet fix attempt ${retry}`);
       const fixUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, fixPrompt);
       this.accumulateUsage(usage, fixUsage);
 
       // Re-audit
-      const reAudit = await this.runAudit(goalId, taskId, guildId, threadId, task, state, usage);
+      const reAudit = await this.runAudit(goalId, taskId, guildId, threadId, task, state, usage, taskDetailPlan);
       if (reAudit.verdict === 'pass') {
         await this.onTaskCompleted(goalId, taskId, usage);
         return;
       }
+      // 更新所有变量（包括 summary）
+      auditSummary = reAudit.summary;
       issues = reAudit.issues;
       verifyCommands = reAudit.verifyCommands;
     }
@@ -1397,7 +1439,8 @@ export class GoalOrchestrator {
     task: GoalTask,
     state: GoalDriveState,
     usage: ChatUsageResult,
-  ): Promise<{ verdict: 'pass' | 'fail'; issues: string[]; verifyCommands: string[] }> {
+    taskDetailPlan?: TaskDetailPlan,
+  ): Promise<{ verdict: 'pass' | 'fail'; summary?: string; issues: string[]; verifyCommands: string[] }> {
     const { pipelineOpusModel: opusModel } = this.deps.config;
 
     this.switchSessionModel(guildId, threadId, opusModel);
@@ -1408,7 +1451,7 @@ export class GoalOrchestrator {
       'pipeline',
     );
 
-    const auditPrompt = this.buildAuditPrompt(task, state);
+    const auditPrompt = this.buildAuditPrompt(task, state, taskDetailPlan);
     logger.info(`[Orchestrator] Pipeline ${taskId}: Opus audit`);
     const auditUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, auditPrompt);
     this.accumulateUsage(usage, auditUsage);
@@ -1464,7 +1507,7 @@ export class GoalOrchestrator {
   private async readAuditResult(
     state: GoalDriveState,
     task: GoalTask,
-  ): Promise<{ verdict: 'pass' | 'fail'; issues: string[]; verifyCommands: string[] }> {
+  ): Promise<{ verdict: 'pass' | 'fail'; summary?: string; issues: string[]; verifyCommands: string[] }> {
     const defaultResult = { verifyCommands: [] as string[] };
 
     if (!task.branchName) {
@@ -1525,8 +1568,12 @@ export class GoalOrchestrator {
         ? parsed.verifyCommands.filter((c: any) => typeof c === 'string')
         : [];
 
+      // 提取 summary（Opus 的整体审查评价）
+      const summary = typeof parsed.summary === 'string' ? parsed.summary : undefined;
+
       return {
         verdict: parsed.verdict === 'pass' ? 'pass' : 'fail',
+        summary,
         issues,
         verifyCommands,
       };
@@ -1542,7 +1589,7 @@ export class GoalOrchestrator {
    * buildPlanPrompt — Opus plan phase（复杂代码）
    * 分析代码 → 写 .task-plan.md → commit → 不写实现代码
    */
-  private buildPlanPrompt(task: GoalTask, state: GoalDriveState): string {
+  private buildPlanPrompt(task: GoalTask, state: GoalDriveState, taskDetailPlan?: TaskDetailPlan): string {
     const lines: string[] = [
       `You are a senior architect planning the implementation of a subtask for Goal "${state.goalName}".`,
       ``,
@@ -1550,6 +1597,15 @@ export class GoalOrchestrator {
       `ID: ${this.getTaskLabel(state, task.id)}`,
       `Description: ${task.description}`,
     ];
+
+    // 注入详细计划作为参考（来自 Goal body）
+    if (taskDetailPlan) {
+      lines.push(``, formatDetailPlanForPrompt(taskDetailPlan));
+      lines.push(
+        ``,
+        `**NOTE**: The detailed plan above is from the goal planning phase. Use it as a **reference** to understand the design intent, but verify against the actual codebase and adapt as needed. Your .task-plan.md should be grounded in actual code structure.`,
+      );
+    }
 
     if (task.depends.length > 0) {
       const depInfos = task.depends.map(depId => {
@@ -1605,7 +1661,7 @@ export class GoalOrchestrator {
    * buildExecuteWithPlanPrompt — Sonnet execute (复杂代码)
    * 先读 .task-plan.md → 按步骤实施 → 不偏离方向
    */
-  private buildExecuteWithPlanPrompt(task: GoalTask, state: GoalDriveState): string {
+  private buildExecuteWithPlanPrompt(task: GoalTask, state: GoalDriveState, taskDetailPlan?: TaskDetailPlan): string {
     const lines: string[] = [
       `You are a code executor implementing a subtask for Goal "${state.goalName}".`,
       `A senior architect has already created a detailed plan for you.`,
@@ -1613,6 +1669,18 @@ export class GoalOrchestrator {
       `## Current Task`,
       `ID: ${this.getTaskLabel(state, task.id)}`,
       `Description: ${task.description}`,
+    ];
+
+    // 注入详细计划作为背景（可选，来自 Goal body）
+    if (taskDetailPlan) {
+      lines.push(``, formatDetailPlanForPrompt(taskDetailPlan));
+      lines.push(
+        ``,
+        `**NOTE**: The detailed plan above is from the goal planning phase. It provides design intent and context. However, **your primary guide is the .task-plan.md file** created by the architect, which is grounded in the actual codebase.`,
+      );
+    }
+
+    lines.push(
       ``,
       `## Instructions`,
       `1. **First**, read the plan file: \`cat .task-plan.md\``,
@@ -1630,7 +1698,7 @@ export class GoalOrchestrator {
       `- If you encounter a blocker that prevents following the plan, write a feedback file:`,
       `  \`feedback/${task.id}.json\` with \`{"type": "blocked", "reason": "..."}\``,
       `  then \`git add && git commit\` and stop`,
-    ];
+    );
 
     // Feedback protocol (simplified)
     lines.push(
@@ -1650,13 +1718,25 @@ export class GoalOrchestrator {
    * buildAuditPrompt — Opus audit phase
    * 运行 build/test 验证 + 读 git diff → 审查正确性/完整性/bug → 写 audit verdict 文件
    */
-  private buildAuditPrompt(task: GoalTask, state: GoalDriveState): string {
+  private buildAuditPrompt(task: GoalTask, state: GoalDriveState, taskDetailPlan?: TaskDetailPlan): string {
     const lines: string[] = [
       `You are a senior code reviewer auditing a subtask implementation for Goal "${state.goalName}".`,
       ``,
       `## Task Being Audited`,
       `ID: ${this.getTaskLabel(state, task.id)}`,
       `Description: ${task.description}`,
+    ];
+
+    // 注入详细计划作为审查基准（可选，来自 Goal body）
+    if (taskDetailPlan) {
+      lines.push(``, formatDetailPlanForPrompt(taskDetailPlan));
+      lines.push(
+        ``,
+        `**NOTE**: The detailed plan above is from the goal planning phase. Use it as a **baseline** to verify whether the implementation matches the original design intent.`,
+      );
+    }
+
+    lines.push(
       ``,
       `## Instructions`,
       `1. Run \`git log --oneline\` to see all commits, then \`git diff ${state.goalBranch}...HEAD\` to see all changes since branching from the goal branch`,
@@ -1700,7 +1780,7 @@ export class GoalOrchestrator {
       `- Be pragmatic — minor style issues are "warning", not "error"`,
       `- Focus on functional correctness, not code style preferences`,
       `- If no code changes are found (empty diff), verdict is "pass"`,
-    ];
+    );
 
     return lines.join('\n');
   }
@@ -1709,7 +1789,14 @@ export class GoalOrchestrator {
    * buildFixPrompt — Sonnet fix phase
    * 读 audit issues → 逐条修复 error 级别 → 运行验证命令 → 只修不加新功能
    */
-  private buildFixPrompt(task: GoalTask, state: GoalDriveState, issues: string[], verifyCommands: string[] = []): string {
+  private buildFixPrompt(
+    task: GoalTask,
+    state: GoalDriveState,
+    auditSummary: string | undefined,
+    issues: string[],
+    verifyCommands: string[] = [],
+    taskDetailPlan?: TaskDetailPlan,
+  ): string {
     const issueList = issues.map((issue, i) => `  ${i + 1}. ${issue}`).join('\n');
 
     const lines: string[] = [
@@ -1718,7 +1805,33 @@ export class GoalOrchestrator {
       `## Task`,
       `ID: ${this.getTaskLabel(state, task.id)}`,
       `Description: ${task.description}`,
-      ``,
+    ];
+
+    // 注入详细计划作为参考（可选，来自 Goal body）
+    if (taskDetailPlan) {
+      lines.push(``, formatDetailPlanForPrompt(taskDetailPlan));
+      lines.push(
+        ``,
+        `**NOTE**: The detailed plan above is from the goal planning phase. It can help you understand the original design intent while fixing the issues.`,
+      );
+    }
+
+    lines.push(``);
+
+    // 前置展示 Opus 的整体审查评价（完整传递，不截断）
+    if (auditSummary) {
+      lines.push(
+        `## Code Review Summary`,
+        `The senior reviewer (Opus) provided this overall assessment:`,
+        ``,
+        `> ${auditSummary}`,
+        ``,
+        `Based on this assessment, the following specific issues need to be fixed:`,
+        ``,
+      );
+    }
+
+    lines.push(
       `## Audit Issues to Fix`,
       issueList,
       ``,
@@ -1726,7 +1839,7 @@ export class GoalOrchestrator {
       `1. Read each issue carefully`,
       `2. Fix only the issues listed above — do not add new features or refactor unrelated code`,
       `3. For each fix, make the minimal change necessary`,
-    ];
+    );
 
     if (verifyCommands.length > 0) {
       lines.push(
@@ -2678,7 +2791,7 @@ export class GoalOrchestrator {
     return `${prefix}/${taskLabel}-${translated.slice(0, 30) || 'task'}`;
   }
 
-  private buildTaskPrompt(task: GoalTask, state: GoalDriveState): string {
+  private buildTaskPrompt(task: GoalTask, state: GoalDriveState, taskDetailPlan?: TaskDetailPlan): string {
     const label = this.getTaskLabel(state, task.id);
     const lines: string[] = [
       `You are a subtask executor for Goal "${state.goalName}".`,
@@ -2688,6 +2801,15 @@ export class GoalOrchestrator {
       `Type: ${task.type}`,
       `Description: ${task.description}`,
     ];
+
+    // 注入详细计划（来自 Goal body）
+    if (taskDetailPlan) {
+      lines.push(``, formatDetailPlanForPrompt(taskDetailPlan));
+      lines.push(
+        ``,
+        `**IMPORTANT**: The detailed plan above comes from the goal planning phase. Follow it where applicable, but adapt to actual codebase constraints if needed.`,
+      );
+    }
 
     // 依赖上下文：列出已完成的前置任务，帮助 executor 理解背景
     if (task.depends.length > 0) {
