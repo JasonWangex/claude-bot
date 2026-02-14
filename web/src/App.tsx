@@ -10,6 +10,7 @@ import TaskDetail from '@/pages/TaskDetail';
 import DevLogs from '@/pages/DevLogs';
 import Ideas from '@/pages/Ideas';
 import KnowledgeBase from '@/pages/KnowledgeBase';
+import Commands from '@/pages/Commands';
 import Login from '@/pages/Login';
 
 function RequireAuth() {
@@ -31,6 +32,7 @@ export default function App() {
             <Route path="devlogs" element={<DevLogs />} />
             <Route path="ideas" element={<Ideas />} />
             <Route path="kb" element={<KnowledgeBase />} />
+            <Route path="commands" element={<Commands />} />
           </Route>
         </Route>
       </Routes>
