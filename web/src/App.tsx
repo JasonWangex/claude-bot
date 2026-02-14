@@ -9,6 +9,7 @@ import Tasks from '@/pages/Tasks';
 import TaskDetail from '@/pages/TaskDetail';
 import DevLogs from '@/pages/DevLogs';
 import Ideas from '@/pages/Ideas';
+import KnowledgeBase from '@/pages/KnowledgeBase';
 import Login from '@/pages/Login';
 
 function RequireAuth() {
@@ -29,6 +30,7 @@ export default function App() {
             <Route path="tasks/:threadId" element={<TaskDetail />} />
             <Route path="devlogs" element={<DevLogs />} />
             <Route path="ideas" element={<Ideas />} />
+            <Route path="kb" element={<KnowledgeBase />} />
           </Route>
         </Route>
       </Routes>

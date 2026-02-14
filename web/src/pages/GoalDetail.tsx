@@ -1,22 +1,56 @@
 import { useMemo, useState } from 'react';
 import { useParams, Navigate } from 'react-router';
-import { Typography, Breadcrumb, Tabs, Tag, Card, Space, Spin, Alert, Select } from 'antd';
+import {
+  Typography, Breadcrumb, Tabs, Tag, Card, Space, Spin, Alert, Select,
+  Button, Modal, Form, Input, Row, Col, message,
+} from 'antd';
 import { Link } from 'react-router';
+import { EditOutlined } from '@ant-design/icons';
 import { GoalDAG } from '@/components/goals/GoalDAG';
 import { TaskPanel } from '@/components/goals/TaskPanel';
 import { DriveControls } from '@/components/goals/DriveControls';
 import { GoalStatusBadge, taskStatusLabels } from '@/components/goals/StatusBadge';
-import { useGoal, useGoalDrive } from '@/lib/hooks/use-goals';
-import type { GoalTaskStatus } from '@/lib/types';
+import { useGoal, useGoalDrive, updateGoal } from '@/lib/hooks/use-goals';
+import type { GoalStatus, GoalType, GoalTaskStatus } from '@/lib/types';
 
 const { Title, Text } = Typography;
+const { TextArea } = Input;
+
+const goalStatusOptions: { value: GoalStatus; label: string }[] = [
+  { value: 'Idea', label: 'Idea' },
+  { value: 'Active', label: 'Active' },
+  { value: 'Processing', label: 'Processing' },
+  { value: 'Paused', label: 'Paused' },
+  { value: 'Done', label: 'Done' },
+  { value: 'Abandoned', label: 'Abandoned' },
+];
+
+const goalTypeOptions: { value: GoalType; label: string }[] = [
+  { value: '探索型', label: '探索型' },
+  { value: '交付型', label: '交付型' },
+];
+
+interface GoalEditFormValues {
+  name: string;
+  status: GoalStatus;
+  type?: GoalType;
+  project?: string;
+  completion?: string;
+  progress?: string;
+  next?: string;
+  blocked_by?: string;
+  body?: string;
+}
 
 export default function GoalDetail() {
   const { goalId } = useParams<{ goalId: string }>();
-  const { data: goal, error: goalError } = useGoal(goalId ?? null);
+  const { data: goal, error: goalError, mutate: mutateGoal } = useGoal(goalId ?? null);
   const { data: drive, error: driveError, mutate: mutateDrive } = useGoalDrive(goalId ?? null);
 
   const [dagStatusFilter, setDagStatusFilter] = useState<GoalTaskStatus[]>([]);
+  const [editOpen, setEditOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [form] = Form.useForm<GoalEditFormValues>();
 
   const tasks = drive?.tasks ?? [];
 
@@ -25,6 +59,49 @@ export default function GoalDetail() {
     const statuses = [...new Set(tasks.map(t => t.status))];
     return statuses.map(s => ({ value: s, label: taskStatusLabels[s] }));
   }, [tasks]);
+
+  const openEdit = () => {
+    if (!goal) return;
+    form.setFieldsValue({
+      name: goal.name,
+      status: goal.status,
+      type: goal.type ?? undefined,
+      project: goal.project ?? '',
+      completion: goal.completion ?? '',
+      progress: goal.progress ?? '',
+      next: goal.next ?? '',
+      blocked_by: goal.blocked_by ?? '',
+      body: goal.body ?? '',
+    });
+    setEditOpen(true);
+  };
+
+  const handleEdit = async () => {
+    if (!goalId) return;
+    try {
+      const values = await form.validateFields();
+      setSubmitting(true);
+      await updateGoal(goalId, {
+        name: values.name,
+        status: values.status,
+        type: values.type,
+        project: values.project || undefined,
+        completion: values.completion || undefined,
+        progress: values.progress || undefined,
+        next: values.next || undefined,
+        blocked_by: values.blocked_by || undefined,
+        body: values.body || undefined,
+      });
+      message.success('Goal 更新成功');
+      setEditOpen(false);
+      mutateGoal();
+    } catch (err: any) {
+      if (err?.errorFields) return;
+      message.error(err?.message || '更新失败');
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   if (!goalId) return <Navigate to="/goals" replace />;
 
@@ -95,6 +172,7 @@ export default function GoalDetail() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <Title level={3} style={{ margin: 0 }}>{goal.name}</Title>
         <Space>
+          <Button icon={<EditOutlined />} onClick={openEdit}>编辑</Button>
           <GoalStatusBadge status={goal.status} />
           {drive && <DriveControls goalId={goalId} status={drive.status} onAction={() => mutateDrive()} />}
         </Space>
@@ -124,6 +202,62 @@ export default function GoalDetail() {
       )}
 
       <Tabs defaultActiveKey="dag" items={tabItems} />
+
+      <Modal
+        title="编辑 Goal"
+        open={editOpen}
+        onOk={handleEdit}
+        onCancel={() => setEditOpen(false)}
+        confirmLoading={submitting}
+        okText="保存"
+        cancelText="取消"
+        destroyOnClose
+        width={600}
+      >
+        <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
+          <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入名称' }]}>
+            <Input />
+          </Form.Item>
+          <Row gutter={16}>
+            <Col span={8}>
+              <Form.Item name="status" label="状态">
+                <Select options={goalStatusOptions} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="type" label="类型">
+                <Select options={goalTypeOptions} allowClear placeholder="选择类型" />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="project" label="项目">
+                <Input />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="completion" label="完成标准">
+            <Input />
+          </Form.Item>
+          <Form.Item name="progress" label="进度">
+            <Input placeholder="如: 3/5" />
+          </Form.Item>
+          <Row gutter={16}>
+            <Col span={12}>
+              <Form.Item name="next" label="下一步">
+                <Input />
+              </Form.Item>
+            </Col>
+            <Col span={12}>
+              <Form.Item name="blocked_by" label="卡点">
+                <Input />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="body" label="详情">
+            <TextArea rows={6} placeholder="Markdown 格式" />
+          </Form.Item>
+        </Form>
+      </Modal>
     </Space>
   );
 }

@@ -1,6 +1,6 @@
 import useSWR from 'swr';
-import { apiFetch, apiPost } from '@/lib/api';
-import type { Goal, GoalDriveState } from '@/lib/types';
+import { apiFetch, apiPost, apiPatch } from '@/lib/api';
+import type { Goal, GoalStatus, GoalType, GoalDriveState } from '@/lib/types';
 
 export function useGoals(status?: string) {
   const params = status ? `?status=${status}` : '';
@@ -55,4 +55,33 @@ export async function pauseGoalTask(goalId: string, taskId: string) {
 
 export async function resumeGoalTask(goalId: string, taskId: string) {
   return apiPost(`/api/goals/${goalId}/tasks/${taskId}/resume`);
+}
+
+export interface CreateGoalData {
+  name: string;
+  status?: GoalStatus;
+  type?: GoalType;
+  project?: string;
+  completion?: string;
+  body?: string;
+}
+
+export async function createGoal(data: CreateGoalData) {
+  return apiPost<Goal>('/api/goals', data);
+}
+
+export interface UpdateGoalData {
+  name?: string;
+  status?: GoalStatus;
+  type?: GoalType;
+  project?: string;
+  completion?: string;
+  progress?: string;
+  next?: string;
+  blocked_by?: string;
+  body?: string;
+}
+
+export async function updateGoal(goalId: string, data: UpdateGoalData) {
+  return apiPatch<Goal>(`/api/goals/${goalId}`, data);
 }
