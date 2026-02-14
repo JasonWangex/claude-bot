@@ -1,5 +1,5 @@
 import useSWR from 'swr';
-import { apiFetch, apiPatch } from '@/lib/api';
+import { apiFetch, apiPost, apiPatch, apiDelete } from '@/lib/api';
 import type { Idea, IdeaStatus } from '@/lib/types';
 
 export function useIdeas() {
@@ -8,6 +8,14 @@ export function useIdeas() {
   });
 }
 
-export async function updateIdeaStatus(id: string, status: IdeaStatus) {
-  return apiPatch(`/api/ideas/${id}`, { status });
+export async function createIdea(data: { name: string; project: string; status?: IdeaStatus }) {
+  return apiPost<Idea>('/api/ideas', data);
+}
+
+export async function updateIdea(id: string, data: { name?: string; status?: IdeaStatus; project?: string }) {
+  return apiPatch<Idea>(`/api/ideas/${id}`, data);
+}
+
+export async function deleteIdea(id: string) {
+  return apiDelete(`/api/ideas/${id}`);
 }

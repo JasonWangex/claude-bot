@@ -1,10 +1,15 @@
 import { useMemo, useState } from 'react';
-import { Typography, Select, Space, Empty, Spin, Row, Col, Alert } from 'antd';
+import {
+  Typography, Select, Space, Empty, Spin, Row, Col, Alert,
+  Button, Modal, Form, Input, message,
+} from 'antd';
+import { PlusOutlined } from '@ant-design/icons';
 import { GoalCard } from '@/components/goals/GoalCard';
-import { useGoals } from '@/lib/hooks/use-goals';
-import type { Goal } from '@/lib/types';
+import { useGoals, createGoal } from '@/lib/hooks/use-goals';
+import type { Goal, GoalStatus, GoalType } from '@/lib/types';
 
 const { Title, Text } = Typography;
+const { TextArea } = Input;
 
 const statusOptions = [
   { value: 'all', label: '全部' },
@@ -14,6 +19,20 @@ const statusOptions = [
   { value: 'Done', label: 'Done' },
   { value: 'Idea', label: 'Idea' },
   { value: 'Abandoned', label: 'Abandoned' },
+];
+
+const goalStatusOptions: { value: GoalStatus; label: string }[] = [
+  { value: 'Idea', label: 'Idea' },
+  { value: 'Active', label: 'Active' },
+  { value: 'Processing', label: 'Processing' },
+  { value: 'Paused', label: 'Paused' },
+  { value: 'Done', label: 'Done' },
+  { value: 'Abandoned', label: 'Abandoned' },
+];
+
+const goalTypeOptions: { value: GoalType; label: string }[] = [
+  { value: '探索型', label: '探索型' },
+  { value: '交付型', label: '交付型' },
 ];
 
 const UNGROUPED = '__ungrouped__';
@@ -26,7 +45,6 @@ function groupByProject(goals: Goal[]): { project: string; goals: Goal[] }[] {
     if (list) list.push(goal);
     else map.set(key, [goal]);
   }
-  // 有项目名的排前面（按名称排序），未分组的放最后
   const groups: { project: string; goals: Goal[] }[] = [];
   const keys = [...map.keys()].sort((a, b) => {
     if (a === UNGROUPED) return 1;
@@ -39,13 +57,53 @@ function groupByProject(goals: Goal[]): { project: string; goals: Goal[] }[] {
   return groups;
 }
 
+interface GoalFormValues {
+  name: string;
+  status: GoalStatus;
+  type?: GoalType;
+  project?: string;
+  completion?: string;
+  body?: string;
+}
+
 export default function Goals() {
   const [statusFilter, setStatusFilter] = useState('all');
-  const { data: goals, isLoading, error } = useGoals(
+  const { data: goals, isLoading, error, mutate } = useGoals(
     statusFilter !== 'all' ? statusFilter : undefined
   );
+  const [modalOpen, setModalOpen] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [form] = Form.useForm<GoalFormValues>();
 
   const grouped = useMemo(() => goals ? groupByProject(goals) : [], [goals]);
+
+  const openCreate = () => {
+    form.setFieldsValue({ name: '', status: 'Active', type: undefined, project: '', completion: '', body: '' });
+    setModalOpen(true);
+  };
+
+  const handleCreate = async () => {
+    try {
+      const values = await form.validateFields();
+      setSubmitting(true);
+      await createGoal({
+        name: values.name,
+        status: values.status,
+        type: values.type,
+        project: values.project || undefined,
+        completion: values.completion || undefined,
+        body: values.body || undefined,
+      });
+      message.success('Goal 创建成功');
+      setModalOpen(false);
+      mutate();
+    } catch (err: any) {
+      if (err?.errorFields) return;
+      message.error(err?.message || '创建失败');
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
@@ -54,12 +112,17 @@ export default function Goals() {
           <Title level={3} style={{ margin: 0 }}>Goals</Title>
           <Text type="secondary">开发目标管理</Text>
         </div>
-        <Select
-          value={statusFilter}
-          onChange={setStatusFilter}
-          options={statusOptions}
-          style={{ width: 140 }}
-        />
+        <Space>
+          <Select
+            value={statusFilter}
+            onChange={setStatusFilter}
+            options={statusOptions}
+            style={{ width: 140 }}
+          />
+          <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
+            新建
+          </Button>
+        </Space>
       </div>
 
       {error ? (
@@ -91,6 +154,47 @@ export default function Goals() {
           ))}
         </Space>
       )}
+
+      <Modal
+        title="新建 Goal"
+        open={modalOpen}
+        onOk={handleCreate}
+        onCancel={() => setModalOpen(false)}
+        confirmLoading={submitting}
+        okText="创建"
+        cancelText="取消"
+        destroyOnClose
+        width={560}
+      >
+        <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
+          <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入名称' }]}>
+            <Input placeholder="Goal 名称" />
+          </Form.Item>
+          <Row gutter={16}>
+            <Col span={8}>
+              <Form.Item name="status" label="状态">
+                <Select options={goalStatusOptions} />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="type" label="类型">
+                <Select options={goalTypeOptions} allowClear placeholder="选择类型" />
+              </Form.Item>
+            </Col>
+            <Col span={8}>
+              <Form.Item name="project" label="项目">
+                <Input placeholder="所属项目" />
+              </Form.Item>
+            </Col>
+          </Row>
+          <Form.Item name="completion" label="完成标准">
+            <Input placeholder="什么算完成？" />
+          </Form.Item>
+          <Form.Item name="body" label="详情">
+            <TextArea rows={4} placeholder="Goal 详细描述（Markdown）" />
+          </Form.Item>
+        </Form>
+      </Modal>
     </Space>
   );
 }

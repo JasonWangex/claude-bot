@@ -157,6 +157,19 @@ export interface Idea {
   updated_at: number;
 }
 
+// Knowledge Base
+export interface KnowledgeBaseEntry {
+  id: string;
+  title: string;
+  content: string;
+  category: string | null;
+  tags: string[];
+  project: string;
+  source: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
 // System status
 export interface SystemStatus {
   default_cwd: string;
