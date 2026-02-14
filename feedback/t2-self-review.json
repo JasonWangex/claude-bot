@@ -1,0 +1,13 @@
+{
+  "allIssuesFixed": false,
+  "remainingIssues": [
+    {
+      "severity": "error",
+      "file": "discord/orchestrator/index.ts",
+      "line": 1131,
+      "description": "executeTaskPipeline() parameter named 'threadId' but body passes it to pipelineResearch/pipelineComplexCode/pipelineSimpleCode which all expect 'channelId'. This is the same class of error as issues 13-14. Parameter should be renamed to 'channelId'.",
+      "impact": "Inconsistent naming - may cause confusion during code review, but no runtime error since JS ignores parameter names"
+    }
+  ],
+  "notes": "Self-review findings:\n\n✅ Issues 1-15 verified fixed:\n  - All TypeScript compilation errors resolved (npx tsc --noEmit passes)\n  - All tests pass (115/115)\n  - Specific fixes verified:\n    * client.ts:54 - threadId → channelId ✓\n    * interaction-registry.ts:18 - PendingEntry.threadId → channelId ✓\n    * executor.ts:30 - ActiveProcess.threadId → channelId ✓\n    * handlers.ts:564 - mq.delete(channelId) ✓\n    * discord.ts:548,625,665 - sendLong(channelId) ✓\n    * discord.ts:203 - type guard for guild property ✓\n    * discord.ts:788 - guildId null check ✓\n    * orchestrator:337,343 - usage parameter added ✓\n    * orchestrator:1050 - executeTaskInBackground param renamed ✓\n    * orchestrator:1396 - runAudit param renamed ✓\n    * rollback.test.ts:19 - goalSeq added ✓\n\n❌ New issue found:\n  - orchestrator/index.ts:1131 - executeTaskPipeline() uses 'threadId' parameter name but passes to methods expecting 'channelId'\n  - This follows the same pattern as the fixed issues 13-14\n  - Should be fixed for consistency\n\n📊 Verification results:\n  - TypeScript: 0 errors\n  - Tests: 115/115 passed\n  - Git diff: ~208 insertions, ~170 deletions across 20 files\n\nRecommendation: Fix the remaining executeTaskPipeline parameter name for complete consistency with the threadId→channelId rename effort."
+}
