@@ -1,109 +1,91 @@
 {
   "verdict": "fail",
-  "summary": "Tests pass (115/115) but TypeScript compilation fails with 22 errors. The core issue: threadId→channelId rename was applied inconsistently — variable declarations were renamed but some interface fields, function parameters, and usage sites were missed. This causes both compile-time TS errors and runtime ReferenceErrors (undefined `threadId`/`channelId` variables). The new channel-service.ts is well-implemented. The bulk of the rename across API routes, state manager, types, and DB layers is correct.",
+  "summary": "Build (tsc --noEmit) and tests (115/115) pass, but there are critical runtime data loss bugs in goal-repo.ts where SQL binding parameter names (@drive_thread_id, @thread_id) no longer match the object keys (drive_channel_id, channel_id) after the rename. This causes goalChannelId and task channelId to be saved as NULL and read back as empty/undefined. Additionally, the orchestrator notify() method and replanner.ts still use threadId parameter names, and several comments reference the old terminology.",
   "verifyCommands": ["npx tsc --noEmit", "npx vitest run"],
   "issues": [
     {
       "severity": "error",
-      "file": "discord/claude/client.ts",
-      "line": 54,
-      "description": "chat() public method options type still has `threadId?: string` but callers (handlers.ts:470) pass `channelId`. Rename to `channelId` to match executeChat()'s options type at line 111."
+      "file": "discord/db/repo/goal-repo.ts",
+      "line": 42,
+      "description": "SQL binding mismatch: upsertGoal SQL uses @drive_thread_id (lines 42,47,55) but goalDriveStateToGoalRow() returns { drive_channel_id: ... } (line 191). better-sqlite3 binds by key name, so @drive_thread_id gets undefined → NULL. Goal's goalChannelId is silently lost on every save. Fix: either change SQL to @drive_channel_id or change the row object key to drive_thread_id."
     },
     {
       "severity": "error",
-      "file": "discord/bot/interaction-registry.ts",
-      "line": 18,
-      "description": "PendingEntry interface has `threadId: string` but findWaitingCustomText() at line 115 reads `entry.channelId`. Rename interface field to `channelId` and update register() at line 48."
+      "file": "discord/db/repo/goal-repo.ts",
+      "line": 106,
+      "description": "SQL binding mismatch: INSERT INTO goal_tasks uses @thread_id (line 112) but the run() object uses key 'channel_id' (line 133). Task channelId is silently saved as NULL through GoalRepo.save() path (called by orchestrator saveState ~39 times). Fix: change SQL binding to @channel_id or change object key to thread_id."
     },
     {
       "severity": "error",
-      "file": "discord/claude/executor.ts",
-      "line": 30,
-      "description": "ActiveProcess interface has `threadId?: string` but line 793 reads `active.channelId`. Rename field to `channelId`. Also fix line 163 which sets `threadId: options.channelId` — should be `channelId: options.channelId`."
+      "file": "discord/types/db.ts",
+      "line": 137,
+      "description": "GoalRow.drive_channel_id doesn't match the actual DB column name 'drive_thread_id' (migration 001, never renamed). SELECT * returns column 'drive_thread_id', so GoalRow.drive_channel_id will always be undefined when reading from DB. Either rename the DB column via migration or keep the TypeScript property as drive_thread_id."
     },
     {
-      "severity": "error",
+      "severity": "warning",
+      "file": "discord/orchestrator/index.ts",
+      "line": 2807,
+      "description": "notify() method parameter still named 'threadId' (line 2807). Internal references at lines 2825, 2832, 2837 also use 'threadId'. Should be renamed to 'channelId' for consistency."
+    },
+    {
+      "severity": "warning",
+      "file": "discord/orchestrator/replanner.ts",
+      "line": 53,
+      "description": "HandleReplanDeps.notify callback parameter still named 'threadId'. Should be 'channelId' for consistency."
+    },
+    {
+      "severity": "warning",
+      "file": "discord/orchestrator/index.ts",
+      "line": 1924,
+      "description": "handleReplanByImpact callback uses 'threadId' variable name: (threadId, message, type, options) => this.notify(threadId, ...). Should use channelId."
+    },
+    {
+      "severity": "warning",
+      "file": "discord/orchestrator/index.ts",
+      "line": 300,
+      "description": "Comment says 'refix 只对 failed 且有 threadId 的任务有效' — should say channelId."
+    },
+    {
+      "severity": "warning",
+      "file": "discord/orchestrator/index.ts",
+      "line": 630,
+      "description": "Comment says '保留 branchName, threadId, dispatchedAt' — should say channelId."
+    },
+    {
+      "severity": "warning",
       "file": "discord/bot/handlers.ts",
-      "line": 470,
-      "description": "sendChatInternal passes `channelId` to chat() options, but chat()'s type at client.ts:54 expects `threadId`. This property is silently ignored at runtime — Discord context system prompt won't be set. Fix by renaming chat()'s option type field (see client.ts issue)."
+      "line": 146,
+      "description": "JSDoc comment says '通过 guildId/threadId 发送消息' — should say channelId."
     },
     {
-      "severity": "error",
-      "file": "discord/bot/handlers.ts",
-      "line": 564,
-      "description": "Runtime bug: `mq.delete(threadId, msgId)` — `threadId` is not declared in this scope (was renamed to `channelId` at line 199). Progress messages won't be cleaned up after normal completion. Should be `mq.delete(channelId, msgId)`."
+      "severity": "warning",
+      "file": "discord/api/routes/messages.ts",
+      "line": 2,
+      "description": "File header comment still says ':threadId'. Should say ':channelId'."
     },
     {
-      "severity": "error",
-      "file": "discord/bot/discord.ts",
-      "line": 548,
-      "description": "Runtime ReferenceError: `this.messageQueue.sendLong(threadId, ...)` — variable `threadId` was renamed to `channelId` at line 512 in this PR. Error message won't be sent. Should use `channelId`."
+      "severity": "warning",
+      "file": "discord/api/routes/session-ops.ts",
+      "line": 2,
+      "description": "File header comments (lines 2-5) still reference ':threadId'. Should say ':channelId'."
     },
     {
-      "severity": "error",
-      "file": "discord/bot/discord.ts",
-      "line": 625,
-      "description": "Runtime ReferenceError: `this.messageQueue.sendLong(threadId, ...)` — same issue as line 548, in idea qdev error handler. Should use `channelId`."
+      "severity": "warning",
+      "file": "discord/api/routes/tasks.ts",
+      "line": 6,
+      "description": "File header comments (lines 6-10) still reference ':threadId'. Should say ':channelId'."
     },
     {
-      "severity": "error",
-      "file": "discord/bot/discord.ts",
-      "line": 665,
-      "description": "Runtime ReferenceError: `this.messageQueue.sendLong(threadId, ...)` — same issue as line 548, in idea-to-goal error handler. Should use `channelId`."
+      "severity": "warning",
+      "file": "discord/api/routes/qdev.ts",
+      "line": 2,
+      "description": "File header comment still says ':threadId'. Should say ':channelId'."
     },
     {
-      "severity": "error",
-      "file": "discord/bot/discord.ts",
-      "line": 203,
-      "description": "TS2339: ChannelUpdate/ChannelDelete event handlers access `newChannel.guild` / `channel.guild` but the Discord.js type union includes DMChannel which lacks `guild`. Add type guard before accessing `.guild`."
-    },
-    {
-      "severity": "error",
-      "file": "discord/bot/discord.ts",
-      "line": 788,
-      "description": "TS2769: `this.client.guilds.fetch(guildId)` — guildId is `string | undefined` (from config.authorizedGuildId) but fetch() requires `string`. Add guard: `if (!guildId) return;`"
-    },
-    {
-      "severity": "error",
-      "file": "discord/orchestrator/index.ts",
-      "line": 337,
-      "description": "TS2554: startRefixPipeline calls runAudit() with 6 args but runAudit() requires 7 (missing `usage: ChatUsageResult`). Create an empty usage object and pass it."
-    },
-    {
-      "severity": "error",
-      "file": "discord/orchestrator/index.ts",
-      "line": 343,
-      "description": "TS2554: startRefixPipeline calls auditFixLoop() with 8 args but signature requires 9 (missing `usage: ChatUsageResult`). Pass the usage object."
-    },
-    {
-      "severity": "error",
-      "file": "discord/orchestrator/index.ts",
-      "line": 1050,
-      "description": "executeTaskInBackground: parameter named `threadId` (line 1050) but body uses undeclared `channelId` at line 1057. Rename parameter to `channelId`."
-    },
-    {
-      "severity": "error",
-      "file": "discord/orchestrator/index.ts",
-      "line": 1396,
-      "description": "runAudit: parameter named `threadId` (line 1396) but body uses undeclared `channelId` at lines 1403, 1413. Rename parameter to `channelId`."
-    },
-    {
-      "severity": "error",
-      "file": "discord/orchestrator/__tests__/rollback.test.ts",
+      "severity": "warning",
+      "file": "discord/api/routes/messages.ts",
       "line": 19,
-      "description": "TS2322: makeState() helper missing required `goalSeq` property. GoalDriveState.goalSeq is `number` (non-optional). Add `goalSeq: 1` to default."
-    },
-    {
-      "severity": "warning",
-      "file": "discord/services/channel-service.ts",
-      "line": 144,
-      "description": "syncFromDiscord uses hardcoded fallback cwd '/default' for new channels. Consider using guild default working directory instead."
-    },
-    {
-      "severity": "warning",
-      "file": "discord/bot/handlers.ts",
-      "line": 52,
-      "description": "errorReporter callback type still uses `threadId` parameter name. Cosmetic only (no runtime impact) but inconsistent with the rename convention."
+      "description": "Log message still says 'Background chat started for thread' instead of 'channel'. Same at lines 20, 22, 23."
     }
   ]
 }
