@@ -1,16 +1,25 @@
 {
   "verdict": "fail",
-  "summary": "TypeScript 编译通过，migration/类型/UPSERT/5处替换/内存同步均正确。但 save() 简化后不再写 message_history 表，导致 2 个 message history 测试失败——测试期望 save() 写入消息历史并读回，与新行为不匹配。",
-  "verifyCommands": [
-    "./node_modules/.bin/tsc --noEmit",
-    "./node_modules/.bin/vitest run discord/db/repo/__tests__/session-repo.test.ts"
-  ],
+  "summary": "Logger 多 Transport 架构设计合理，ConsoleTransport / DiscordTransport / createLogger 工厂方法实现正确，测试全部通过。但全局 logger 实例初始化时没有注册任何 Transport，导致 Bot 构造函数 setupLogger() 之前的所有日志调用（如 index.ts:13 的启动日志）被静默丢弃，破坏了旧代码的行为契约。",
+  "verifyCommands": ["npx tsc --noEmit", "npx vitest run"],
   "issues": [
     {
       "severity": "error",
-      "file": "discord/db/repo/__tests__/session-repo.test.ts",
-      "line": 90,
-      "description": "save() 简化后不再写 message_history 表，但测试 'should save and retrieve message history'（L90）和 'should replace message history on save'（L108）仍期望 save() 写入消息历史。需要更新测试：改用 addMessageAndTrim() 写入消息，或改为验证 messageCount 字段而非 messageHistory 数组。"
+      "file": "discord/utils/logger.ts",
+      "line": 86,
+      "description": "全局 logger 实例 `new Logger()` 没有默认 Transport。旧代码中 logger 始终输出到 console，但新实现在 setupLogger() 调用前（如 index.ts:13 'Starting Discord Bot...'）所有日志被静默丢弃。应在创建全局实例时默认添加 ConsoleTransport，例如: `export const logger = createLogger({ transports: [new ConsoleTransport(!!process.env.DEBUG)] });`"
+    },
+    {
+      "severity": "warning",
+      "file": "discord/utils/transports/discord-transport.ts",
+      "line": 65,
+      "description": "潜在的循环日志风险：MessageQueue 内部使用 logger.error() 记录失败（如 message-queue.ts:460），而 DiscordTransport 会调用 MessageQueue.send()。若 send 的异步处理失败并触发 logger.error，可能产生递归日志。虽然当前因为异步分离不太可能导致栈溢出，但建议在 DiscordTransport 中加一个 isSending 防重入标志。"
+    },
+    {
+      "severity": "warning",
+      "file": "discord/bot/discord.ts",
+      "line": 87,
+      "description": "setupLogger() 中 new ConsoleTransport(!!process.env.DEBUG) 会在全局 logger 上添加 Console Transport。如果修复了全局默认 Transport 的问题（issue #1），setupLogger() 需要避免重复添加 ConsoleTransport，否则日志会输出两次。"
     }
   ]
 }
