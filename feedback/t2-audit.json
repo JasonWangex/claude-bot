@@ -1,61 +1,61 @@
 {
-  "verdict": "fail",
-  "summary": "Build (tsc --noEmit) and tests (115/115) pass. However, there are 5 critical runtime bugs in goal-repo.ts and types/db.ts: (1) goal-repo.ts still references 'goal_tasks' and 'goal_task_deps' tables which were renamed to '_deprecated_*' by migration 010 → runtime 'no such table' errors; (2) SQL uses @drive_thread_id but JS provides drive_channel_id → goalChannelId silently saved as NULL; (3) SQL INSERT uses @thread_id but JS provides channel_id → task channelId saved as NULL; (4) GoalRow.drive_channel_id TypeScript type doesn't match DB column drive_thread_id → reads return undefined; (5) GoalTaskRow.channel_id doesn't match old table's thread_id column. These bugs would break all Goal orchestrator save/load operations at runtime.",
+  "verdict": "pass",
+  "summary": "Build (tsc --noEmit) passes clean, all 115 tests pass. The implementation correctly replaces threadId→channelId across 44 files in types, repos, services, API routes, commands, handlers, orchestrator, and web frontend. New ChannelService with channel-repo, claude-session-repo, sync-cursor-repo is well structured. DB column mappings are correct (drive_thread_id DB column maps to goalChannelId in code; channel_id column in tasks table maps correctly). Dual-write to new tables and Discord event sync are properly implemented. Previous audit's critical errors (table name mismatches, SQL binding mismatches) have all been resolved. Remaining issues are comment/parameter naming inconsistencies (warning level only).",
   "verifyCommands": ["npx tsc --noEmit", "npx vitest run"],
   "issues": [
-    {
-      "severity": "error",
-      "file": "discord/db/repo/goal-repo.ts",
-      "line": 68,
-      "description": "Table name mismatch: SQL references 'goal_tasks' (line 68) and 'goal_task_deps' (line 71), but migration 010 renamed these to '_deprecated_goal_tasks' and '_deprecated_goal_task_deps'. After migration runs, GoalRepo.get() and GoalRepo.save() will fail with 'no such table: goal_tasks'. The correct table names are 'tasks' and 'task_deps'. This also affects lines 100, 104, 120, and 162."
-    },
-    {
-      "severity": "error",
-      "file": "discord/db/repo/goal-repo.ts",
-      "line": 42,
-      "description": "SQL binding mismatch: upsertGoal SQL uses @drive_thread_id (lines 42, 47, 55) but goalDriveStateToGoalRow() returns { drive_channel_id: state.goalChannelId } (line 191). better-sqlite3 binds by key name, so @drive_thread_id resolves to undefined → NULL. Goal's goalChannelId is silently lost on every save. Fix: change JS key back to 'drive_thread_id' since the DB column was never renamed by migration 010."
-    },
-    {
-      "severity": "error",
-      "file": "discord/db/repo/goal-repo.ts",
-      "line": 106,
-      "description": "SQL column/binding mismatch: INSERT INTO goal_tasks uses column 'thread_id' and binding @thread_id (line 112), but the run() object uses key 'channel_id' (line 133). The new 'tasks' table has column 'channel_id', not 'thread_id'. When switching to 'tasks' table, use @channel_id binding. If keeping old table, use @thread_id key in JS object."
-    },
-    {
-      "severity": "error",
-      "file": "discord/types/db.ts",
-      "line": 137,
-      "description": "GoalRow.drive_channel_id doesn't match actual DB column name 'drive_thread_id' (from migration 001, never altered). SELECT * returns { drive_thread_id: ... }, so GoalRow.drive_channel_id will be undefined. rowsToGoalDriveState() reads goal.drive_channel_id (goal-repo.ts:229) → always empty string. Fix: keep TS property as 'drive_thread_id' (matching DB), or add ALTER TABLE in migration."
-    },
-    {
-      "severity": "error",
-      "file": "discord/types/db.ts",
-      "line": 177,
-      "description": "GoalTaskRow.channel_id (line 177) doesn't match old 'goal_tasks' table column 'thread_id'. If goal-repo.ts reads from old table, rows will have thread_id not channel_id. If it reads from new 'tasks' table, channel_id is correct. This must be consistent with which table goal-repo.ts queries."
-    },
     {
       "severity": "warning",
       "file": "discord/orchestrator/index.ts",
       "line": 2807,
-      "description": "notify() method parameter still named 'threadId'. Internal refs at lines 2825, 2832, 2837 also use 'threadId'. Should be 'channelId'."
+      "description": "notify() method parameter still named 'threadId' (and internal refs at lines 2825, 2832, 2837). Should be renamed to 'channelId' for consistency with the rename."
     },
     {
       "severity": "warning",
       "file": "discord/orchestrator/replanner.ts",
       "line": 53,
-      "description": "HandleReplanDeps.notify callback parameter still named 'threadId'. Should be 'channelId'."
+      "description": "HandleReplanDeps.notify callback parameter still named 'threadId'. Should be 'channelId' for consistency."
     },
     {
       "severity": "warning",
       "file": "discord/orchestrator/index.ts",
       "line": 1924,
-      "description": "Lambda passes (threadId, ...) → should use channelId."
+      "description": "Lambda parameter (threadId, message, type, options) => this.notify(threadId, ...) should use channelId for consistency."
+    },
+    {
+      "severity": "warning",
+      "file": "discord/api/types.ts",
+      "line": 214,
+      "description": "GoalDetail.drive_channel_id doesn't match actual DB column name 'drive_thread_id'. Type-only issue (no runtime impact since GoalDetail is not used in route handlers), but could confuse API consumers."
+    },
+    {
+      "severity": "warning",
+      "file": "discord/api/routes/tasks.ts",
+      "line": 6,
+      "description": "JSDoc comments still reference ':threadId' URL parameter (lines 6-10, 171, 197, 268, 322, 350, 416). Routes were actually renamed to ':channelId' in server.ts."
+    },
+    {
+      "severity": "warning",
+      "file": "discord/api/routes/messages.ts",
+      "line": 2,
+      "description": "JSDoc comment still references ':threadId' URL parameter. Should be ':channelId'."
+    },
+    {
+      "severity": "warning",
+      "file": "discord/api/routes/session-ops.ts",
+      "line": 2,
+      "description": "JSDoc comments (lines 2-5) still reference ':threadId' URL parameter. Should be ':channelId'."
+    },
+    {
+      "severity": "warning",
+      "file": "discord/api/routes/qdev.ts",
+      "line": 2,
+      "description": "JSDoc comment still references ':threadId' URL parameter. Should be ':channelId'."
     },
     {
       "severity": "warning",
       "file": "discord/bot/state.ts",
       "line": 337,
-      "description": "Fire-and-forget async without .catch(): claudeSessionRepo.getActiveByChannel().then() has no error handler (lines 337, 482). Unhandled promise rejections."
+      "description": "Fire-and-forget async in setSessionClaudeId(): claudeSessionRepo.getActiveByChannel().then() lacks .catch() error handler (also at line 482 in archiveSession). Potential unhandled promise rejection."
     }
   ]
 }
