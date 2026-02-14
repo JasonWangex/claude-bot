@@ -2,6 +2,10 @@ import useSWR from 'swr';
 import { apiFetch, apiPost, apiPatch, apiDelete } from '@/lib/api';
 import type { KnowledgeBaseEntry } from '@/lib/types';
 
+export function useKBEntry(id: string | null) {
+  return useSWR<KnowledgeBaseEntry>(id ? `/api/kb/${id}` : null, apiFetch);
+}
+
 export function useKnowledgeBase(project?: string, category?: string) {
   const params = new URLSearchParams();
   if (project) params.set('project', project);

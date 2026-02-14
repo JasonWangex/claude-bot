@@ -510,4 +510,58 @@ export class StateManager {
     session.name = name;
     this.persistSession(guildId, threadId);
   }
+
+  // ========== 按模型分槽的 Session 管理（Goal Fix 流程优化） ==========
+
+  /**
+   * 设置指定模型槽的 session ID
+   * @param model - 'sonnet' 或 'opus'
+   */
+  setModelSessionId(
+    guildId: string,
+    threadId: string,
+    model: 'sonnet' | 'opus',
+    sessionId: string
+  ): void {
+    const session = this.getSession(guildId, threadId);
+    if (!session) return;
+
+    if (!session.sessionIds) session.sessionIds = {};
+    if (!session.prevSessionIds) session.prevSessionIds = {};
+
+    // 保存旧值（用于 rewind）
+    if (session.sessionIds[model]) {
+      session.prevSessionIds[model] = session.sessionIds[model];
+    }
+
+    session.sessionIds[model] = sessionId;
+    session.claudeSessionId = sessionId;  // 标记当前活跃
+    this.persistSession(guildId, threadId);
+  }
+
+  /**
+   * 获取指定模型槽的 session ID
+   */
+  getModelSessionId(
+    guildId: string,
+    threadId: string,
+    model: 'sonnet' | 'opus'
+  ): string | undefined {
+    const session = this.getSession(guildId, threadId);
+    return session?.sessionIds?.[model];
+  }
+
+  /**
+   * 清除指定模型槽
+   */
+  clearModelSessionId(
+    guildId: string,
+    threadId: string,
+    model: 'sonnet' | 'opus'
+  ): void {
+    const session = this.getSession(guildId, threadId);
+    if (!session || !session.sessionIds) return;
+    session.sessionIds[model] = undefined;
+    this.persistSession(guildId, threadId);
+  }
 }

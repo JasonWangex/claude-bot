@@ -23,12 +23,13 @@ const statusOptions = [
 ];
 
 const goalStatusOptions: { value: GoalStatus; label: string }[] = [
-  { value: 'Idea', label: 'Idea' },
-  { value: 'Active', label: 'Active' },
+  { value: 'Pending', label: 'Pending' },
+  { value: 'Collecting', label: 'Collecting' },
+  { value: 'Planned', label: 'Planned' },
   { value: 'Processing', label: 'Processing' },
-  { value: 'Paused', label: 'Paused' },
-  { value: 'Done', label: 'Done' },
-  { value: 'Abandoned', label: 'Abandoned' },
+  { value: 'Blocking', label: 'Blocking' },
+  { value: 'Completed', label: 'Completed' },
+  { value: 'Merged', label: 'Merged' },
 ];
 
 const goalTypeOptions: { value: GoalType; label: string }[] = [
@@ -79,7 +80,7 @@ export default function Goals() {
   const grouped = useMemo(() => goals ? groupByProject(goals) : [], [goals]);
 
   const openCreate = () => {
-    form.setFieldsValue({ name: '', status: 'Active', type: undefined, project: '', completion: '', body: '' });
+    form.setFieldsValue({ name: '', status: 'Pending', type: undefined, project: '', completion: '', body: '' });
     setModalOpen(true);
   };
 

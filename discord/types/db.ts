@@ -37,10 +37,14 @@ export interface SessionRow {
   thread_id: string;
   /** Discord Guild ID */
   guild_id: string;
-  /** Claude CLI session_id */
+  /** Claude CLI session_id (当前活跃) */
   claude_session_id: string | null;
   /** 上一轮 session_id（用于 rewind） */
   prev_claude_session_id: string | null;
+  /** 按模型分槽的 session IDs (JSON) */
+  session_ids_json: string | null;
+  /** 按模型分槽的 prev session IDs (JSON, 用于 rewind) */
+  prev_session_ids_json: string | null;
   /** 工作目录 */
   cwd: string;
   /** 创建时间 (Unix ms) */

@@ -17,12 +17,13 @@ const { Title, Text } = Typography;
 const { TextArea } = Input;
 
 const goalStatusOptions: { value: GoalStatus; label: string }[] = [
-  { value: 'Idea', label: 'Idea' },
-  { value: 'Active', label: 'Active' },
+  { value: 'Pending', label: 'Pending' },
+  { value: 'Collecting', label: 'Collecting' },
+  { value: 'Planned', label: 'Planned' },
   { value: 'Processing', label: 'Processing' },
-  { value: 'Paused', label: 'Paused' },
-  { value: 'Done', label: 'Done' },
-  { value: 'Abandoned', label: 'Abandoned' },
+  { value: 'Blocking', label: 'Blocking' },
+  { value: 'Completed', label: 'Completed' },
+  { value: 'Merged', label: 'Merged' },
 ];
 
 const goalTypeOptions: { value: GoalType; label: string }[] = [

@@ -8,6 +8,10 @@ export function useDevLogs() {
   });
 }
 
+export function useDevLog(id: string | null) {
+  return useSWR<DevLog>(id ? `/api/devlogs/${id}` : null, apiFetch);
+}
+
 export interface CreateDevLogData {
   name: string;
   date: string;

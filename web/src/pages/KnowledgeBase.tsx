@@ -6,6 +6,7 @@ import {
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, SearchOutlined,
 } from '@ant-design/icons';
+import { Link } from 'react-router';
 import { useKnowledgeBase, createKB, updateKB, deleteKB } from '@/lib/hooks/use-kb';
 import { formatDateTime } from '@/lib/format';
 import type { KnowledgeBaseEntry } from '@/lib/types';
@@ -25,7 +26,6 @@ interface KBFormValues {
 export default function KnowledgeBase() {
   const { data: entries, isLoading, error, mutate } = useKnowledgeBase();
   const [modalOpen, setModalOpen] = useState(false);
-  const [detailEntry, setDetailEntry] = useState<KnowledgeBaseEntry | null>(null);
   const [editingEntry, setEditingEntry] = useState<KnowledgeBaseEntry | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [form] = Form.useForm<KBFormValues>();
@@ -187,7 +187,6 @@ export default function KnowledgeBase() {
               <Card
                 size="small"
                 hoverable
-                onClick={() => setDetailEntry(entry)}
                 actions={[
                   <EditOutlined key="edit" onClick={e => { e.stopPropagation(); openEdit(entry); }} />,
                   <Popconfirm
@@ -203,7 +202,8 @@ export default function KnowledgeBase() {
                   </Popconfirm>,
                 ]}
               >
-                <Text strong>{entry.title}</Text>
+                <Link to={`/kb/${entry.id}`} style={{ color: 'inherit' }}>
+                  <Text strong>{entry.title}</Text>
                 <Paragraph
                   type="secondary"
                   style={{ fontSize: 13, marginTop: 4, marginBottom: 4 }}
@@ -221,46 +221,12 @@ export default function KnowledgeBase() {
                 <div style={{ fontSize: 11, color: '#999', marginTop: 6 }}>
                   {formatDateTime(entry.updated_at)}
                 </div>
+                </Link>
               </Card>
             </Col>
           ))}
         </Row>
       )}
-
-      {/* Detail Modal */}
-      <Modal
-        title={detailEntry?.title}
-        open={!!detailEntry}
-        onCancel={() => setDetailEntry(null)}
-        footer={[
-          <Button key="edit" icon={<EditOutlined />} onClick={() => { if (detailEntry) { openEdit(detailEntry); setDetailEntry(null); } }}>
-            编辑
-          </Button>,
-          <Button key="close" onClick={() => setDetailEntry(null)}>关闭</Button>,
-        ]}
-        width={640}
-      >
-        {detailEntry && (
-          <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-            <Space size={4} wrap>
-              <Tag color="blue">{detailEntry.project}</Tag>
-              {detailEntry.category && <Tag color="green">{detailEntry.category}</Tag>}
-              {detailEntry.source && <Tag color="orange">来源: {detailEntry.source}</Tag>}
-              {detailEntry.tags.map(tag => (
-                <Tag key={tag}>{tag}</Tag>
-              ))}
-            </Space>
-            <Card size="small">
-              <pre style={{ whiteSpace: 'pre-wrap', fontSize: 14, margin: 0 }}>
-                {detailEntry.content}
-              </pre>
-            </Card>
-            <Text type="secondary" style={{ fontSize: 12 }}>
-              创建: {formatDateTime(detailEntry.created_at)} | 更新: {formatDateTime(detailEntry.updated_at)}
-            </Text>
-          </Space>
-        )}
-      </Modal>
 
       {/* Create / Edit Modal */}
       <Modal

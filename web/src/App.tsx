@@ -8,8 +8,10 @@ import GoalDetail from '@/pages/GoalDetail';
 import Tasks from '@/pages/Tasks';
 import TaskDetail from '@/pages/TaskDetail';
 import DevLogs from '@/pages/DevLogs';
+import DevLogDetail from '@/pages/DevLogDetail';
 import Ideas from '@/pages/Ideas';
 import KnowledgeBase from '@/pages/KnowledgeBase';
+import KBDetail from '@/pages/KBDetail';
 import Login from '@/pages/Login';
 
 function RequireAuth() {
@@ -29,8 +31,10 @@ export default function App() {
             <Route path="tasks" element={<Tasks />} />
             <Route path="tasks/:threadId" element={<TaskDetail />} />
             <Route path="devlogs" element={<DevLogs />} />
+            <Route path="devlogs/:devlogId" element={<DevLogDetail />} />
             <Route path="ideas" element={<Ideas />} />
             <Route path="kb" element={<KnowledgeBase />} />
+            <Route path="kb/:kbId" element={<KBDetail />} />
           </Route>
         </Route>
       </Routes>

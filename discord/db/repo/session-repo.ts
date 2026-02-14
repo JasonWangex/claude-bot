@@ -13,6 +13,26 @@ import type { SessionRow, ArchivedSessionRow } from '../../types/db.js';
 // ==================== 转换函数 ====================
 
 function rowToSession(row: SessionRow): Session {
+  // 反序列化模型槽 JSON
+  let sessionIds: { sonnet?: string; opus?: string } | undefined;
+  let prevSessionIds: { sonnet?: string; opus?: string } | undefined;
+
+  if (row.session_ids_json) {
+    try {
+      sessionIds = JSON.parse(row.session_ids_json);
+    } catch {
+      /* ignore parse errors */
+    }
+  }
+
+  if (row.prev_session_ids_json) {
+    try {
+      prevSessionIds = JSON.parse(row.prev_session_ids_json);
+    } catch {
+      /* ignore parse errors */
+    }
+  }
+
   return {
     id: row.id,
     name: row.name,
@@ -20,6 +40,8 @@ function rowToSession(row: SessionRow): Session {
     guildId: row.guild_id,
     claudeSessionId: row.claude_session_id ?? undefined,
     prevClaudeSessionId: row.prev_claude_session_id ?? undefined,
+    sessionIds,
+    prevSessionIds,
     cwd: row.cwd,
     createdAt: row.created_at,
     lastMessage: row.last_message ?? undefined,
@@ -56,6 +78,8 @@ function sessionToParams(session: Session): Record<string, unknown> {
     guild_id: session.guildId,
     claude_session_id: session.claudeSessionId ?? null,
     prev_claude_session_id: session.prevClaudeSessionId ?? null,
+    session_ids_json: session.sessionIds ? JSON.stringify(session.sessionIds) : null,
+    prev_session_ids_json: session.prevSessionIds ? JSON.stringify(session.prevSessionIds) : null,
     cwd: session.cwd,
     created_at: session.createdAt,
     last_message: session.lastMessage ?? null,
@@ -109,10 +133,12 @@ export class SessionRepository implements ISessionRepo {
       upsert: this.db.prepare(`
         INSERT INTO sessions (
           id, name, thread_id, guild_id, claude_session_id, prev_claude_session_id,
+          session_ids_json, prev_session_ids_json,
           cwd, created_at, last_message, last_message_at, plan_mode, model,
           parent_thread_id, worktree_branch, message_count
         ) VALUES (
           @id, @name, @thread_id, @guild_id, @claude_session_id, @prev_claude_session_id,
+          @session_ids_json, @prev_session_ids_json,
           @cwd, @created_at, @last_message, @last_message_at, @plan_mode, @model,
           @parent_thread_id, @worktree_branch, @message_count
         )
@@ -120,6 +146,8 @@ export class SessionRepository implements ISessionRepo {
           name = @name,
           claude_session_id = @claude_session_id,
           prev_claude_session_id = @prev_claude_session_id,
+          session_ids_json = @session_ids_json,
+          prev_session_ids_json = @prev_session_ids_json,
           cwd = @cwd,
           last_message = @last_message,
           last_message_at = @last_message_at,
@@ -169,11 +197,13 @@ export class SessionRepository implements ISessionRepo {
       insertArchived: this.db.prepare(`
         INSERT INTO archived_sessions (
           id, name, thread_id, guild_id, claude_session_id, prev_claude_session_id,
+          session_ids_json, prev_session_ids_json,
           cwd, created_at, last_message, last_message_at, plan_mode, model,
           parent_thread_id, worktree_branch, message_count, archived_at, archived_by,
           archive_reason, message_history_json
         ) VALUES (
           @id, @name, @thread_id, @guild_id, @claude_session_id, @prev_claude_session_id,
+          @session_ids_json, @prev_session_ids_json,
           @cwd, @created_at, @last_message, @last_message_at, @plan_mode, @model,
           @parent_thread_id, @worktree_branch, @message_count, @archived_at, @archived_by,
           @archive_reason, @message_history_json
@@ -261,6 +291,8 @@ export class SessionRepository implements ISessionRepo {
         guild_id: row.guild_id,
         claude_session_id: row.claude_session_id,
         prev_claude_session_id: row.prev_claude_session_id,
+        session_ids_json: row.session_ids_json,
+        prev_session_ids_json: row.prev_session_ids_json,
         cwd: row.cwd,
         created_at: row.created_at,
         last_message: row.last_message,

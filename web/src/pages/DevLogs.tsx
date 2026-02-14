@@ -4,6 +4,7 @@ import {
   Button, Modal, Form, Input, InputNumber, message,
 } from 'antd';
 import { BranchesOutlined, CodeOutlined, PlusOutlined } from '@ant-design/icons';
+import { Link } from 'react-router';
 import { useDevLogs, createDevLog } from '@/lib/hooks/use-devlogs';
 import { formatDateTime } from '@/lib/format';
 
@@ -117,22 +118,24 @@ export default function DevLogs() {
           items={filtered.map(log => ({
             key: log.id,
             children: (
-              <Card size="small">
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-                  <Text strong>{log.name}</Text>
-                  <Text type="secondary" style={{ fontSize: 12 }}>{formatDateTime(log.created_at)}</Text>
-                </div>
-                <Space size={4} style={{ marginBottom: 4 }}>
-                  <Tag color="blue">{log.project}</Tag>
-                  {log.goal && <Tag>{log.goal}</Tag>}
-                </Space>
-                <div style={{ fontSize: 14, color: '#595959', marginBottom: 4 }}>{log.summary}</div>
-                <Space size={16} style={{ fontSize: 12, color: '#999' }}>
-                  <span><BranchesOutlined /> {log.branch}</span>
-                  <span>{log.commits} commits</span>
-                  <span><CodeOutlined /> {log.lines_changed}</span>
-                </Space>
-              </Card>
+              <Link to={`/devlogs/${log.id}`} style={{ display: 'block', color: 'inherit' }}>
+                <Card size="small" hoverable>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+                    <Text strong>{log.name}</Text>
+                    <Text type="secondary" style={{ fontSize: 12 }}>{formatDateTime(log.created_at)}</Text>
+                  </div>
+                  <Space size={4} style={{ marginBottom: 4 }}>
+                    <Tag color="blue">{log.project}</Tag>
+                    {log.goal && <Tag>{log.goal}</Tag>}
+                  </Space>
+                  <div style={{ fontSize: 14, color: '#595959', marginBottom: 4 }}>{log.summary}</div>
+                  <Space size={16} style={{ fontSize: 12, color: '#999' }}>
+                    <span><BranchesOutlined /> {log.branch}</span>
+                    <span>{log.commits} commits</span>
+                    <span><CodeOutlined /> {log.lines_changed}</span>
+                  </Space>
+                </Card>
+              </Link>
             ),
           }))}
         />

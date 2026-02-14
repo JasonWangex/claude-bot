@@ -475,6 +475,13 @@ export class MessageHandler {
       images = undefined;
 
       this.stateManager.setSessionClaudeId(guildId, threadId, response.sessionId);
+
+      // 根据当前模型保存到对应槽位（Goal Fix 流程优化）
+      if (effectiveModel) {
+        const modelSlot = effectiveModel.toLowerCase().includes('opus') ? 'opus' : 'sonnet';
+        this.stateManager.setModelSessionId(guildId, threadId, modelSlot, response.sessionId);
+      }
+
       this.stateManager.updateSessionMessage(guildId, threadId, response.result, 'assistant');
       logger.info(`[${session.name}] Response length:`, response.result.length);
 

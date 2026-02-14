@@ -400,7 +400,7 @@ export class GoalOrchestrator {
       try {
         // 使用 Sonnet 做调查（快速且够用）
         const { pipelineSonnetModel: sonnetModel } = this.deps.config;
-        this.switchSessionModel(guildId, threadId, sonnetModel);
+        this.switchSessionModel(guildId, threadId, sonnetModel, 'fix');
         await this.updatePipelinePhase(goalId, taskId, 'fix');
 
         await this.notify(state.goalThreadId,
@@ -1095,10 +1095,36 @@ export class GoalOrchestrator {
   // ========== 多模型流水线 ==========
 
   /**
-   * 切换 session 到新模型，开始新 pipeline phase
-   * 清除旧 claudeSessionId 使得下次 handleBackgroundChat 启动新 session
+   * 切换 session 到新模型，智能复用已有 session
+   * - execute: 创建新 sonnet/opus session
+   * - audit: 创建新 opus session（独立）
+   * - fix: 复用 execute 的 sonnet session ← 关键优化
+   * - plan: 创建新 opus session
    */
-  private switchSessionModel(guildId: string, threadId: string, model: string): void {
+  private switchSessionModel(
+    guildId: string,
+    threadId: string,
+    model: string,
+    phase?: GoalPipelinePhase
+  ): void {
+    // 判断模型槽位（opus 或 其他都归为 sonnet）
+    const modelSlot: 'sonnet' | 'opus' =
+      model.toLowerCase().includes('opus') ? 'opus' : 'sonnet';
+
+    // Fix 阶段：复用 execute 阶段的 sonnet session
+    if (phase === 'fix' && modelSlot === 'sonnet') {
+      const existingSessionId = this.deps.stateManager.getModelSessionId(guildId, threadId, 'sonnet');
+      if (existingSessionId) {
+        // 恢复到已有的 sonnet session
+        this.deps.stateManager.setSessionClaudeId(guildId, threadId, existingSessionId);
+        this.deps.stateManager.setSessionModel(guildId, threadId, model);
+        logger.info(`[Orchestrator] Reusing Sonnet session for fix: ${existingSessionId.slice(0, 8)}`);
+        return;
+      }
+      logger.warn(`[Orchestrator] No saved Sonnet session, creating new one for fix`);
+    }
+
+    // 其他阶段：清除并创建新 session
     this.deps.stateManager.clearSessionClaudeId(guildId, threadId);
     this.deps.stateManager.setSessionModel(guildId, threadId, model);
   }
@@ -1209,7 +1235,7 @@ export class GoalOrchestrator {
     taskDetailPlan?: TaskDetailPlan,
   ): Promise<void> {
     const opusModel = this.deps.config.pipelineOpusModel;
-    this.switchSessionModel(guildId, threadId, opusModel);
+    this.switchSessionModel(guildId, threadId, opusModel, 'execute');
     await this.updatePipelinePhase(goalId, taskId, 'execute');
 
     await this.notify(state.goalThreadId,
@@ -1245,7 +1271,7 @@ export class GoalOrchestrator {
     const { pipelineSonnetModel: sonnetModel } = this.deps.config;
 
     // Phase 1: Sonnet 执行
-    this.switchSessionModel(guildId, threadId, sonnetModel);
+    this.switchSessionModel(guildId, threadId, sonnetModel, 'execute');
     await this.updatePipelinePhase(goalId, taskId, 'execute');
 
     await this.notify(state.goalThreadId,
@@ -1300,7 +1326,7 @@ export class GoalOrchestrator {
     const { pipelineOpusModel: opusModel, pipelineSonnetModel: sonnetModel } = this.deps.config;
 
     // Phase 1: Opus plan
-    this.switchSessionModel(guildId, threadId, opusModel);
+    this.switchSessionModel(guildId, threadId, opusModel, 'plan');
     await this.updatePipelinePhase(goalId, taskId, 'plan');
 
     await this.notify(state.goalThreadId,
@@ -1329,7 +1355,7 @@ export class GoalOrchestrator {
     }
 
     // Phase 2: Sonnet 执行（读 plan）
-    this.switchSessionModel(guildId, threadId, sonnetModel);
+    this.switchSessionModel(guildId, threadId, sonnetModel, 'execute');
     await this.updatePipelinePhase(goalId, taskId, 'execute');
 
     await this.notify(state.goalThreadId,
@@ -1388,6 +1414,7 @@ export class GoalOrchestrator {
   ): Promise<void> {
     const { pipelineSonnetModel: sonnetModel } = this.deps.config;
     const maxRetries = 2;
+    const maxSelfReviewRetries = 1;  // Self-review 失败后的 refix 次数上限
 
     for (let retry = 1; retry <= maxRetries; retry++) {
       if (!await this.isTaskStillRunning(goalId, taskId)) {
@@ -1398,7 +1425,7 @@ export class GoalOrchestrator {
       await this.updateAuditRetries(goalId, taskId, retry);
 
       // Sonnet fix
-      this.switchSessionModel(guildId, threadId, sonnetModel);
+      this.switchSessionModel(guildId, threadId, sonnetModel, 'fix');
       await this.updatePipelinePhase(goalId, taskId, 'fix');
 
       await this.notify(state.goalThreadId,
@@ -1411,7 +1438,31 @@ export class GoalOrchestrator {
       const fixUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, fixPrompt);
       this.accumulateUsage(usage, fixUsage);
 
-      // Re-audit
+      // Self-review（在同一 Sonnet session 中自查修复质量）
+      const selfReviewResult = await this.runSelfReview(
+        goalId, taskId, guildId, threadId, task, state, issues, verifyCommands, usage
+      );
+
+      if (selfReviewResult.hasRemainingIssues) {
+        logger.info(`[Orchestrator] Pipeline ${taskId}: Self-review found ${selfReviewResult.remainingIssues.length} issues`);
+
+        // Self-review 失败：允许有限次 refix，避免耗尽重试机会
+        if (retry < maxRetries) {
+          logger.info(`[Orchestrator] Pipeline ${taskId}: Attempting refix based on self-review feedback`);
+          issues = selfReviewResult.remainingIssues;
+          continue;  // 继续下一轮 fix
+        } else {
+          logger.warn(`[Orchestrator] Pipeline ${taskId}: Self-review still found issues but retries exhausted, proceeding to Opus audit anyway`);
+          // 最后一次重试：即使 self-review 失败也进入 Opus audit（让 Opus 做最终判断）
+        }
+      }
+
+      // Self-review 通过 → Opus re-audit
+      await this.notify(state.goalThreadId,
+        `[Pipeline] ${taskId}: Self-review 通过 → Opus 二次审查`,
+        'pipeline',
+      );
+
       const reAudit = await this.runAudit(goalId, taskId, guildId, threadId, task, state, usage, taskDetailPlan);
       if (reAudit.verdict === 'pass') {
         await this.onTaskCompleted(goalId, taskId, usage);
@@ -1429,6 +1480,131 @@ export class GoalOrchestrator {
   }
 
   /**
+   * Sonnet self-review：在同一 session 中自查修复质量
+   */
+  private async runSelfReview(
+    goalId: string,
+    taskId: string,
+    guildId: string,
+    threadId: string,
+    task: GoalTask,
+    state: GoalDriveState,
+    originalIssues: string[],
+    verifyCommands: string[],
+    usage: ChatUsageResult,
+  ): Promise<{ hasRemainingIssues: boolean; remainingIssues: string[] }> {
+    await this.notify(state.goalThreadId, `[Pipeline] ${taskId}: Sonnet 自查中...`, 'pipeline');
+
+    const selfReviewPrompt = this.buildSelfReviewPrompt(task, state, originalIssues, verifyCommands);
+    const reviewUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, selfReviewPrompt);
+    this.accumulateUsage(usage, reviewUsage);
+
+    const result = await this.readSelfReviewResult(state, task);
+
+    if (!result.hasRemainingIssues) {
+      await this.notify(state.goalThreadId, `[Pipeline] ${taskId}: Self-review 通过 ✓`, 'success');
+    } else {
+      await this.notify(state.goalThreadId,
+        `[Pipeline] ${taskId}: Self-review 发现 ${result.remainingIssues.length} 个遗留问题`,
+        'warning',
+      );
+    }
+
+    return result;
+  }
+
+  /**
+   * 构建 Self-review prompt
+   */
+  private buildSelfReviewPrompt(
+    task: GoalTask,
+    state: GoalDriveState,
+    originalIssues: string[],
+    verifyCommands: string[],
+  ): string {
+    const issueList = originalIssues.map((issue, i) => `  ${i + 1}. ${issue}`).join('\n');
+
+    return [
+      `You just finished fixing audit issues. Now perform a **self-review** to catch remaining problems before the senior reviewer checks.`,
+      ``,
+      `## Task`,
+      `ID: ${this.getTaskLabel(state, task.id)}`,
+      `Description: ${task.description}`,
+      ``,
+      `## Original Issues You Fixed`,
+      issueList,
+      ``,
+      `## Self-Review Instructions`,
+      `1. Read your recent changes (\`git diff HEAD~1\`)`,
+      `2. Verify each original issue is actually fixed`,
+      verifyCommands.length > 0
+        ? `3. Run these verification commands:\n${verifyCommands.map(c => `   - \`${c}\``).join('\n')}`
+        : `3. Run build and test commands`,
+      `4. Check for new errors (typos, missing imports, logic errors)`,
+      `5. Write self-review result to \`feedback/${task.id}-self-review.json\`:`,
+      '```json',
+      `{ "allIssuesFixed": true|false, "remainingIssues": [...], "notes": "..." }`,
+      '```',
+      `6. Commit the file: \`git add feedback/${task.id}-self-review.json && git commit -m "Self-review"\``,
+      ``,
+      `## Rules`,
+      `- Be **honest** — better to catch issues now than fail Opus audit`,
+      `- If verify commands fail, set \`allIssuesFixed: false\``,
+      `- Do NOT re-fix issues — just report what you find`,
+    ].join('\n');
+  }
+
+  /**
+   * 读取 self-review 结果
+   */
+  private async readSelfReviewResult(
+    state: GoalDriveState,
+    task: GoalTask,
+  ): Promise<{ hasRemainingIssues: boolean; remainingIssues: string[] }> {
+    if (!task.branchName) {
+      return { hasRemainingIssues: true, remainingIssues: ['No branch name'] };
+    }
+
+    let subtaskDir: string | null = null;
+    try {
+      const stdout = await execGit(['worktree', 'list', '--porcelain'], state.baseCwd, '...');
+      subtaskDir = this.findWorktreeDir(stdout, task.branchName);
+    } catch (err: any) {
+      return { hasRemainingIssues: true, remainingIssues: [`Cannot list worktrees: ${err.message}`] };
+    }
+
+    if (!subtaskDir) {
+      return { hasRemainingIssues: true, remainingIssues: ['Worktree not found'] };
+    }
+
+    const reviewPath = join(subtaskDir, 'feedback', `${task.id}-self-review.json`);
+
+    try {
+      await access(reviewPath);
+      const content = await readFile(reviewPath, 'utf-8');
+      const parsed = JSON.parse(content);
+
+      // 验证 JSON 结构
+      if (typeof parsed !== 'object' || parsed === null) {
+        logger.warn(`[Orchestrator] Self-review ${task.id}: Invalid JSON structure`);
+        return { hasRemainingIssues: true, remainingIssues: ['Invalid self-review format'] };
+      }
+
+      // 验证 remainingIssues 是数组
+      const remainingIssues = Array.isArray(parsed.remainingIssues) ? parsed.remainingIssues : [];
+
+      return {
+        hasRemainingIssues: parsed.allIssuesFixed !== true || remainingIssues.length > 0,
+        remainingIssues,
+      };
+    } catch (err: any) {
+      // 没写文件或解析失败 → 假定有问题（保守策略）
+      logger.warn(`[Orchestrator] Self-review ${task.id}: Failed to read or parse - ${err.message}`);
+      return { hasRemainingIssues: true, remainingIssues: ['Self-review file not found or invalid'] };
+    }
+  }
+
+  /**
    * 运行 Opus audit：读取 git diff → 审查 → 返回 pass/fail
    */
   private async runAudit(
@@ -1443,7 +1619,7 @@ export class GoalOrchestrator {
   ): Promise<{ verdict: 'pass' | 'fail'; summary?: string; issues: string[]; verifyCommands: string[] }> {
     const { pipelineOpusModel: opusModel } = this.deps.config;
 
-    this.switchSessionModel(guildId, threadId, opusModel);
+    this.switchSessionModel(guildId, threadId, opusModel, 'audit');
     await this.updatePipelinePhase(goalId, taskId, 'audit');
 
     await this.notify(state.goalThreadId,
