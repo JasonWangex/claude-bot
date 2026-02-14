@@ -1,79 +1,127 @@
 {
   "verdict": "fail",
-  "summary": "sessionToParams() 输出 channel_id / parent_channel_id，但 SQL 预编译语句仍使用 @thread_id / @parent_thread_id，导致 14 个测试失败（Missing named parameter 'thread_id'）。此外，多个 API 路由文件中残留 threadId 未定义变量引用（变量已重命名为 channelId 但部分使用点未更新），将导致运行时 undefined 错误。ForkTaskResult.threadName 已重命名为 channelName，但调用方仍引用旧属性名。SessionRow 类型已改为 channel_id，但 rowToSession() 仍读取 row.thread_id。",
-  "verifyCommands": ["npx vitest run", "./node_modules/.bin/tsc --noEmit"],
+  "summary": "TypeScript 编译失败（104 个错误，涉及 13 个文件）。threadId→channelId 重命名极度不完整：函数参数已重命名为 channelId 但函数体内大量引用仍使用旧名 threadId（变量未声明→ReferenceError）；部分位置做了相反的错误（参数名 threadId 但内部使用 channelId）；类型接口已更新但实现代码未同步。新增的 channel-service.ts 本身代码质量良好，但整体集成因重命名不完整而无法编译。测试通过（115 tests），因为测试覆盖范围不包含出错的文件。",
+  "verifyCommands": ["npx tsc --noEmit", "npx vitest run"],
   "issues": [
     {
       "severity": "error",
-      "file": "discord/db/repo/session-repo.ts",
-      "line": 55,
-      "description": "sessionToParams() 返回 { channel_id, parent_channel_id }，但 SQL（行 111-118）使用 @thread_id / @parent_thread_id 命名参数。键名不匹配导致 better-sqlite3 抛出 'Missing named parameter thread_id'。需要将 sessionToParams 的键名改回 thread_id/parent_thread_id（因为 _deprecated_sessions 表列名没变），或修改 SQL 使用 @channel_id/@parent_channel_id。"
+      "file": "discord/bot/handlers.ts",
+      "line": 91,
+      "description": "handleText() 参数已重命名为 channelId（行 78），但行 91 仍引用 threadId（`thread-${threadId}`）。threadId 未声明，运行时 ReferenceError。同一问题贯穿整个文件：行 121, 127, 134, 140, 152, 179, 184, 209, 223, 255, 256, 276, 287, 291, 322, 333, 337, 342, 348, 367, 375, 436, 470, 498, 509, 516, 523, 537, 564, 569, 600, 606, 613, 625, 631, 641, 661 共 37 处引用 threadId 变量但均未声明。"
     },
     {
       "severity": "error",
-      "file": "discord/db/repo/session-repo.ts",
+      "file": "discord/bot/handlers.ts",
+      "line": 683,
+      "description": "handleBackgroundChat() 参数名仍为 threadId（行 680），但行 683 使用 channelId 调用 stateManager.getSession()。channelId 未声明。同样行 699, 701, 720 也引用 channelId。方向相反但同样的 undefined 变量问题。"
+    },
+    {
+      "severity": "error",
+      "file": "discord/bot/handlers.ts",
+      "line": 107,
+      "description": "handleText() 和 handlePhoto() 返回类型应为 Promise<void>，但实际返回 this.sendChatInternal() 的 Promise<ChatUsageResult>。TypeScript 报 TS2322: Type 'ChatUsageResult' is not assignable to type 'void'。影响行 107, 137, 156, 186。"
+    },
+    {
+      "severity": "error",
+      "file": "discord/orchestrator/index.ts",
+      "line": 337,
+      "description": "startRefixPipeline() 参数已重命名为 channelId（行 331），但行 337, 343, 405 仍引用 threadId。此外 runAudit() 和 auditFixLoop() 调用参数数量不匹配（Expected 7/9 arguments, but got 6/8），因为重命名导致参数传递错误。"
+    },
+    {
+      "severity": "error",
+      "file": "discord/orchestrator/index.ts",
+      "line": 1057,
+      "description": "executeTaskInBackground() 参数名仍为 threadId（行 1050），但行 1057 使用 channelId 调用 handleBackgroundChat()。channelId 未声明。"
+    },
+    {
+      "severity": "error",
+      "file": "discord/orchestrator/index.ts",
+      "line": 1176,
+      "description": "pipelineResearch() 参数名仍为 threadId（行 1170），但行 1176, 1186 使用 channelId 调用 switchSessionModel/handleBackgroundChat。channelId 未声明。同一模式影响 pipelineSimpleCode（行 1211, 1221）、pipelineComplexCode（行 1265, 1275, 1294, 1307）、auditFixLoop（行 1361, 1371）共约 20 处。"
+    },
+    {
+      "severity": "error",
+      "file": "discord/bot/commands/dev.ts",
+      "line": 107,
+      "description": "多处引用 threadId 变量但未声明（行 107, 195, 206, 221, 231, 276）。参数已重命名为 channelId 但函数体未更新。"
+    },
+    {
+      "severity": "error",
+      "file": "discord/bot/commands/goal.ts",
+      "line": 84,
+      "description": "多处引用 threadId 变量但未声明（行 84, 122, 132, 157, 178）。参数已重命名为 channelId 但函数体未更新。"
+    },
+    {
+      "severity": "error",
+      "file": "discord/bot/commands/session.ts",
+      "line": 235,
+      "description": "行 235, 257 引用 threadId 变量但未声明。参数已重命名为 channelId 但函数体未更新。"
+    },
+    {
+      "severity": "error",
+      "file": "discord/bot/commands/task.ts",
+      "line": 335,
+      "description": "行 335 引用 threadId 变量但未声明。"
+    },
+    {
+      "severity": "error",
+      "file": "discord/bot/commands/model.ts",
+      "line": 64,
+      "description": "行 64: `const channelId = channelId` — 变量使用自身初始化，导致 TS7022 (implicit any) 和 TS2448 (used before declaration)。行 65 仍引用 threadId。"
+    },
+    {
+      "severity": "error",
+      "file": "discord/bot/discord.ts",
+      "line": 203,
+      "description": "channelCreate/channelDelete 事件回调中引用 channel.guild，但 TypeScript 推断类型为 DMChannel | NonThreadGuildBasedChannel，DMChannel 没有 guild 属性。需要类型守卫。行 203, 215 均受影响。"
+    },
+    {
+      "severity": "error",
+      "file": "discord/bot/discord.ts",
+      "line": 548,
+      "description": "行 548, 625, 665 引用 threadId 变量但未声明。"
+    },
+    {
+      "severity": "error",
+      "file": "discord/bot/interaction-registry.ts",
+      "line": 115,
+      "description": "findWaitingCustomText() 比较 entry.channelId === threadId，但 threadId 未声明（参数已改为 channelId）。应改为 entry.channelId === channelId。"
+    },
+    {
+      "severity": "error",
+      "file": "discord/claude/client.ts",
+      "line": 120,
+      "description": "options 类型中没有 channelId 属性（行 120, 122 引用 options.channelId），同时行 138 将 threadId 设为 options.channelId 但 ClaudeOptions 类型没有 threadId 属性（已改为 channelId）。需要同步 chat() 的 options 参数类型定义。"
+    },
+    {
+      "severity": "error",
+      "file": "discord/claude/executor.ts",
+      "line": 793,
+      "description": "detachAll() 中构造 ProcessRegistryEntry 时使用 { threadId: active.channelId }（行 793），但 ProcessRegistryEntry 类型已改为 channelId。active 对象也没有 channelId 属性。reconnectAll() 中同样的问题：行 856, 875, 897 使用 { threadId: entry.channelId } 但 ReconnectedResult 类型已改为 channelId。"
+    },
+    {
+      "severity": "error",
+      "file": "discord/db/repo/goal-repo.ts",
+      "line": 229,
+      "description": "引用 goal.drive_thread_id，但 GoalRow 类型已将该字段重命名为 drive_channel_id（db.ts 行 137）。"
+    },
+    {
+      "severity": "error",
+      "file": "discord/db/repo/goal-repo.ts",
+      "line": 248,
+      "description": "映射任务时使用 threadId: t.thread_id，但 GoalTaskRow 类型已将该字段重命名为 channel_id（db.ts 行 177）。GoalTask 接口也已改为 channelId（index.ts 行 311）。"
+    },
+    {
+      "severity": "error",
+      "file": "discord/orchestrator/__tests__/rollback.test.ts",
       "line": 19,
-      "description": "rowToSession() 读取 row.thread_id 和 row.parent_thread_id，但 SessionRow 类型已将这些字段重命名为 channel_id 和 parent_channel_id。TS 编译报错：Property 'thread_id' does not exist on type 'SessionRow'。要么恢复 SessionRow 中的旧字段名（因为实际 DB 列名仍是 thread_id），要么同步修改 rowToSession。"
+      "description": "GoalDriveState 的 goalSeq 字段类型为 number（必须），但测试中使用了 goalSeq?: number | undefined 导致类型不兼容。"
     },
     {
       "severity": "error",
-      "file": "discord/api/routes/messages.ts",
-      "line": 34,
-      "description": "变量 threadId 已重命名为 channelId（行 19），但行 34, 46, 52, 54, 56, 57 仍引用 threadId。threadId 未声明，运行时为 ReferenceError。"
-    },
-    {
-      "severity": "error",
-      "file": "discord/api/routes/qdev.ts",
-      "line": 45,
-      "description": "变量 threadId 已重命名为 channelId（行 26），但行 45, 68 仍引用 threadId。threadId 未声明，运行时为 ReferenceError。"
-    },
-    {
-      "severity": "error",
-      "file": "discord/api/routes/qdev.ts",
-      "line": 92,
-      "description": "ForkTaskResult.threadName 已重命名为 channelName，但此处仍引用 forkResult.threadName。TS 编译报错且运行时为 undefined。"
-    },
-    {
-      "severity": "error",
-      "file": "discord/api/routes/tasks.ts",
-      "line": 224,
-      "description": "变量 threadId 已重命名为 channelId（行 202），但行 224, 306, 314, 336, 379, 408, 436, 449 仍引用 threadId。threadId 未声明，运行时为 ReferenceError。updateTask、deleteTask、archiveTask、forkTask、getTaskInteractions 全部受影响。"
-    },
-    {
-      "severity": "error",
-      "file": "discord/api/routes/tasks.ts",
-      "line": 405,
-      "description": "ForkTaskResult.threadName 已重命名为 channelName，但此处仍引用 result.threadName。TS 编译报错且运行时为 undefined。"
-    },
-    {
-      "severity": "error",
-      "file": "discord/db/repo/__tests__/session-repo.test.ts",
-      "line": 174,
-      "description": "测试调用 repo.findByParentThreadId()，但该方法已重命名为 findByParentChannelId()。TS 编译报错。"
-    },
-    {
-      "severity": "warning",
-      "file": "discord/db/repo/session-repo.ts",
-      "line": 5,
-      "description": "注释仍写 '复合键: (guild_id, thread_id)'，应更新为 (guild_id, channel_id) 以保持文档一致性。"
-    },
-    {
-      "severity": "warning",
-      "file": "discord/api/routes/tasks.ts",
-      "line": 6,
-      "description": "路由注释仍使用 :threadId 参数名（如行 6-10），实际路由已改为 :channelId。建议更新注释。"
-    },
-    {
-      "severity": "warning",
-      "file": "discord/api/routes/qdev.ts",
-      "line": 2,
-      "description": "路由注释仍写 POST /api/tasks/:threadId/qdev，实际路由参数已改为 :channelId。"
-    },
-    {
-      "severity": "warning",
-      "file": "discord/api/routes/messages.ts",
-      "line": 2,
-      "description": "路由注释仍写 POST /api/tasks/:threadId/message，实际路由参数已改为 :channelId。"
+      "file": "discord/bot/discord.ts",
+      "line": 788,
+      "description": "No overload matches this call — 可能是 discord.js 事件监听器类型不匹配。"
     }
   ]
 }
