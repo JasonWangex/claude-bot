@@ -4,7 +4,7 @@ import { InteractionTurn } from './InteractionTurn';
 import type { InteractionLogEntry } from '@/lib/types';
 
 interface InteractionLogProps {
-  threadId: string;
+  channelId: string;
 }
 
 function formatTokens(value: number): string {
@@ -12,8 +12,8 @@ function formatTokens(value: number): string {
   return (value / 1000).toFixed(1) + 'k';
 }
 
-export function InteractionLog({ threadId }: InteractionLogProps) {
-  const { data, error, isLoading } = useTaskInteractions(threadId);
+export function InteractionLog({ channelId }: InteractionLogProps) {
+  const { data, error, isLoading } = useTaskInteractions(channelId);
 
   if (isLoading) {
     return (

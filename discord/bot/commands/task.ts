@@ -76,11 +76,11 @@ async function handleClose(
   if (!requireThread(interaction)) return;
 
   const guildId = interaction.guildId!;
-  const threadId = interaction.channelId;
+  const channelId = interaction.channelId;
   const force = interaction.options.getBoolean('force') ?? false;
   const { stateManager, claudeClient } = deps;
 
-  const session = stateManager.getSession(guildId, threadId);
+  const session = stateManager.getSession(guildId, channelId);
   if (!session) {
     await interaction.reply({ content: 'No session found for this channel.', ephemeral: true });
     return;
@@ -89,7 +89,7 @@ async function handleClose(
   await interaction.deferReply();
 
   // 检查是否有运行中的 Claude 进程
-  const lockKey = StateManager.threadLockKey(guildId, threadId);
+  const lockKey = StateManager.channelLockKey(guildId, channelId);
   if (claudeClient.isRunning(lockKey)) {
     await interaction.editReply('Cannot close: a Claude task is still running. Use `/stop` first.');
     return;
@@ -141,7 +141,7 @@ async function handleClose(
   }
 
   // 归档 session
-  stateManager.archiveSession(guildId, threadId);
+  stateManager.archiveSession(guildId, channelId);
 
   // 先回复再删除 channel
   await interaction.editReply(`Channel closing: **${escapeMarkdown(session.name)}**`);
@@ -212,11 +212,11 @@ async function handleCd(
   if (!requireThread(interaction)) return;
 
   const guildId = interaction.guildId!;
-  const threadId = interaction.channelId;
+  const channelId = interaction.channelId;
   const { stateManager } = deps;
-  const channelName = (interaction.channel && 'name' in interaction.channel ? interaction.channel.name : null) ?? `channel-${threadId}`;
+  const channelName = (interaction.channel && 'name' in interaction.channel ? interaction.channel.name : null) ?? `channel-${channelId}`;
 
-  const session = stateManager.getOrCreateSession(guildId, threadId, {
+  const session = stateManager.getOrCreateSession(guildId, channelId, {
     name: channelName,
     cwd: stateManager.getGuildDefaultCwd(guildId),
   });
@@ -236,7 +236,7 @@ async function handleCd(
       await interaction.reply({ content: `Not a directory: \`${resolvedPath}\``, ephemeral: true });
       return;
     }
-    stateManager.setSessionCwd(guildId, threadId, resolvedPath);
+    stateManager.setSessionCwd(guildId, channelId, resolvedPath);
     await interaction.reply(`Working directory changed to: \`${escapeMarkdown(resolvedPath)}\``);
   } catch {
     await interaction.reply({ content: `Directory does not exist: \`${resolvedPath}\``, ephemeral: true });

@@ -11,10 +11,10 @@ import { formatDistanceToNow } from '@/lib/format';
 const { Title } = Typography;
 
 export default function TaskDetail() {
-  const { threadId } = useParams<{ threadId: string }>();
-  const { data: task, error } = useTask(threadId ?? null);
+  const { channelId } = useParams<{ channelId: string }>();
+  const { data: task, error } = useTask(channelId ?? null);
 
-  if (!threadId) return <Navigate to="/tasks" replace />;
+  if (!channelId) return <Navigate to="/tasks" replace />;
 
   if (error) {
     return <Alert message="加载失败" description={error.message} type="error" showIcon />;
@@ -64,7 +64,7 @@ export default function TaskDetail() {
           {
             key: 'interactions',
             label: '交互日志',
-            children: <InteractionLog threadId={threadId} />,
+            children: <InteractionLog channelId={channelId} />,
           },
           {
             key: 'messages',

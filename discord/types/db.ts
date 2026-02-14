@@ -34,7 +34,7 @@ export interface SessionRow {
   id: string;
   /** 用户自定义名称 */
   name: string;
-  /** Discord Channel ID */
+  /** Discord Channel ID (DB 列名仍为 thread_id) */
   thread_id: string;
   /** Discord Guild ID */
   guild_id: string;
@@ -54,7 +54,7 @@ export interface SessionRow {
   plan_mode: number;
   /** 用户选择的 Claude 模型 */
   model: string | null;
-  /** 父 Channel ID（fork 产生的子 channel） */
+  /** 父 Channel ID（fork 产生的子 channel，DB 列名仍为 parent_thread_id） */
   parent_thread_id: string | null;
   /** worktree 分支名 */
   worktree_branch: string | null;
@@ -176,7 +176,7 @@ export interface GoalTaskRow {
   /** git 分支名 */
   branch_name: string | null;
   /** 对应的 Discord Thread ID */
-  thread_id: string | null;
+  channel_id: string | null;
   /** 派发时间 (Unix ms) */
   dispatched_at: number | null;
   /** 完成时间 (Unix ms) */

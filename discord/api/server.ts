@@ -53,20 +53,20 @@ function defineRoutes(): Route[] {
     // Task CRUD
     r('GET',    '/api/tasks', listTasks),
     r('POST',   '/api/tasks', createTask),
-    r('GET',    '/api/tasks/:threadId', getTask),
-    r('PATCH',  '/api/tasks/:threadId', updateTask),
-    r('DELETE', '/api/tasks/:threadId', deleteTask),
-    r('POST',   '/api/tasks/:threadId/archive', archiveTask),
-    r('POST',   '/api/tasks/:threadId/fork', forkTask),
-    r('POST',   '/api/tasks/:threadId/qdev', qdev),
+    r('GET',    '/api/tasks/:channelId', getTask),
+    r('PATCH',  '/api/tasks/:channelId', updateTask),
+    r('DELETE', '/api/tasks/:channelId', deleteTask),
+    r('POST',   '/api/tasks/:channelId/archive', archiveTask),
+    r('POST',   '/api/tasks/:channelId/fork', forkTask),
+    r('POST',   '/api/tasks/:channelId/qdev', qdev),
 
     // Task 内操作
-    r('GET',  '/api/tasks/:threadId/interactions', getTaskInteractions),
-    r('POST', '/api/tasks/:threadId/message', sendMessage),
-    r('POST', '/api/tasks/:threadId/clear', clearSession),
-    r('POST', '/api/tasks/:threadId/compact', compactSession),
-    r('POST', '/api/tasks/:threadId/rewind', rewindSession),
-    r('POST', '/api/tasks/:threadId/stop', stopSession),
+    r('GET',  '/api/tasks/:channelId/interactions', getTaskInteractions),
+    r('POST', '/api/tasks/:channelId/message', sendMessage),
+    r('POST', '/api/tasks/:channelId/clear', clearSession),
+    r('POST', '/api/tasks/:channelId/compact', compactSession),
+    r('POST', '/api/tasks/:channelId/rewind', rewindSession),
+    r('POST', '/api/tasks/:channelId/stop', stopSession),
 
     // DevLog CRUD
     r('GET',  '/api/devlogs', listDevLogs),

@@ -25,7 +25,7 @@ export type {
 export interface Session {
   id: string;                // 本地 UUID
   name: string;              // 用户自定义名称
-  threadId: string;          // Discord Channel ID (Text Channel under Category)
+  channelId: string;         // Discord Channel ID (Text Channel under Category)
   guildId: string;           // Discord Guild ID
   claudeSessionId?: string;  // Claude CLI session_id
   prevClaudeSessionId?: string; // 上一轮 session_id（用于 rewind）
@@ -41,7 +41,7 @@ export interface Session {
     timestamp: number;
   }>;
   messageCount: number;       // 消息历史条数（从 DB message_count 字段）
-  parentThreadId?: string;    // 父 Channel ID（fork 产生的子 channel）
+  parentChannelId?: string;   // 父 Channel ID（fork 产生的子 channel）
   worktreeBranch?: string;    // worktree 分支名（fork 创建的）
 }
 
@@ -213,7 +213,7 @@ export interface ProcessRegistryEntry {
   outputFile: string;
   stderrFile: string;
   guildId: string;
-  threadId: string;
+  channelId: string;
   lockKey: string;
   claudeSessionId?: string;
   cwd?: string;
@@ -223,7 +223,7 @@ export interface ProcessRegistryEntry {
 // 重连结果
 export interface ReconnectedResult {
   guildId: string;
-  threadId: string;
+  channelId: string;
   lockKey: string;
   claudeSessionId?: string;
   status: 'completed' | 'running' | 'failed';
@@ -250,7 +250,7 @@ export interface ClaudeOptions {
   forkSession?: boolean;
   model?: string;
   guildId?: string;
-  threadId?: string;
+  channelId?: string;
   images?: ImageAttachment[];
   appendSystemPrompt?: string;
 }
@@ -311,7 +311,7 @@ export interface Task {
   // 执行状态
   status: TaskStatus;
   branchName?: string;
-  threadId?: string;          // 对应的 Discord Thread ID
+  channelId?: string;         // 对应的 Discord Channel ID
   dispatchedAt?: number;
   completedAt?: number;
   error?: string;
@@ -373,7 +373,7 @@ export interface GoalDriveState {
   goalSeq: number;            // 短序号，用于子任务命名前缀（g1, g2, ...）
   goalName: string;
   goalBranch: string;
-  goalThreadId: string;       // 调度员 thread（用于通知用户）
+  goalChannelId: string;      // 调度员 channel（用于通知用户）
   baseCwd: string;
   status: GoalDriveStatus;
   createdAt: number;

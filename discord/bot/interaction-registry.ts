@@ -15,7 +15,7 @@ import { logger } from '../utils/logger.js';
 interface PendingEntry {
   toolUseId: string;
   guildId: string;
-  threadId: string;
+  channelId: string;
   options?: string[];   // 选项标签列表
   resolve: (value: string) => void;
   createdAt: number;
@@ -34,7 +34,7 @@ export class InteractionRegistry {
   register(
     toolUseId: string,
     guildId: string,
-    threadId: string,
+    channelId: string,
     options?: string[],
     opts?: { noTimeout?: boolean },
   ): { promise: Promise<string>; customIdPrefix: string } {
@@ -45,7 +45,7 @@ export class InteractionRegistry {
       const entry: PendingEntry = {
         toolUseId,
         guildId,
-        threadId,
+        channelId,
         options,
         resolve,
         createdAt: Date.now(),
@@ -110,9 +110,9 @@ export class InteractionRegistry {
   /**
    * 查找特定 thread 中等待自定义文本的 entry
    */
-  findWaitingCustomText(guildId: string, threadId: string): PendingEntry | undefined {
+  findWaitingCustomText(guildId: string, channelId: string): PendingEntry | undefined {
     for (const entry of this.pending.values()) {
-      if (entry.guildId === guildId && entry.threadId === threadId && entry.waitingCustomText) {
+      if (entry.guildId === guildId && entry.channelId === channelId && entry.waitingCustomText) {
         return entry;
       }
     }

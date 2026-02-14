@@ -36,7 +36,7 @@ export interface GoalTask {
   phase?: number;
   status: GoalTaskStatus;
   branchName?: string;
-  threadId?: string;
+  channelId?: string;
   dispatchedAt?: number;
   completedAt?: number;
   error?: string;
@@ -71,7 +71,7 @@ export interface GoalDriveState {
   goalId: string;
   goalName: string;
   goalBranch: string;
-  goalThreadId: string;
+  goalChannelId: string;
   baseCwd: string;
   status: GoalDriveStatus;
   createdAt: number;
@@ -84,7 +84,7 @@ export interface GoalDriveState {
 
 // Session / Task
 export interface TaskSummary {
-  thread_id: string;
+  channel_id: string;
   name: string;
   cwd: string;
   model: string | null;
@@ -93,7 +93,7 @@ export interface TaskSummary {
   created_at: number;
   last_message: string | null;
   last_message_at: number | null;
-  parent_thread_id: string | null;
+  parent_channel_id: string | null;
   worktree_branch: string | null;
   children: TaskSummary[];
 }

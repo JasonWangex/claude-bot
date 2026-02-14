@@ -8,17 +8,17 @@ export function useTasks() {
   });
 }
 
-export function useTask(threadId: string | null) {
+export function useTask(channelId: string | null) {
   return useSWR<TaskDetail>(
-    threadId ? `/api/tasks/${threadId}` : null,
+    channelId ? `/api/tasks/${channelId}` : null,
     apiFetch,
     { refreshInterval: 5000 }
   );
 }
 
-export function useTaskInteractions(threadId: string | null) {
+export function useTaskInteractions(channelId: string | null) {
   return useSWR<InteractionLogResponse>(
-    threadId ? `/api/tasks/${threadId}/interactions` : null,
+    channelId ? `/api/tasks/${channelId}/interactions` : null,
     apiFetch,
     { refreshInterval: 10000 }
   );

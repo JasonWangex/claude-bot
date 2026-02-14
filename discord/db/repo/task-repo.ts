@@ -243,7 +243,7 @@ function taskToRow(task: Task, goalId?: string | null): Record<string, unknown> 
     phase: task.phase ?? null,
     status: task.status,
     branch_name: task.branchName ?? null,
-    channel_id: task.threadId ?? null,  // threadId → channel_id 映射
+    channel_id: task.channelId ?? null,
     dispatched_at: task.dispatchedAt ?? null,
     completed_at: task.completedAt ?? null,
     error: task.error ?? null,
@@ -288,7 +288,7 @@ function rowToTask(
     auditRetries: row.audit_retries ?? 0,
     status: row.status as TaskStatus,
     branchName: row.branch_name ?? undefined,
-    threadId: row.channel_id ?? undefined,  // channel_id → threadId 映射（保持运行时接口兼容）
+    channelId: row.channel_id ?? undefined,
     dispatchedAt: row.dispatched_at ?? undefined,
     completedAt: row.completed_at ?? undefined,
     error: row.error ?? undefined,

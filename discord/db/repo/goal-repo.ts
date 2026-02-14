@@ -117,8 +117,8 @@ export class GoalRepo implements IGoalRepo {
         `);
 
         const insertDep = this.db.prepare(`
-          INSERT INTO task_deps (goal_id, task_id, depends_on_task_id)
-          VALUES (?, ?, ?)
+          INSERT INTO task_deps (task_id, depends_on_task_id, goal_id)
+          VALUES (@task_id, @depends_on_task_id, @goal_id)
         `);
 
         for (const task of state.tasks) {
@@ -130,7 +130,7 @@ export class GoalRepo implements IGoalRepo {
             phase: task.phase ?? null,
             status: task.status,
             branch_name: task.branchName ?? null,
-            channel_id: task.threadId ?? null,
+            channel_id: task.channelId ?? null,
             dispatched_at: task.dispatchedAt ?? null,
             completed_at: task.completedAt ?? null,
             error: task.error ?? null,
@@ -149,7 +149,11 @@ export class GoalRepo implements IGoalRepo {
           });
 
           for (const dep of task.depends) {
-            insertDep.run(state.goalId, task.id, dep);
+            insertDep.run({
+              task_id: task.id,
+              depends_on_task_id: dep,
+              goal_id: state.goalId,
+            });
           }
         }
       }
@@ -188,7 +192,7 @@ function goalDriveStateToGoalRow(state: GoalDriveState): Record<string, unknown>
     name: state.goalName,
     drive_status: state.status,
     drive_branch: state.goalBranch,
-    drive_thread_id: state.goalThreadId,
+    drive_thread_id: state.goalChannelId,
     drive_base_cwd: state.baseCwd,
     drive_max_concurrent: state.maxConcurrent,
     drive_created_at: state.createdAt,
@@ -226,7 +230,7 @@ function rowsToGoalDriveState(
     goalSeq: goal.seq ?? 0,
     goalName: goal.name,
     goalBranch: goal.drive_branch ?? '',
-    goalThreadId: goal.drive_thread_id ?? '',
+    goalChannelId: goal.drive_thread_id ?? '',
     baseCwd: goal.drive_base_cwd ?? '',
     status: (goal.drive_status as GoalDriveStatus) ?? 'running',
     createdAt: goal.drive_created_at ?? 0,
@@ -246,7 +250,7 @@ function rowsToGoalDriveState(
       auditRetries: t.audit_retries ?? 0,
       status: t.status as TaskStatus,
       branchName: t.branch_name ?? undefined,
-      threadId: t.channel_id ?? undefined,
+      channelId: t.channel_id ?? undefined,
       dispatchedAt: t.dispatched_at ?? undefined,
       completedAt: t.completed_at ?? undefined,
       error: t.error ?? undefined,
