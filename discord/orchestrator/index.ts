@@ -13,7 +13,7 @@ import { StateManager } from '../bot/state.js';
 import type { ClaudeClient } from '../claude/client.js';
 import type { MessageHandler } from '../bot/handlers.js';
 import { type MessageQueue, EmbedColors, type EmbedColor } from '../bot/message-queue.js';
-import type { DiscordBotConfig, GoalDriveState, GoalTask, GoalTaskFeedback, GoalPipelinePhase, PendingRollback } from '../types/index.js';
+import type { DiscordBotConfig, GoalDriveState, GoalTask, GoalTaskFeedback, GoalPipelinePhase, PendingRollback, ChatUsageResult } from '../types/index.js';
 import type { IGoalRepo } from '../types/repository.js';
 import { stat, readFile, access } from 'fs/promises';
 import { join } from 'path';
@@ -262,6 +262,12 @@ export class GoalOrchestrator {
     task.feedback = undefined;
     task.pipelinePhase = undefined;
     task.auditRetries = 0;
+    task.tokensIn = undefined;
+    task.tokensOut = undefined;
+    task.cacheReadIn = undefined;
+    task.cacheWriteIn = undefined;
+    task.costUsd = undefined;
+    task.durationMs = undefined;
     await this.saveState(state);
     await this.notify(state.goalThreadId, `Retrying task: ${this.getTaskLabel(state, task.id)} - ${task.description}`, 'warning');
     if (state.status === 'running') await this.reviewAndDispatch(state);
@@ -1002,6 +1008,25 @@ export class GoalOrchestrator {
     }
   }
 
+  // ========== Usage 累加辅助 ==========
+
+  private emptyUsage(): ChatUsageResult {
+    return {
+      input_tokens: 0, output_tokens: 0,
+      cache_read_input_tokens: 0, cache_creation_input_tokens: 0,
+      total_cost_usd: 0, duration_ms: 0,
+    };
+  }
+
+  private accumulateUsage(total: ChatUsageResult, single: ChatUsageResult): void {
+    total.input_tokens += single.input_tokens;
+    total.output_tokens += single.output_tokens;
+    total.cache_read_input_tokens += single.cache_read_input_tokens;
+    total.cache_creation_input_tokens += single.cache_creation_input_tokens;
+    total.total_cost_usd += single.total_cost_usd;
+    total.duration_ms += single.duration_ms;
+  }
+
   private executeTaskInBackground(
     goalId: string,
     taskId: string,
@@ -1010,15 +1035,17 @@ export class GoalOrchestrator {
     message: string
   ): void {
     (async () => {
+      const usage = this.emptyUsage();
       try {
         logger.info(`[Orchestrator] Task ${taskId} executing in channel ${threadId}`);
-        await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, message);
+        const u = await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, message);
+        this.accumulateUsage(usage, u);
         logger.info(`[Orchestrator] Task ${taskId} completed`);
-        await this.onTaskCompleted(goalId, taskId);
+        await this.onTaskCompleted(goalId, taskId, usage);
       } catch (err: any) {
         logger.error(`[Orchestrator] Task ${taskId} failed:`, err.message);
         try {
-          await this.onTaskFailed(goalId, taskId, err.message);
+          await this.onTaskFailed(goalId, taskId, err.message, usage);
         } catch (cbErr: any) {
           logger.error(`[Orchestrator] onTaskFailed callback also failed:`, cbErr.message);
         }
@@ -1088,15 +1115,16 @@ export class GoalOrchestrator {
     task: GoalTask,
     state: GoalDriveState,
   ): void {
+    const usage = this.emptyUsage();
     (async () => {
       try {
         if (task.type === '调研') {
-          await this.pipelineResearch(goalId, taskId, guildId, threadId, task, state);
+          await this.pipelineResearch(goalId, taskId, guildId, threadId, task, state, usage);
         } else if (task.type === '代码' && task.complexity === 'complex') {
-          await this.pipelineComplexCode(goalId, taskId, guildId, threadId, task, state);
+          await this.pipelineComplexCode(goalId, taskId, guildId, threadId, task, state, usage);
         } else {
           // 默认路径：代码(simple/无标注) 和其他类型
-          await this.pipelineSimpleCode(goalId, taskId, guildId, threadId, task, state);
+          await this.pipelineSimpleCode(goalId, taskId, guildId, threadId, task, state, usage);
         }
       } catch (err: any) {
         logger.error(`[Orchestrator] Pipeline ${taskId} failed:`, err.message);
@@ -1108,7 +1136,7 @@ export class GoalOrchestrator {
           return;
         }
         try {
-          await this.onTaskFailed(goalId, taskId, err.message);
+          await this.onTaskFailed(goalId, taskId, err.message, usage);
         } catch (cbErr: any) {
           logger.error(`[Orchestrator] onTaskFailed callback also failed:`, cbErr.message);
         }
@@ -1126,6 +1154,7 @@ export class GoalOrchestrator {
     threadId: string,
     task: GoalTask,
     state: GoalDriveState,
+    usage: ChatUsageResult,
   ): Promise<void> {
     const opusModel = this.deps.config.pipelineOpusModel;
     this.switchSessionModel(guildId, threadId, opusModel);
@@ -1138,13 +1167,14 @@ export class GoalOrchestrator {
 
     const taskPrompt = this.buildTaskPrompt(task, state);
     logger.info(`[Orchestrator] Pipeline ${taskId}: research → Opus execute`);
-    await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, taskPrompt);
+    const u = await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, taskPrompt);
+    this.accumulateUsage(usage, u);
 
     if (!await this.isTaskStillRunning(goalId, taskId)) {
       logger.info(`[Orchestrator] Pipeline ${taskId}: task no longer running after execute, aborting pipeline`);
       return;
     }
-    await this.onTaskCompleted(goalId, taskId);
+    await this.onTaskCompleted(goalId, taskId, usage);
   }
 
   /**
@@ -1157,8 +1187,9 @@ export class GoalOrchestrator {
     threadId: string,
     task: GoalTask,
     state: GoalDriveState,
+    usage: ChatUsageResult,
   ): Promise<void> {
-    const { pipelineOpusModel: opusModel, pipelineSonnetModel: sonnetModel } = this.deps.config;
+    const { pipelineSonnetModel: sonnetModel } = this.deps.config;
 
     // Phase 1: Sonnet 执行
     this.switchSessionModel(guildId, threadId, sonnetModel);
@@ -1171,7 +1202,8 @@ export class GoalOrchestrator {
 
     const taskPrompt = this.buildTaskPrompt(task, state);
     logger.info(`[Orchestrator] Pipeline ${taskId}: simple code → Sonnet execute`);
-    await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, taskPrompt);
+    const execUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, taskPrompt);
+    this.accumulateUsage(usage, execUsage);
 
     // 检查任务是否仍在 running（可能被 skip/cancel/retry）
     if (!await this.isTaskStillRunning(goalId, taskId)) {
@@ -1188,15 +1220,15 @@ export class GoalOrchestrator {
     }
 
     // Phase 2: Opus audit
-    const auditResult = await this.runAudit(goalId, taskId, guildId, threadId, task, state);
+    const auditResult = await this.runAudit(goalId, taskId, guildId, threadId, task, state, usage);
 
     if (auditResult.verdict === 'pass') {
-      await this.onTaskCompleted(goalId, taskId);
+      await this.onTaskCompleted(goalId, taskId, usage);
       return;
     }
 
     // Audit 失败 → Sonnet 修复（最多 2 次）
-    await this.auditFixLoop(goalId, taskId, guildId, threadId, task, state, auditResult.issues, auditResult.verifyCommands);
+    await this.auditFixLoop(goalId, taskId, guildId, threadId, task, state, auditResult.issues, auditResult.verifyCommands, usage);
   }
 
   /**
@@ -1209,6 +1241,7 @@ export class GoalOrchestrator {
     threadId: string,
     task: GoalTask,
     state: GoalDriveState,
+    usage: ChatUsageResult,
   ): Promise<void> {
     const { pipelineOpusModel: opusModel, pipelineSonnetModel: sonnetModel } = this.deps.config;
 
@@ -1223,7 +1256,8 @@ export class GoalOrchestrator {
 
     const planPrompt = this.buildPlanPrompt(task, state);
     logger.info(`[Orchestrator] Pipeline ${taskId}: complex code → Opus plan`);
-    await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, planPrompt);
+    const planUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, planPrompt);
+    this.accumulateUsage(usage, planUsage);
 
     if (!await this.isTaskStillRunning(goalId, taskId)) {
       logger.info(`[Orchestrator] Pipeline ${taskId}: task no longer running after plan, aborting pipeline`);
@@ -1254,7 +1288,8 @@ export class GoalOrchestrator {
       ? this.buildExecuteWithPlanPrompt(task, state)
       : this.buildTaskPrompt(task, state);
     logger.info(`[Orchestrator] Pipeline ${taskId}: complex code → Sonnet execute with plan`);
-    await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, executePrompt);
+    const execUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, executePrompt);
+    this.accumulateUsage(usage, execUsage);
 
     if (!await this.isTaskStillRunning(goalId, taskId)) {
       logger.info(`[Orchestrator] Pipeline ${taskId}: task no longer running after execute, aborting pipeline`);
@@ -1270,15 +1305,15 @@ export class GoalOrchestrator {
     }
 
     // Phase 3: Opus audit
-    const auditResult = await this.runAudit(goalId, taskId, guildId, threadId, task, state);
+    const auditResult = await this.runAudit(goalId, taskId, guildId, threadId, task, state, usage);
 
     if (auditResult.verdict === 'pass') {
-      await this.onTaskCompleted(goalId, taskId);
+      await this.onTaskCompleted(goalId, taskId, usage);
       return;
     }
 
     // Audit 失败 → Sonnet 修复
-    await this.auditFixLoop(goalId, taskId, guildId, threadId, task, state, auditResult.issues, auditResult.verifyCommands);
+    await this.auditFixLoop(goalId, taskId, guildId, threadId, task, state, auditResult.issues, auditResult.verifyCommands, usage);
   }
 
   /**
@@ -1293,6 +1328,7 @@ export class GoalOrchestrator {
     state: GoalDriveState,
     issues: string[],
     verifyCommands: string[] = [],
+    usage: ChatUsageResult,
   ): Promise<void> {
     const { pipelineSonnetModel: sonnetModel } = this.deps.config;
     const maxRetries = 2;
@@ -1316,12 +1352,13 @@ export class GoalOrchestrator {
 
       const fixPrompt = this.buildFixPrompt(task, state, issues, verifyCommands);
       logger.info(`[Orchestrator] Pipeline ${taskId}: Sonnet fix attempt ${retry}`);
-      await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, fixPrompt);
+      const fixUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, fixPrompt);
+      this.accumulateUsage(usage, fixUsage);
 
       // Re-audit
-      const reAudit = await this.runAudit(goalId, taskId, guildId, threadId, task, state);
+      const reAudit = await this.runAudit(goalId, taskId, guildId, threadId, task, state, usage);
       if (reAudit.verdict === 'pass') {
-        await this.onTaskCompleted(goalId, taskId);
+        await this.onTaskCompleted(goalId, taskId, usage);
         return;
       }
       issues = reAudit.issues;
@@ -1330,7 +1367,7 @@ export class GoalOrchestrator {
 
     // 所有重试耗尽 → 标记失败
     logger.warn(`[Orchestrator] Pipeline ${taskId}: audit fix exhausted after ${maxRetries} retries`);
-    await this.onTaskFailed(goalId, taskId, `Audit failed after ${maxRetries} fix attempts. Issues: ${issues.join('; ')}`);
+    await this.onTaskFailed(goalId, taskId, `Audit failed after ${maxRetries} fix attempts. Issues: ${issues.join('; ')}`, usage);
   }
 
   /**
@@ -1343,6 +1380,7 @@ export class GoalOrchestrator {
     threadId: string,
     task: GoalTask,
     state: GoalDriveState,
+    usage: ChatUsageResult,
   ): Promise<{ verdict: 'pass' | 'fail'; issues: string[]; verifyCommands: string[] }> {
     const { pipelineOpusModel: opusModel } = this.deps.config;
 
@@ -1356,7 +1394,8 @@ export class GoalOrchestrator {
 
     const auditPrompt = this.buildAuditPrompt(task, state);
     logger.info(`[Orchestrator] Pipeline ${taskId}: Opus audit`);
-    await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, auditPrompt);
+    const auditUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, auditPrompt);
+    this.accumulateUsage(usage, auditUsage);
 
     // 读取 audit 结果文件
     const result = await this.readAuditResult(state, task);
@@ -1703,12 +1742,22 @@ export class GoalOrchestrator {
     return lines.join('\n');
   }
 
-  private async onTaskCompleted(goalId: string, taskId: string): Promise<void> {
+  private async onTaskCompleted(goalId: string, taskId: string, usage?: ChatUsageResult): Promise<void> {
     await this.withStateLock(goalId, async () => {
       const state = await this.getState(goalId);
       if (!state) return;
       const task = state.tasks.find(t => t.id === taskId);
       if (!task) return;
+
+      // 写入 usage 数据
+      if (usage) {
+        task.tokensIn = usage.input_tokens;
+        task.tokensOut = usage.output_tokens;
+        task.cacheReadIn = usage.cache_read_input_tokens;
+        task.cacheWriteIn = usage.cache_creation_input_tokens;
+        task.costUsd = usage.total_cost_usd;
+        task.durationMs = usage.duration_ms;
+      }
 
       // 检测 feedback 文件：worktree/feedback/<taskId>.json
       const feedback = await this.checkFeedbackFile(state, task);
@@ -1757,14 +1806,16 @@ export class GoalOrchestrator {
       task.status = 'completed';
       task.completedAt = Date.now();
       await this.saveState(state);
-      await this.notify(state.goalThreadId, `Completed: ${this.getTaskLabel(state, task.id)} - ${task.description}`, 'success');
+
+      const costInfo = usage ? ` ($${usage.total_cost_usd.toFixed(4)}, ${Math.round(usage.duration_ms / 1000)}s)` : '';
+      await this.notify(state.goalThreadId, `Completed: ${this.getTaskLabel(state, task.id)} - ${task.description}${costInfo}`, 'success');
       if (task.branchName) await this.mergeAndCleanup(state, task);
       const refreshed = await this.getState(goalId);
       if (refreshed && refreshed.status === 'running') await this.reviewAndDispatch(refreshed, taskId);
     });
   }
 
-  private async onTaskFailed(goalId: string, taskId: string, error: string): Promise<void> {
+  private async onTaskFailed(goalId: string, taskId: string, error: string, usage?: ChatUsageResult): Promise<void> {
     await this.withStateLock(goalId, async () => {
       const state = await this.getState(goalId);
       if (!state) return;
@@ -1772,8 +1823,20 @@ export class GoalOrchestrator {
       if (!task) return;
       task.status = 'failed';
       task.error = error;
+
+      // 写入 usage 数据（失败的 task 也记录已消耗的 token）
+      if (usage) {
+        task.tokensIn = usage.input_tokens;
+        task.tokensOut = usage.output_tokens;
+        task.cacheReadIn = usage.cache_read_input_tokens;
+        task.cacheWriteIn = usage.cache_creation_input_tokens;
+        task.costUsd = usage.total_cost_usd;
+        task.durationMs = usage.duration_ms;
+      }
+
       await this.saveState(state);
 
+      const costInfo = usage ? ` ($${usage.total_cost_usd.toFixed(4)})` : '';
       const hasContext = !!task.threadId;
       const hint = hasContext
         ? `Reply "retry ${task.id}" to restart, or "refix ${task.id}" to fix in-place.`
@@ -1782,7 +1845,7 @@ export class GoalOrchestrator {
         ? buildTaskFailedButtons(goalId, task.id)
         : undefined;
       await this.notify(state.goalThreadId,
-        `Failed: ${this.getTaskLabel(state, task.id)} - ${task.description}\nError: ${error}\n\n${hint}`,
+        `Failed: ${this.getTaskLabel(state, task.id)} - ${task.description}${costInfo}\nError: ${error}\n\n${hint}`,
         'error',
         buttons ? { components: buttons } : undefined,
       );

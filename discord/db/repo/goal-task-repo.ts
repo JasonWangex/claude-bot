@@ -8,7 +8,7 @@
 
 import type Database from 'better-sqlite3';
 import type { IGoalTaskRepo } from '../../types/repository.js';
-import type { GoalTask, GoalTaskStatus, GoalPipelinePhase } from '../../types/index.js';
+import type { GoalTask, GoalTaskStatus, GoalPipelinePhase, ChatUsageResult } from '../../types/index.js';
 import type { GoalTaskRow, GoalTaskDepRow } from '../../types/db.js';
 
 export class GoalTaskRepo implements IGoalTaskRepo {
@@ -49,12 +49,14 @@ export class GoalTaskRepo implements IGoalTaskRepo {
           id, goal_id, description, type, phase, status,
           branch_name, thread_id, dispatched_at, completed_at,
           error, merged, notified_blocked, feedback_json,
-          complexity, pipeline_phase, audit_retries
+          complexity, pipeline_phase, audit_retries,
+          tokens_in, tokens_out, cache_read_in, cache_write_in, cost_usd, duration_ms
         ) VALUES (
           @id, @goal_id, @description, @type, @phase, @status,
           @branch_name, @thread_id, @dispatched_at, @completed_at,
           @error, @merged, @notified_blocked, @feedback_json,
-          @complexity, @pipeline_phase, @audit_retries
+          @complexity, @pipeline_phase, @audit_retries,
+          @tokens_in, @tokens_out, @cache_read_in, @cache_write_in, @cost_usd, @duration_ms
         )
         ON CONFLICT(goal_id, id) DO UPDATE SET
           description = @description,
@@ -71,7 +73,13 @@ export class GoalTaskRepo implements IGoalTaskRepo {
           feedback_json = @feedback_json,
           complexity = @complexity,
           pipeline_phase = @pipeline_phase,
-          audit_retries = @audit_retries
+          audit_retries = @audit_retries,
+          tokens_in = @tokens_in,
+          tokens_out = @tokens_out,
+          cache_read_in = @cache_read_in,
+          cache_write_in = @cache_write_in,
+          cost_usd = @cost_usd,
+          duration_ms = @duration_ms
       `),
 
       deleteTask: this.db.prepare(
@@ -192,6 +200,30 @@ export class GoalTaskRepo implements IGoalTaskRepo {
       task: taskRowToGoalTask(row, depRows),
     };
   }
+
+  /** 聚合 Goal 下所有 task 的 token/cost/time 总量 */
+  getGoalUsageTotals(goalId: string): ChatUsageResult {
+    const row = this.db.prepare(`
+      SELECT
+        COALESCE(SUM(tokens_in), 0)      AS tokens_in,
+        COALESCE(SUM(tokens_out), 0)     AS tokens_out,
+        COALESCE(SUM(cache_read_in), 0)  AS cache_read_in,
+        COALESCE(SUM(cache_write_in), 0) AS cache_write_in,
+        COALESCE(SUM(cost_usd), 0)       AS cost_usd,
+        COALESCE(SUM(duration_ms), 0)    AS duration_ms
+      FROM goal_tasks
+      WHERE goal_id = ?
+    `).get(goalId) as Record<string, number>;
+
+    return {
+      input_tokens: row.tokens_in,
+      output_tokens: row.tokens_out,
+      cache_read_input_tokens: row.cache_read_in,
+      cache_creation_input_tokens: row.cache_write_in,
+      total_cost_usd: row.cost_usd,
+      duration_ms: row.duration_ms,
+    };
+  }
 }
 
 // ==================== 转换函数 ====================
@@ -215,6 +247,12 @@ function goalTaskToRow(goalId: string, task: GoalTask): Record<string, unknown> 
     complexity: task.complexity ?? null,
     pipeline_phase: task.pipelinePhase ?? null,
     audit_retries: task.auditRetries ?? 0,
+    tokens_in: task.tokensIn ?? null,
+    tokens_out: task.tokensOut ?? null,
+    cache_read_in: task.cacheReadIn ?? null,
+    cache_write_in: task.cacheWriteIn ?? null,
+    cost_usd: task.costUsd ?? null,
+    duration_ms: task.durationMs ?? null,
   };
 }
 
@@ -250,6 +288,12 @@ function taskRowToGoalTask(
     merged: row.merged === 1,
     notifiedBlocked: row.notified_blocked === 1,
     feedback: row.feedback_json ? JSON.parse(row.feedback_json) : undefined,
+    tokensIn: row.tokens_in ?? undefined,
+    tokensOut: row.tokens_out ?? undefined,
+    cacheReadIn: row.cache_read_in ?? undefined,
+    cacheWriteIn: row.cache_write_in ?? undefined,
+    costUsd: row.cost_usd ?? undefined,
+    durationMs: row.duration_ms ?? undefined,
   };
 }
 

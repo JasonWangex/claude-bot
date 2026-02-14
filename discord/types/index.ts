@@ -172,6 +172,16 @@ export interface ClaudeResponse {
   contextWindow?: number;
 }
 
+/** 单次 Claude 调用的 token/cost/time 汇总 */
+export interface ChatUsageResult {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
+  total_cost_usd: number;
+  duration_ms: number;
+}
+
 // 进度回调
 export type ProgressCallback = (event: StreamEvent) => void;
 
@@ -305,6 +315,14 @@ export interface GoalTask {
   merged?: boolean;
   notifiedBlocked?: boolean;
   feedback?: GoalTaskFeedback; // 来自 feedback/<taskId>.json 的反馈内容
+
+  // Token/cost/time tracking（pipeline 各阶段累加）
+  tokensIn?: number;
+  tokensOut?: number;
+  cacheReadIn?: number;
+  cacheWriteIn?: number;
+  costUsd?: number;
+  durationMs?: number;
 }
 
 /** 待审批的 Replan 变更 */

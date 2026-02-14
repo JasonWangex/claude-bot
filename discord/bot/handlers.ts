@@ -25,6 +25,7 @@ import {
   Session,
   FileChange,
   ImageAttachment,
+  ChatUsageResult,
 } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 import { downloadAndProcessImage } from '../utils/image-processor.js';
@@ -194,9 +195,14 @@ export class MessageHandler {
     text: string,
     mode?: 'plan',
     images?: ImageAttachment[],
-  ): Promise<void> {
+  ): Promise<ChatUsageResult> {
     const threadId = session.threadId;
     const MAX_INTERACTIVE_ROUNDS = 5;
+    const totalUsage: ChatUsageResult = {
+      input_tokens: 0, output_tokens: 0,
+      cache_read_input_tokens: 0, cache_creation_input_tokens: 0,
+      total_cost_usd: 0, duration_ms: 0,
+    };
 
     for (let round = 0; round < MAX_INTERACTIVE_ROUNDS; round++) {
 
@@ -472,6 +478,14 @@ export class MessageHandler {
       this.stateManager.updateSessionMessage(guildId, threadId, response.result, 'assistant');
       logger.info(`[${session.name}] Response length:`, response.result.length);
 
+      // 累加本轮 usage
+      totalUsage.input_tokens += response.usage?.input_tokens ?? 0;
+      totalUsage.output_tokens += response.usage?.output_tokens ?? 0;
+      totalUsage.cache_read_input_tokens += response.usage?.cache_read_input_tokens ?? 0;
+      totalUsage.cache_creation_input_tokens += response.usage?.cache_creation_input_tokens ?? 0;
+      totalUsage.total_cost_usd += response.total_cost_usd ?? 0;
+      totalUsage.duration_ms += response.duration_ms ?? 0;
+
       // 交互式工具拦截
       if (interactiveState.pending) {
         const pi = interactiveState.pending;
@@ -625,7 +639,7 @@ export class MessageHandler {
           ? `Stopped (after ${lastProgressText})`
           : 'Stopped';
         mq.edit(threadId, progressMsgId, stoppedText, { embedColor: EmbedColors.YELLOW });
-        return;
+        return totalUsage;
       }
 
       await mq.drain(5000);
@@ -654,6 +668,8 @@ export class MessageHandler {
 
     break;
     } // end for loop
+
+    return totalUsage;
   }
 
   /**
@@ -663,10 +679,10 @@ export class MessageHandler {
     guildId: string,
     threadId: string,
     message: string,
-  ): Promise<void> {
+  ): Promise<ChatUsageResult> {
     const session = this.stateManager.getSession(guildId, threadId);
     if (!session) throw new Error('Session not found');
-    await this.sendChatInternal(guildId, session, message);
+    return this.sendChatInternal(guildId, session, message);
   }
 
   /**

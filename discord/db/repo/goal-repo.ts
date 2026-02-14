@@ -105,12 +105,14 @@ export class GoalRepo implements IGoalRepo {
             id, goal_id, description, type, phase, status,
             branch_name, thread_id, dispatched_at, completed_at,
             error, merged, notified_blocked, feedback_json,
-            complexity, pipeline_phase, audit_retries
+            complexity, pipeline_phase, audit_retries,
+            tokens_in, tokens_out, cache_read_in, cache_write_in, cost_usd, duration_ms
           ) VALUES (
             @id, @goal_id, @description, @type, @phase, @status,
             @branch_name, @thread_id, @dispatched_at, @completed_at,
             @error, @merged, @notified_blocked, @feedback_json,
-            @complexity, @pipeline_phase, @audit_retries
+            @complexity, @pipeline_phase, @audit_retries,
+            @tokens_in, @tokens_out, @cache_read_in, @cache_write_in, @cost_usd, @duration_ms
           )
         `);
 
@@ -138,6 +140,12 @@ export class GoalRepo implements IGoalRepo {
             complexity: task.complexity ?? null,
             pipeline_phase: task.pipelinePhase ?? null,
             audit_retries: task.auditRetries ?? 0,
+            tokens_in: task.tokensIn ?? null,
+            tokens_out: task.tokensOut ?? null,
+            cache_read_in: task.cacheReadIn ?? null,
+            cache_write_in: task.cacheWriteIn ?? null,
+            cost_usd: task.costUsd ?? null,
+            duration_ms: task.durationMs ?? null,
           });
 
           for (const dep of task.depends) {
@@ -244,6 +252,12 @@ function rowsToGoalDriveState(
       merged: t.merged === 1,
       notifiedBlocked: t.notified_blocked === 1,
       feedback: t.feedback_json ? JSON.parse(t.feedback_json) : undefined,
+      tokensIn: t.tokens_in ?? undefined,
+      tokensOut: t.tokens_out ?? undefined,
+      cacheReadIn: t.cache_read_in ?? undefined,
+      cacheWriteIn: t.cache_write_in ?? undefined,
+      costUsd: t.cost_usd ?? undefined,
+      durationMs: t.duration_ms ?? undefined,
     })),
   };
 }

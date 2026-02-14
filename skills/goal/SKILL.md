@@ -36,10 +36,10 @@ bot_list_ideas(status="Idea")
 当前目标
 
 Active
-  1. <Goal Name> — 进度: <Progress> | 下一步: <Next>
+  g1. <Goal Name> — 进度: <Progress> | 下一步: <Next>
 
 Paused
-  1. <Goal Name> — 卡在: <BlockedBy>
+  g2. <Goal Name> — 卡在: <BlockedBy>
 
 Idea (最近 5 个)
   1. <Idea Name>
@@ -141,6 +141,9 @@ bot_update_goal(
 **卡点**: 无
 
 ## 子任务
+
+> 子任务 ID 使用 t1, t2 格式。Drive 时系统会自动加上 goal seq 前缀（如 g2t1），
+> 用于分支名、Channel 名等，无需手动处理。
 
 - [ ] `[代码, simple]` t1: 功能点描述 — 技术备注
 - [ ] `[代码, complex]` t2: 功能点描述 — depends: t1
