@@ -16,6 +16,9 @@ const migration: Migration = {
 
   up(db) {
     db.exec(`
+      -- 暂时禁用外键约束，迁移完成后再启用
+      PRAGMA foreign_keys = OFF;
+
       -- ============================================================
       -- 1.1 创建 channels 表
       -- ============================================================
@@ -84,7 +87,74 @@ const migration: Migration = {
       );
 
       -- ============================================================
-      -- 1.5 重命名 goal_tasks → tasks，goal_id 改为 nullable
+      -- 1.5 数据迁移：sessions → channels + claude_sessions
+      -- ============================================================
+
+      -- 从 sessions 迁移到 channels
+      INSERT INTO channels (
+        id, guild_id, name, cwd, worktree_branch,
+        parent_channel_id, status, message_count,
+        created_at, last_message, last_message_at
+      )
+      SELECT
+        thread_id, guild_id, name, cwd, worktree_branch,
+        parent_thread_id, 'active', message_count,
+        created_at, last_message, last_message_at
+      FROM sessions;
+
+      -- 从 archived_sessions 迁移到 channels（status = 'archived'）
+      INSERT OR IGNORE INTO channels (
+        id, guild_id, name, cwd, worktree_branch,
+        parent_channel_id, status,
+        archived_at, archived_by, archive_reason,
+        message_count, created_at,
+        last_message, last_message_at
+      )
+      SELECT
+        thread_id, guild_id, name, cwd, worktree_branch,
+        parent_thread_id, 'archived',
+        archived_at, archived_by, archive_reason,
+        message_count, created_at,
+        last_message, last_message_at
+      FROM archived_sessions;
+
+      -- 从 sessions 迁移到 claude_sessions
+      INSERT INTO claude_sessions (
+        id, claude_session_id, prev_claude_session_id,
+        channel_id, model, plan_mode, status, created_at
+      )
+      SELECT
+        id, claude_session_id, prev_claude_session_id,
+        thread_id, model, plan_mode, 'active', created_at
+      FROM sessions;
+
+      -- 从 archived_sessions 迁移到 claude_sessions（status = 'closed'）
+      INSERT INTO claude_sessions (
+        id, claude_session_id, prev_claude_session_id,
+        channel_id, model, plan_mode, status,
+        created_at, closed_at
+      )
+      SELECT
+        id, claude_session_id, prev_claude_session_id,
+        thread_id, model, plan_mode, 'closed',
+        created_at, archived_at
+      FROM archived_sessions;
+
+      -- 创建 channel_session_links
+      INSERT INTO channel_session_links (channel_id, claude_session_id, linked_at)
+      SELECT thread_id, id, created_at
+      FROM sessions
+      WHERE claude_session_id IS NOT NULL;
+
+      INSERT OR IGNORE INTO channel_session_links (
+        channel_id, claude_session_id, linked_at, unlinked_at
+      )
+      SELECT thread_id, id, created_at, archived_at
+      FROM archived_sessions
+      WHERE claude_session_id IS NOT NULL;
+
+      -- ============================================================
+      -- 1.6 重命名 goal_tasks → tasks，goal_id 改为 nullable
       -- ============================================================
       -- SQLite 不支持 RENAME TABLE 保留外键，需要重建
 
@@ -155,73 +225,6 @@ const migration: Migration = {
       FROM goal_task_deps;
 
       -- ============================================================
-      -- 1.6 数据迁移：sessions → channels + claude_sessions
-      -- ============================================================
-
-      -- 从 sessions 迁移到 channels
-      INSERT INTO channels (
-        id, guild_id, name, cwd, worktree_branch,
-        parent_channel_id, status, message_count,
-        created_at, last_message, last_message_at
-      )
-      SELECT
-        thread_id, guild_id, name, cwd, worktree_branch,
-        parent_thread_id, 'active', message_count,
-        created_at, last_message, last_message_at
-      FROM sessions;
-
-      -- 从 archived_sessions 迁移到 channels（status = 'archived'）
-      INSERT OR IGNORE INTO channels (
-        id, guild_id, name, cwd, worktree_branch,
-        parent_channel_id, status,
-        archived_at, archived_by, archive_reason,
-        message_count, created_at,
-        last_message, last_message_at
-      )
-      SELECT
-        thread_id, guild_id, name, cwd, worktree_branch,
-        parent_thread_id, 'archived',
-        archived_at, archived_by, archive_reason,
-        message_count, created_at,
-        last_message, last_message_at
-      FROM archived_sessions;
-
-      -- 从 sessions 迁移到 claude_sessions
-      INSERT INTO claude_sessions (
-        id, claude_session_id, prev_claude_session_id,
-        channel_id, model, plan_mode, status, created_at
-      )
-      SELECT
-        id, claude_session_id, prev_claude_session_id,
-        thread_id, model, plan_mode, 'active', created_at
-      FROM sessions;
-
-      -- 从 archived_sessions 迁移到 claude_sessions（status = 'closed'）
-      INSERT INTO claude_sessions (
-        id, claude_session_id, prev_claude_session_id,
-        channel_id, model, plan_mode, status,
-        created_at, closed_at
-      )
-      SELECT
-        id, claude_session_id, prev_claude_session_id,
-        thread_id, model, plan_mode, 'closed',
-        created_at, archived_at
-      FROM archived_sessions;
-
-      -- 创建 channel_session_links
-      INSERT INTO channel_session_links (channel_id, claude_session_id, linked_at)
-      SELECT thread_id, id, created_at
-      FROM sessions
-      WHERE claude_session_id IS NOT NULL;
-
-      INSERT OR IGNORE INTO channel_session_links (
-        channel_id, claude_session_id, linked_at, unlinked_at
-      )
-      SELECT thread_id, id, created_at, archived_at
-      FROM archived_sessions
-      WHERE claude_session_id IS NOT NULL;
-
-      -- ============================================================
       -- 1.7 废弃旧表（重命名为 _deprecated）
       -- ============================================================
 
@@ -236,6 +239,9 @@ const migration: Migration = {
 
       INSERT INTO sync_cursors (source, cursor, updated_at)
       VALUES ('schema_migration_010', 'completed', ${Date.now()});
+
+      -- 重新启用外键约束
+      PRAGMA foreign_keys = ON;
     `);
   },
 
