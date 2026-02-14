@@ -1,17 +1,17 @@
 {
   "verdict": "pass",
-  "summary": "g8t7 实现完整且正确。CommandMeta 接口定义清晰（名称、描述、分类、参数、示例、上下文、认证）；20 个命令元数据与实际注册的 Discord Slash Command 完全一致；GET /api/commands 端点正确返回 { commands, categories }；Web Commands 页面实现搜索过滤、分类分组、参数展示、示例展示。路由、导航菜单集成正确。构建/测试失败均为预存在问题（GoalStatus 类型不匹配、缺失 migration 008），与本任务无关。",
+  "summary": "g8t7 实现完整且正确。CommandMeta 接口定义清晰（name/description/category/parameters/examples/context/requiresAuth）；20 个命令元数据与实际注册的 Discord Slash Command 完全一致（General 4、Task 4、Session 6、Model 1、Dev 4、Goal 1）；GET /api/commands 端点正确返回 { commands, categories }；Web Commands 页面实现搜索过滤、分类分组、参数展示、示例展示。路由（/commands）、导航菜单（CodeOutlined 图标）集成正确。TypeScript 编译错误和测试失败均为预存在问题（GoalStatus 类型不匹配、缺失 migration 008），与本任务无关——本任务所有文件均无编译错误。",
   "verifyCommands": [
     "npx tsc --noEmit",
-    "npx vitest run",
-    "cd web && pnpm run build"
+    "npm test",
+    "cd web && npx tsc --noEmit"
   ],
   "issues": [
     {
       "severity": "warning",
       "file": "web/src/pages/Commands.tsx",
       "line": 13,
-      "description": "Collapse.Panel 在 Ant Design v6 中已废弃，推荐使用 Collapse 的 items 属性替代。功能正常但会有 console 警告。"
+      "description": "Collapse.Panel 在 Ant Design v5+ 中已废弃，推荐使用 Collapse 的 items 属性替代。功能正常但会有 console deprecation 警告。"
     }
   ]
 }
