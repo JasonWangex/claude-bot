@@ -1,91 +1,61 @@
 {
   "verdict": "fail",
-  "summary": "Build (tsc --noEmit) and tests (115/115) pass, but there are critical runtime data loss bugs in goal-repo.ts where SQL binding parameter names (@drive_thread_id, @thread_id) no longer match the object keys (drive_channel_id, channel_id) after the rename. This causes goalChannelId and task channelId to be saved as NULL and read back as empty/undefined. Additionally, the orchestrator notify() method and replanner.ts still use threadId parameter names, and several comments reference the old terminology.",
+  "summary": "Build (tsc --noEmit) and tests (115/115) pass. However, there are 5 critical runtime bugs in goal-repo.ts and types/db.ts: (1) goal-repo.ts still references 'goal_tasks' and 'goal_task_deps' tables which were renamed to '_deprecated_*' by migration 010 → runtime 'no such table' errors; (2) SQL uses @drive_thread_id but JS provides drive_channel_id → goalChannelId silently saved as NULL; (3) SQL INSERT uses @thread_id but JS provides channel_id → task channelId saved as NULL; (4) GoalRow.drive_channel_id TypeScript type doesn't match DB column drive_thread_id → reads return undefined; (5) GoalTaskRow.channel_id doesn't match old table's thread_id column. These bugs would break all Goal orchestrator save/load operations at runtime.",
   "verifyCommands": ["npx tsc --noEmit", "npx vitest run"],
   "issues": [
     {
       "severity": "error",
       "file": "discord/db/repo/goal-repo.ts",
+      "line": 68,
+      "description": "Table name mismatch: SQL references 'goal_tasks' (line 68) and 'goal_task_deps' (line 71), but migration 010 renamed these to '_deprecated_goal_tasks' and '_deprecated_goal_task_deps'. After migration runs, GoalRepo.get() and GoalRepo.save() will fail with 'no such table: goal_tasks'. The correct table names are 'tasks' and 'task_deps'. This also affects lines 100, 104, 120, and 162."
+    },
+    {
+      "severity": "error",
+      "file": "discord/db/repo/goal-repo.ts",
       "line": 42,
-      "description": "SQL binding mismatch: upsertGoal SQL uses @drive_thread_id (lines 42,47,55) but goalDriveStateToGoalRow() returns { drive_channel_id: ... } (line 191). better-sqlite3 binds by key name, so @drive_thread_id gets undefined → NULL. Goal's goalChannelId is silently lost on every save. Fix: either change SQL to @drive_channel_id or change the row object key to drive_thread_id."
+      "description": "SQL binding mismatch: upsertGoal SQL uses @drive_thread_id (lines 42, 47, 55) but goalDriveStateToGoalRow() returns { drive_channel_id: state.goalChannelId } (line 191). better-sqlite3 binds by key name, so @drive_thread_id resolves to undefined → NULL. Goal's goalChannelId is silently lost on every save. Fix: change JS key back to 'drive_thread_id' since the DB column was never renamed by migration 010."
     },
     {
       "severity": "error",
       "file": "discord/db/repo/goal-repo.ts",
       "line": 106,
-      "description": "SQL binding mismatch: INSERT INTO goal_tasks uses @thread_id (line 112) but the run() object uses key 'channel_id' (line 133). Task channelId is silently saved as NULL through GoalRepo.save() path (called by orchestrator saveState ~39 times). Fix: change SQL binding to @channel_id or change object key to thread_id."
+      "description": "SQL column/binding mismatch: INSERT INTO goal_tasks uses column 'thread_id' and binding @thread_id (line 112), but the run() object uses key 'channel_id' (line 133). The new 'tasks' table has column 'channel_id', not 'thread_id'. When switching to 'tasks' table, use @channel_id binding. If keeping old table, use @thread_id key in JS object."
     },
     {
       "severity": "error",
       "file": "discord/types/db.ts",
       "line": 137,
-      "description": "GoalRow.drive_channel_id doesn't match the actual DB column name 'drive_thread_id' (migration 001, never renamed). SELECT * returns column 'drive_thread_id', so GoalRow.drive_channel_id will always be undefined when reading from DB. Either rename the DB column via migration or keep the TypeScript property as drive_thread_id."
+      "description": "GoalRow.drive_channel_id doesn't match actual DB column name 'drive_thread_id' (from migration 001, never altered). SELECT * returns { drive_thread_id: ... }, so GoalRow.drive_channel_id will be undefined. rowsToGoalDriveState() reads goal.drive_channel_id (goal-repo.ts:229) → always empty string. Fix: keep TS property as 'drive_thread_id' (matching DB), or add ALTER TABLE in migration."
+    },
+    {
+      "severity": "error",
+      "file": "discord/types/db.ts",
+      "line": 177,
+      "description": "GoalTaskRow.channel_id (line 177) doesn't match old 'goal_tasks' table column 'thread_id'. If goal-repo.ts reads from old table, rows will have thread_id not channel_id. If it reads from new 'tasks' table, channel_id is correct. This must be consistent with which table goal-repo.ts queries."
     },
     {
       "severity": "warning",
       "file": "discord/orchestrator/index.ts",
       "line": 2807,
-      "description": "notify() method parameter still named 'threadId' (line 2807). Internal references at lines 2825, 2832, 2837 also use 'threadId'. Should be renamed to 'channelId' for consistency."
+      "description": "notify() method parameter still named 'threadId'. Internal refs at lines 2825, 2832, 2837 also use 'threadId'. Should be 'channelId'."
     },
     {
       "severity": "warning",
       "file": "discord/orchestrator/replanner.ts",
       "line": 53,
-      "description": "HandleReplanDeps.notify callback parameter still named 'threadId'. Should be 'channelId' for consistency."
+      "description": "HandleReplanDeps.notify callback parameter still named 'threadId'. Should be 'channelId'."
     },
     {
       "severity": "warning",
       "file": "discord/orchestrator/index.ts",
       "line": 1924,
-      "description": "handleReplanByImpact callback uses 'threadId' variable name: (threadId, message, type, options) => this.notify(threadId, ...). Should use channelId."
+      "description": "Lambda passes (threadId, ...) → should use channelId."
     },
     {
       "severity": "warning",
-      "file": "discord/orchestrator/index.ts",
-      "line": 300,
-      "description": "Comment says 'refix 只对 failed 且有 threadId 的任务有效' — should say channelId."
-    },
-    {
-      "severity": "warning",
-      "file": "discord/orchestrator/index.ts",
-      "line": 630,
-      "description": "Comment says '保留 branchName, threadId, dispatchedAt' — should say channelId."
-    },
-    {
-      "severity": "warning",
-      "file": "discord/bot/handlers.ts",
-      "line": 146,
-      "description": "JSDoc comment says '通过 guildId/threadId 发送消息' — should say channelId."
-    },
-    {
-      "severity": "warning",
-      "file": "discord/api/routes/messages.ts",
-      "line": 2,
-      "description": "File header comment still says ':threadId'. Should say ':channelId'."
-    },
-    {
-      "severity": "warning",
-      "file": "discord/api/routes/session-ops.ts",
-      "line": 2,
-      "description": "File header comments (lines 2-5) still reference ':threadId'. Should say ':channelId'."
-    },
-    {
-      "severity": "warning",
-      "file": "discord/api/routes/tasks.ts",
-      "line": 6,
-      "description": "File header comments (lines 6-10) still reference ':threadId'. Should say ':channelId'."
-    },
-    {
-      "severity": "warning",
-      "file": "discord/api/routes/qdev.ts",
-      "line": 2,
-      "description": "File header comment still says ':threadId'. Should say ':channelId'."
-    },
-    {
-      "severity": "warning",
-      "file": "discord/api/routes/messages.ts",
-      "line": 19,
-      "description": "Log message still says 'Background chat started for thread' instead of 'channel'. Same at lines 20, 22, 23."
+      "file": "discord/bot/state.ts",
+      "line": 337,
+      "description": "Fire-and-forget async without .catch(): claudeSessionRepo.getActiveByChannel().then() has no error handler (lines 337, 482). Unhandled promise rejections."
     }
   ]
 }
