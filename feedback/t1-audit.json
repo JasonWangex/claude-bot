@@ -1,18 +1,25 @@
 {
-  "verdict": "pass",
-  "summary": "Implementation correctly replaces JSONL/stderr file deletion with archival to data/sessions/<session_id>/. Both the main exit handler and cleanupOutputFiles (used by orphaned process recovery) are updated. File naming is preserved via basename(). renameSync is safe since source and destination are on the same filesystem (both under data/). Error handling is adequate with try/catch and logger warnings. The test file only tests fs primitives rather than the actual private method, which is a minor gap but acceptable.",
+  "verdict": "fail",
+  "summary": "Migration 010 correctly creates channels, claude_sessions, channel_session_links, sync_cursors tables and renames goal_tasks to tasks with nullable goal_id. New repositories (ChannelRepository, ClaudeSessionRepository, SyncCursorRepository) and their tests are well-written and pass. However, session-repo.test.ts (19 tests) fails because the migration renames the sessions table to _deprecated_sessions, breaking the existing SessionRepository which still queries the sessions table. The GoalTaskRow type also has a column name mismatch (thread_id vs channel_id).",
+  "verifyCommands": ["npm test"],
   "issues": [
     {
-      "severity": "warning",
-      "file": "discord/claude/executor.ts",
-      "line": 934,
-      "description": "When sessionId is empty (no session_id event received), archiveOutputFiles silently skips archival and the files remain on disk in data/processes/ forever. Previously unlinkSync would clean them up. Consider falling back to unlinkSync when sessionId is absent to avoid file accumulation."
+      "severity": "error",
+      "file": "discord/db/repo/session-repo.ts",
+      "line": 100,
+      "description": "SessionRepository queries 'SELECT * FROM sessions' but migration 010 renames sessions to _deprecated_sessions. This causes all 19 session-repo tests to fail with 'SqliteError: no such table: sessions'. The SessionRepository must either be updated to query _deprecated_sessions, or (better) the session-repo.test.ts should be adapted since SessionRepository is being replaced by ChannelRepository + ClaudeSessionRepository. At minimum, the deprecated table reference needs to match."
     },
     {
       "severity": "warning",
-      "file": "discord/claude/__tests__/executor-archive.test.ts",
-      "line": 41,
-      "description": "Test manually reimplements archive logic with renameSync rather than testing the actual ClaudeExecutor.archiveOutputFiles method. This means the test doesn't validate the real code path. Consider testing via a public method or exporting the method for testing."
+      "file": "discord/types/db.ts",
+      "line": 177,
+      "description": "GoalTaskRow still has 'thread_id: string | null' but the actual tasks table (after migration 010) uses 'channel_id'. The GoalTaskRepo code accesses 'row.channel_id' (line 284 of goal-task-repo.ts), which works at runtime but doesn't match the TypeScript type. Should update GoalTaskRow.thread_id to channel_id, or use the new TaskRow type."
+    },
+    {
+      "severity": "warning",
+      "file": "discord/db/migrations/010_schema_restructure.ts",
+      "line": 200,
+      "description": "Migration inserts from both sessions and archived_sessions into claude_sessions without ON CONFLICT handling. If the same id exists in both tables (unlikely but possible), the second INSERT will fail with a PRIMARY KEY conflict. Consider using INSERT OR IGNORE."
     }
   ]
 }
