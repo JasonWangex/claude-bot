@@ -1,13 +1,17 @@
 {
   "verdict": "pass",
-  "summary": "实现完整且正确。migration 005 DROP TABLE 已创建并注册到 allMigrations；SessionRepository 中 4 个 message_history prepared statements (getHistory, insertMessage, deleteHistory, trimHistory) 和 addMessageAndTrim() 方法已移除；rowToSession() 不再接受 history 参数，始终返回空 messageHistory 数组；save() 简化为单条 upsert（不再需要 transaction）；archive/restore 流程已适配（message_history_json 保持 null）；state.ts 中 updateSessionMessage() 改为直接 persistSession()；MessageHistoryRow 类型定义已移除；测试已更新验证新行为。TypeScript 编译通过，session-repo 19 个测试全部通过。",
-  "verifyCommands": ["npx tsc --noEmit", "npx vitest run"],
+  "summary": "g8t7 实现完整且正确。CommandMeta 接口定义清晰（名称、描述、分类、参数、示例、上下文、认证）；20 个命令元数据与实际注册的 Discord Slash Command 完全一致；GET /api/commands 端点正确返回 { commands, categories }；Web Commands 页面实现搜索过滤、分类分组、参数展示、示例展示。路由、导航菜单集成正确。构建/测试失败均为预存在问题（GoalStatus 类型不匹配、缺失 migration 008），与本任务无关。",
+  "verifyCommands": [
+    "npx tsc --noEmit",
+    "npx vitest run",
+    "cd web && pnpm run build"
+  ],
   "issues": [
     {
       "severity": "warning",
-      "file": "discord/api/routes/__tests__/tasks-interactions.test.ts",
-      "line": 65,
-      "description": "预存在的测试失败（非本分支引入）：InteractionLogRepository 测试中 role 排序断言失败（expected 'user' got 'assistant'）。此问题存在于 goal 分支，应在其他任务中修复。"
+      "file": "web/src/pages/Commands.tsx",
+      "line": 13,
+      "description": "Collapse.Panel 在 Ant Design v6 中已废弃，推荐使用 Collapse 的 items 属性替代。功能正常但会有 console 警告。"
     }
   ]
 }
