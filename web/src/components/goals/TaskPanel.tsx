@@ -90,7 +90,7 @@ export function TaskPanel({ goalId, tasks, onAction }: TaskPanelProps) {
                           onClick={() => handleAction(task.id, () => retryTask(goalId, task.id))}
                           title="重试（从头开始）"
                         />
-                        {task.threadId && (
+                        {task.channelId && (
                           <Button
                             type="text" size="small" icon={<ToolOutlined />}
                             disabled={acting !== null && acting !== task.id}

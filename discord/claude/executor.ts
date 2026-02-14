@@ -160,7 +160,7 @@ export class ClaudeExecutor {
       this.activeProcesses.set(lockKey, {
         child, flags, timeoutHandle: null, killTimer: null,
         outputFile, stderrFile,
-        guildId: options.guildId, threadId: options.threadId,
+        guildId: options.guildId, threadId: options.channelId,
         cwd: options.cwd,
       });
 
@@ -790,7 +790,7 @@ export class ClaudeExecutor {
           outputFile: active.outputFile,
           stderrFile: active.stderrFile || '',
           guildId: active.guildId || '',
-          threadId: active.threadId || '',
+          threadId: active.channelId || '',
           lockKey,
           claudeSessionId: active.claudeSessionId,
           cwd: active.cwd,
@@ -853,7 +853,7 @@ export class ClaudeExecutor {
         logger.info(`Orphaned process PID=${entry.pid} already completed`);
         await onResult({
           guildId: entry.guildId,
-          threadId: entry.threadId,
+          threadId: entry.channelId,
           lockKey: entry.lockKey,
           claudeSessionId: parseResult.sessionId || entry.claudeSessionId,
           status: 'completed',
@@ -872,7 +872,7 @@ export class ClaudeExecutor {
         logger.warn(`Orphaned process PID=${entry.pid} died without result`);
         await onResult({
           guildId: entry.guildId,
-          threadId: entry.threadId,
+          threadId: entry.channelId,
           lockKey: entry.lockKey,
           status: 'failed',
         });
@@ -894,7 +894,7 @@ export class ClaudeExecutor {
         logger.info(`Orphaned process PID=${entry.pid} ${parseResult.resultEvent ? 'completed' : 'exited'}`);
         await onResult({
           guildId: entry.guildId,
-          threadId: entry.threadId,
+          threadId: entry.channelId,
           lockKey: entry.lockKey,
           claudeSessionId: parseResult.sessionId || entry.claudeSessionId,
           status: parseResult.resultEvent ? 'completed' : 'failed',

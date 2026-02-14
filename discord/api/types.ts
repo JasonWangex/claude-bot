@@ -11,6 +11,7 @@ import type { MessageQueue } from '../bot/message-queue.js';
 import type { DiscordBotConfig } from '../types/index.js';
 import type { GoalOrchestrator } from '../orchestrator/index.js';
 import type { GoalStatus, GoalType } from '../types/db.js';
+import type { ChannelService } from '../services/channel-service.js';
 
 // ========== 通用 ==========
 
@@ -30,6 +31,7 @@ export interface ApiDeps {
   mq: MessageQueue;
   config: DiscordBotConfig;
   orchestrator?: GoalOrchestrator;
+  channelService?: ChannelService;
 }
 
 // ========== 路由 ==========
@@ -59,7 +61,7 @@ export interface HealthData {
 // ========== Task (Channel) ==========
 
 export interface TaskSummary {
-  thread_id: string;
+  channel_id: string;
   name: string;
   cwd: string;
   model: string | null;
@@ -68,7 +70,7 @@ export interface TaskSummary {
   created_at: number;
   last_message: string | null;
   last_message_at: number | null;
-  parent_thread_id: string | null;
+  parent_channel_id: string | null;
   worktree_branch: string | null;
   children: TaskSummary[];
 }
@@ -90,7 +92,7 @@ export interface CreateTaskRequest {
 }
 
 export interface CreateTaskResponse {
-  thread_id: string;
+  channel_id: string;
   name: string;
   cwd: string;
 }
@@ -148,8 +150,8 @@ export interface ForkTaskRequest {
 }
 
 export interface ForkTaskResponse {
-  thread_id: string;
-  thread_name: string;
+  channel_id: string;
+  channel_name: string;
   branch_name: string;
   cwd: string;
 }
@@ -161,8 +163,8 @@ export interface QdevRequest {
 }
 
 export interface QdevResponse {
-  thread_id: string;
-  thread_name: string;
+  channel_id: string;
+  channel_name: string;
   branch_name: string;
   cwd: string;
 }
@@ -209,7 +211,7 @@ export interface GoalDetail extends GoalSummary {
   blocked_by: string | null;
   body: string | null;
   drive_branch: string | null;
-  drive_thread_id: string | null;
+  drive_channel_id: string | null;
   drive_base_cwd: string | null;
   drive_max_concurrent: number | null;
   drive_created_at: number | null;
@@ -228,7 +230,7 @@ export interface GoalTaskSummary {
   status: string;
   depends: string[];
   branch_name: string | null;
-  thread_id: string | null;
+  channel_id: string | null;
 }
 
 export interface CreateGoalRequest {

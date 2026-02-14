@@ -1,5 +1,5 @@
 /**
- * 测试 GET /api/tasks/:threadId/interactions 端点
+ * 测试 GET /api/tasks/:channelId/interactions 端点
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';

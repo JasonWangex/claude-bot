@@ -2,7 +2,7 @@
  * POST /api/tasks/:threadId/qdev — 快速创建开发任务
  *
  * 流程:
- * 1. 从 parentThreadId 找到 root session
+ * 1. 从 parentChannelId 找到 root session
  * 2. 生成分支名和 channel 标题
  * 3. Fork root task（worktree + Category Text Channel + session）
  * 4. 发送任务描述到新 channel
@@ -23,8 +23,8 @@ export const qdev: RouteHandler = async (req, res, params, deps) => {
   const guildId = requireAuth(res);
   if (!guildId) return;
 
-  const threadId = params.threadId;
-  const session = deps.stateManager.getSession(guildId, threadId);
+  const channelId = params.channelId;
+  const session = deps.stateManager.getSession(guildId, channelId);
   if (!session) {
     sendJson(res, 404, { ok: false, error: 'Task not found' });
     return;
@@ -64,18 +64,19 @@ export const qdev: RouteHandler = async (req, res, params, deps) => {
     ]);
 
     // 2. 找到 root session
-    const rootSession = deps.stateManager.getRootSession(guildId, threadId);
-    const parentThreadId = rootSession?.threadId ?? threadId;
+    const rootSession = deps.stateManager.getRootSession(guildId, channelId);
+    const parentChannelId = rootSession?.channelId ?? threadId;
 
     // 3. Fork
-    const forkResult = await forkTaskCore(guildId, parentThreadId, branchName, categoryId, {
+    const forkResult = await forkTaskCore(guildId, parentChannelId, branchName, categoryId, {
       stateManager: deps.stateManager,
       client: deps.client,
       worktreesDir: deps.config.worktreesDir,
+      channelService: deps.channelService,
     }, threadTitle);
 
     // 4. 发送任务描述到新 channel
-    const newChannel = await deps.client.channels.fetch(forkResult.threadId);
+    const newChannel = await deps.client.channels.fetch(forkResult.channelId);
     if (newChannel && newChannel.isTextBased() && 'send' in newChannel) {
       const descEmbed = new EmbedBuilder()
         .setColor(EmbedColors.PURPLE)
@@ -87,11 +88,11 @@ export const qdev: RouteHandler = async (req, res, params, deps) => {
     sendJson(res, 202, {
       ok: true,
       data: {
-        thread_id: forkResult.threadId,
+        channel_id: forkResult.channelId,
         name: forkResult.threadName,
         branch: forkResult.branchName,
         cwd: forkResult.cwd,
-        parent_thread_id: parentThreadId,
+        parent_channel_id: parentChannelId,
         status: 'accepted',
       },
     });
@@ -99,12 +100,12 @@ export const qdev: RouteHandler = async (req, res, params, deps) => {
     // 6. 后台触发 Claude
     (async () => {
       try {
-        logger.info(`[qdev] Background chat started for channel ${forkResult.threadId}`);
-        await deps.messageHandler.handleBackgroundChat(guildId, forkResult.threadId, description);
-        logger.info(`[qdev] Background chat completed for channel ${forkResult.threadId}`);
+        logger.info(`[qdev] Background chat started for channel ${forkResult.channelId}`);
+        await deps.messageHandler.handleBackgroundChat(guildId, forkResult.channelId, description);
+        logger.info(`[qdev] Background chat completed for channel ${forkResult.channelId}`);
       } catch (error: any) {
-        logger.error(`[qdev] Background chat failed for channel ${forkResult.threadId}:`, error.message);
-        await deps.mq.sendLong(forkResult.threadId, `Error: ${error.message}`, { silent: true }).catch(() => {});
+        logger.error(`[qdev] Background chat failed for channel ${forkResult.channelId}:`, error.message);
+        await deps.mq.sendLong(forkResult.channelId, `Error: ${error.message}`, { silent: true }).catch(() => {});
       }
     })();
   } catch (error: any) {

@@ -37,7 +37,7 @@ function getInteractionRepo(): InteractionLogRepository {
 
 function sessionToSummary(s: Session, children: TaskSummary[]): TaskSummary {
   return {
-    thread_id: s.threadId,
+    channel_id: s.channelId,
     name: s.name,
     cwd: s.cwd,
     model: s.model || null,
@@ -46,27 +46,27 @@ function sessionToSummary(s: Session, children: TaskSummary[]): TaskSummary {
     created_at: s.createdAt,
     last_message: s.lastMessage || null,
     last_message_at: s.lastMessageAt || null,
-    parent_thread_id: s.parentThreadId || null,
+    parent_channel_id: s.parentChannelId || null,
     worktree_branch: s.worktreeBranch || null,
     children,
   };
 }
 
 function buildTaskTree(sessions: Session[]): TaskSummary[] {
-  const liveIds = new Set(sessions.map(s => s.threadId));
+  const liveIds = new Set(sessions.map(s => s.channelId));
   const childMap = new Map<string, Session[]>();
 
   for (const s of sessions) {
-    if (s.parentThreadId && liveIds.has(s.parentThreadId)) {
-      const arr = childMap.get(s.parentThreadId) || [];
+    if (s.parentChannelId && liveIds.has(s.parentChannelId)) {
+      const arr = childMap.get(s.parentChannelId) || [];
       arr.push(s);
-      childMap.set(s.parentThreadId, arr);
+      childMap.set(s.parentChannelId, arr);
     }
   }
 
-  const topLevel = sessions.filter(s => !s.parentThreadId || !liveIds.has(s.parentThreadId));
+  const topLevel = sessions.filter(s => !s.parentChannelId || !liveIds.has(s.parentChannelId));
   return topLevel.map(s => {
-    const children = (childMap.get(s.threadId) || []).map(c => sessionToSummary(c, []));
+    const children = (childMap.get(s.channelId) || []).map(c => sessionToSummary(c, []));
     return sessionToSummary(s, children);
   });
 }
@@ -154,9 +154,14 @@ export const createTask: RouteHandler = async (req, res, _params, deps) => {
 
     deps.stateManager.getOrCreateSession(guildId, textChannel.id, { name: taskName, cwd });
 
+    // 同步到 channels 表
+    if (deps.channelService) {
+      await deps.channelService.ensureChannel(textChannel.id, guildId, taskName, cwd);
+    }
+
     sendJson(res, 201, {
       ok: true,
-      data: { thread_id: textChannel.id, name: taskName, cwd, dir_created: dirCreated },
+      data: { channel_id: textChannel.id, name: taskName, cwd, dir_created: dirCreated },
     });
   } catch (error: any) {
     sendJson(res, 500, { ok: false, error: `Failed to create task: ${error.message}` });
@@ -168,14 +173,14 @@ export const getTask: RouteHandler = async (_req, res, params, deps) => {
   const guildId = requireAuth(res);
   if (!guildId) return;
 
-  const threadId = params.threadId;
-  const session = deps.stateManager.getSession(guildId, threadId);
+  const channelId = params.channelId;
+  const session = deps.stateManager.getSession(guildId, channelId);
   if (!session) {
     sendJson(res, 404, { ok: false, error: 'Task not found' });
     return;
   }
 
-  const children = deps.stateManager.getChildSessions(guildId, threadId);
+  const children = deps.stateManager.getChildSessions(guildId, channelId);
   const childSummaries = children.map(c => sessionToSummary(c, []));
 
   sendJson(res, 200, {
@@ -194,8 +199,8 @@ export const updateTask: RouteHandler = async (req, res, params, deps) => {
   const guildId = requireAuth(res);
   if (!guildId) return;
 
-  const threadId = params.threadId;
-  const session = deps.stateManager.getSession(guildId, threadId);
+  const channelId = params.channelId;
+  const session = deps.stateManager.getSession(guildId, channelId);
   if (!session) {
     sendJson(res, 404, { ok: false, error: 'Task not found' });
     return;
@@ -224,7 +229,7 @@ export const updateTask: RouteHandler = async (req, res, params, deps) => {
       sendJson(res, 500, { ok: false, error: `Channel rename failed: ${error.message}` });
       return;
     }
-    deps.stateManager.setSessionName(guildId, threadId, newName);
+    deps.stateManager.setSessionName(guildId, channelId, newName);
   }
 
   // model
@@ -236,17 +241,17 @@ export const updateTask: RouteHandler = async (req, res, params, deps) => {
         return;
       }
     }
-    deps.stateManager.setSessionModel(guildId, threadId, body.model ?? undefined);
+    deps.stateManager.setSessionModel(guildId, channelId, body.model ?? undefined);
   }
 
   // cwd
   if (body.cwd !== undefined) {
     const resolvedCwd = resolveCustomPath(body.cwd, deps.stateManager.getGuildDefaultCwd(guildId), deps.config.projectsRoot);
-    deps.stateManager.setSessionCwd(guildId, threadId, resolvedCwd);
+    deps.stateManager.setSessionCwd(guildId, channelId, resolvedCwd);
   }
 
-  const updated = deps.stateManager.getSession(guildId, threadId)!;
-  const children = deps.stateManager.getChildSessions(guildId, threadId);
+  const updated = deps.stateManager.getSession(guildId, channelId)!;
+  const children = deps.stateManager.getChildSessions(guildId, channelId);
   const childSummaries = children.map(c => sessionToSummary(c, []));
 
   sendJson(res, 200, {
@@ -265,8 +270,8 @@ export const deleteTask: RouteHandler = async (req, res, params, deps) => {
   const guildId = requireAuth(res);
   if (!guildId) return;
 
-  const threadId = params.threadId;
-  const session = deps.stateManager.getSession(guildId, threadId);
+  const channelId = params.channelId;
+  const session = deps.stateManager.getSession(guildId, channelId);
   if (!session) {
     sendJson(res, 404, { ok: false, error: 'Task not found' });
     return;
@@ -275,7 +280,7 @@ export const deleteTask: RouteHandler = async (req, res, params, deps) => {
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
   const cascade = url.searchParams.get('cascade') === 'true';
 
-  const children = deps.stateManager.getChildSessions(guildId, threadId);
+  const children = deps.stateManager.getChildSessions(guildId, channelId);
   if (children.length > 0 && !cascade) {
     sendJson(res, 400, {
       ok: false,
@@ -287,16 +292,16 @@ export const deleteTask: RouteHandler = async (req, res, params, deps) => {
   try {
     if (cascade) {
       for (const child of children) {
-        deps.stateManager.deleteSession(guildId, child.threadId);
+        deps.stateManager.deleteSession(guildId, child.channelId);
         // Delete child channels
-        const childChannel = await deps.client.channels.fetch(child.threadId).catch(() => null);
+        const childChannel = await deps.client.channels.fetch(child.channelId).catch(() => null);
         if (childChannel && 'delete' in childChannel) {
           await (childChannel as any).delete('Task cascade delete').catch(() => {});
         }
       }
     }
 
-    deps.stateManager.deleteSession(guildId, threadId);
+    deps.stateManager.deleteSession(guildId, channelId);
     // Delete the channel
     const channel = await deps.client.channels.fetch(threadId).catch(() => null);
     if (channel && 'delete' in channel) {
@@ -306,7 +311,7 @@ export const deleteTask: RouteHandler = async (req, res, params, deps) => {
     sendJson(res, 200, {
       ok: true,
       data: {
-        deleted: [threadId, ...(cascade ? children.map(c => c.threadId) : [])],
+        deleted: [threadId, ...(cascade ? children.map(c => c.channelId) : [])],
       },
     });
   } catch (error: any) {
@@ -319,15 +324,15 @@ export const archiveTask: RouteHandler = async (_req, res, params, deps) => {
   const guildId = requireAuth(res);
   if (!guildId) return;
 
-  const threadId = params.threadId;
-  const session = deps.stateManager.getSession(guildId, threadId);
+  const channelId = params.channelId;
+  const session = deps.stateManager.getSession(guildId, channelId);
   if (!session) {
     sendJson(res, 404, { ok: false, error: 'Task not found' });
     return;
   }
 
   try {
-    deps.stateManager.archiveSession(guildId, threadId, undefined, 'API archive');
+    deps.stateManager.archiveSession(guildId, channelId, undefined, 'API archive');
     const channel = await deps.client.channels.fetch(threadId).catch(() => null);
     if (channel && 'delete' in channel) {
       await (channel as any).delete('Task archived').catch(() => {});
@@ -347,8 +352,8 @@ export const forkTask: RouteHandler = async (req, res, params, deps) => {
   const guildId = requireAuth(res);
   if (!guildId) return;
 
-  const threadId = params.threadId;
-  const session = deps.stateManager.getSession(guildId, threadId);
+  const channelId = params.channelId;
+  const session = deps.stateManager.getSession(guildId, channelId);
   if (!session) {
     sendJson(res, 404, { ok: false, error: 'Task not found' });
     return;
@@ -386,20 +391,21 @@ export const forkTask: RouteHandler = async (req, res, params, deps) => {
   }
 
   try {
-    const result = await forkTaskCore(guildId, threadId, branchName, categoryId, {
+    const result = await forkTaskCore(guildId, channelId, branchName, categoryId, {
       stateManager: deps.stateManager,
       client: deps.client,
       worktreesDir: deps.config.worktreesDir,
+      channelService: deps.channelService,
     });
 
     sendJson(res, 201, {
       ok: true,
       data: {
-        thread_id: result.threadId,
+        channel_id: result.channelId,
         name: result.threadName,
         branch: result.branchName,
         cwd: result.cwd,
-        parent_thread_id: threadId,
+        parent_channel_id: threadId,
       },
     });
   } catch (error: any) {
@@ -412,8 +418,8 @@ export const getTaskInteractions: RouteHandler = async (_req, res, params, deps)
   const guildId = requireAuth(res);
   if (!guildId) return;
 
-  const threadId = params.threadId;
-  const session = deps.stateManager.getSession(guildId, threadId);
+  const channelId = params.channelId;
+  const session = deps.stateManager.getSession(guildId, channelId);
   if (!session) {
     sendJson(res, 404, { ok: false, error: 'Task not found' });
     return;

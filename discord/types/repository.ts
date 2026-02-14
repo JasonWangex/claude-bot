@@ -76,24 +76,24 @@ export interface Idea {
 /**
  * Session 仓库
  *
- * 管理 Discord Thread 对应的会话，包括活跃会话和归档会话。
- * 复合键: (guildId, threadId)
+ * 管理 Discord Channel 对应的会话，包括活跃会话和归档会话。
+ * 复合键: (guildId, channelId)
  */
 export interface ISessionRepo {
   // —— CRUD ——
-  get(guildId: string, threadId: string): Promise<Session | null>;
+  get(guildId: string, channelId: string): Promise<Session | null>;
   getAll(guildId: string): Promise<Session[]>;
   save(session: Session): Promise<void>;
-  delete(guildId: string, threadId: string): Promise<boolean>;
+  delete(guildId: string, channelId: string): Promise<boolean>;
 
   // —— 查询 ——
   findByClaudeSessionId(guildId: string, claudeSessionId: string): Promise<Session | null>;
-  findByParentThreadId(guildId: string, parentThreadId: string): Promise<Session[]>;
+  findByParentChannelId(guildId: string, parentChannelId: string): Promise<Session[]>;
 
   // —— 归档 ——
-  archive(guildId: string, threadId: string, userId?: string, reason?: string): Promise<boolean>;
-  restore(guildId: string, threadId: string): Promise<boolean>;
-  getArchived(guildId: string, threadId: string): Promise<ArchivedSession | null>;
+  archive(guildId: string, channelId: string, userId?: string, reason?: string): Promise<boolean>;
+  restore(guildId: string, channelId: string): Promise<boolean>;
+  getArchived(guildId: string, channelId: string): Promise<ArchivedSession | null>;
   getAllArchived(guildId: string): Promise<ArchivedSession[]>;
 
   // —— 统计 ——
@@ -163,7 +163,7 @@ export interface IGoalTaskRepo {
 
   // —— 查询 ——
   findByStatus(goalId: string, status: GoalTaskStatus): Promise<GoalTask[]>;
-  findByThreadId(threadId: string): Promise<{ goalId: string; task: GoalTask } | null>;
+  findByChannelId(channelId: string): Promise<{ goalId: string; task: GoalTask } | null>;
 }
 
 /**

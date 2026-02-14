@@ -39,7 +39,7 @@ function TaskTreeNode({ task, depth = 0 }: { task: TaskSummary; depth?: number }
           <span style={{ width: 14 }} />
         )}
 
-        <Link to={`/tasks/${task.thread_id}`} style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+        <Link to={`/tasks/${task.channel_id}`} style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <Text strong style={{ fontSize: 14 }} ellipsis>{task.name}</Text>
@@ -69,7 +69,7 @@ function TaskTreeNode({ task, depth = 0 }: { task: TaskSummary; depth?: number }
       {expanded && hasChildren && (
         <div style={{ borderLeft: '1px solid #f0f0f0', marginLeft: 20 + depth * 24 }}>
           {task.children.map(child => (
-            <TaskTreeNode key={child.thread_id} task={child} depth={depth + 1} />
+            <TaskTreeNode key={child.channel_id} task={child} depth={depth + 1} />
           ))}
         </div>
       )}
@@ -85,7 +85,7 @@ export function TaskTree({ tasks }: { tasks: TaskSummary[] }) {
   return (
     <div>
       {tasks.map(task => (
-        <TaskTreeNode key={task.thread_id} task={task} />
+        <TaskTreeNode key={task.channel_id} task={task} />
       ))}
     </div>
   );

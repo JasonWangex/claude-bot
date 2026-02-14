@@ -75,7 +75,7 @@ export class MessageHandler {
    */
   async handleText(message: Message): Promise<void> {
     const guildId = message.guildId;
-    const threadId = message.channelId;
+    const channelId = message.channelId;
     if (!guildId) return;
 
     let text = message.content;
@@ -90,7 +90,7 @@ export class MessageHandler {
 
     const threadName = message.channel && 'name' in message.channel ? (message.channel as any).name : `thread-${threadId}`;
 
-    const session = this.stateManager.getOrCreateSession(guildId, threadId, {
+    const session = this.stateManager.getOrCreateSession(guildId, channelId, {
       name: threadName,
       cwd: this.stateManager.getGuildDefaultCwd(guildId),
     });
@@ -98,7 +98,7 @@ export class MessageHandler {
     // Plan mode 确认
     if (session.planMode) {
       if (MessageHandler.PLAN_CONFIRM_WORDS.test(text.trim())) {
-        await this.executePlanApproval(guildId, threadId, session);
+        await this.executePlanApproval(guildId, channelId, session);
         return;
       }
       return this.sendChatInternal(guildId, session, text, 'plan');
@@ -112,14 +112,14 @@ export class MessageHandler {
    */
   async handlePhoto(message: Message): Promise<void> {
     const guildId = message.guildId;
-    const threadId = message.channelId;
+    const channelId = message.channelId;
     if (!guildId) return;
 
     const attachments = message.attachments.filter(a => a.contentType?.startsWith('image/'));
     if (attachments.size === 0) return;
 
     const threadName = message.channel && 'name' in message.channel ? (message.channel as any).name : `thread-${threadId}`;
-    const session = this.stateManager.getOrCreateSession(guildId, threadId, {
+    const session = this.stateManager.getOrCreateSession(guildId, channelId, {
       name: threadName,
       cwd: this.stateManager.getGuildDefaultCwd(guildId),
     });
@@ -149,7 +149,7 @@ export class MessageHandler {
     threadId: string,
     text: string,
   ): Promise<void> {
-    const session = this.stateManager.getOrCreateSession(guildId, threadId, {
+    const session = this.stateManager.getOrCreateSession(guildId, channelId, {
       name: `thread-${threadId}`,
       cwd: this.stateManager.getGuildDefaultCwd(guildId),
     });
@@ -172,15 +172,15 @@ export class MessageHandler {
   /**
    * Plan 确认后执行
    */
-  private async executePlanApproval(guildId: string, threadId: string, session: Session): Promise<void> {
-    this.stateManager.setSessionPlanMode(guildId, threadId, false);
+  private async executePlanApproval(guildId: string, channelId: string, session: Session): Promise<void> {
+    this.stateManager.setSessionPlanMode(guildId, channelId, false);
 
     if (!session.claudeSessionId) {
       await this.mq.send(threadId, 'No active context. Please send `/plan` again.', { silent: true });
       return;
     }
 
-    const lockKey = StateManager.threadLockKey(guildId, threadId);
+    const lockKey = StateManager.channelLockKey(guildId, channelId);
     await this.compactSession(threadId, session.claudeSessionId, session.cwd, lockKey);
 
     return this.sendChatInternal(guildId, session, '请按照上面的方案执行实现');
@@ -196,7 +196,7 @@ export class MessageHandler {
     mode?: 'plan',
     images?: ImageAttachment[],
   ): Promise<ChatUsageResult> {
-    const threadId = session.threadId;
+    const channelId = session.channelId;
     const MAX_INTERACTIVE_ROUNDS = 5;
     const totalUsage: ChatUsageResult = {
       input_tokens: 0, output_tokens: 0,
@@ -208,10 +208,10 @@ export class MessageHandler {
 
     this.mq.resetThreadState(threadId);
     logger.info(`[${session.name}] Message:`, text.substring(0, 100));
-    this.stateManager.updateSessionMessage(guildId, threadId, text, 'user');
+    this.stateManager.updateSessionMessage(guildId, channelId, text, 'user');
 
     const modeLabel = mode === 'plan' ? ' Plan' : '';
-    const lockKey = StateManager.threadLockKey(guildId, threadId);
+    const lockKey = StateManager.channelLockKey(guildId, channelId);
 
     // 停止按钮
     const stopButton = new ButtonBuilder()
@@ -335,7 +335,7 @@ export class MessageHandler {
       }
       if (event.type === 'system' && subtype === 'session_reset') {
         mq.edit(threadId, progressMsgId, 'Context too long, auto-reset...', { components: [stopRow as any], embedColor: EmbedColors.YELLOW });
-        this.stateManager.clearSessionClaudeId(guildId, threadId);
+        this.stateManager.clearSessionClaudeId(guildId, channelId);
         return;
       }
       if (event.type === 'system' && subtype === 'retrying') {
@@ -474,8 +474,8 @@ export class MessageHandler {
       }, onProgress);
       images = undefined;
 
-      this.stateManager.setSessionClaudeId(guildId, threadId, response.sessionId);
-      this.stateManager.updateSessionMessage(guildId, threadId, response.result, 'assistant');
+      this.stateManager.setSessionClaudeId(guildId, channelId, response.sessionId);
+      this.stateManager.updateSessionMessage(guildId, channelId, response.result, 'assistant');
       logger.info(`[${session.name}] Response length:`, response.result.length);
 
       // 累加本轮 usage
@@ -533,7 +533,7 @@ export class MessageHandler {
           }
         } else {
           if (answer === 'compact_execute') {
-            const updatedSession = this.stateManager.getSession(guildId, threadId)!;
+            const updatedSession = this.stateManager.getSession(guildId, channelId)!;
             await this.compactSession(threadId, response.sessionId, updatedSession.cwd, response.sessionId);
             followUpText = '请按照方案执行实现';
           } else if (answer === 'approve') {
@@ -547,7 +547,7 @@ export class MessageHandler {
 
         logger.debug(`Interactive follow-up: ${followUpText.slice(0, 80)}`);
 
-        const latestSession = this.stateManager.getSession(guildId, threadId);
+        const latestSession = this.stateManager.getSession(guildId, channelId);
         text = followUpText;
         if (latestSession) session = latestSession;
         mode = undefined;
@@ -602,7 +602,7 @@ export class MessageHandler {
       }
 
       if (mode === 'plan') {
-        this.stateManager.setSessionPlanMode(guildId, threadId, true);
+        this.stateManager.setSessionPlanMode(guildId, channelId, true);
         await mq.send(threadId,
           `@everyone Plan generated${summary}\n\n` +
           `Reply "ok" to compact context and execute.\n` +
@@ -651,7 +651,7 @@ export class MessageHandler {
         if (error.errorType === ClaudeErrorType.PROCESS_KILLED) {
           hint = 'Session context preserved, you can continue sending messages';
         } else if (error.errorType === ClaudeErrorType.SESSION_RECOVERABLE) {
-          this.stateManager.clearSessionClaudeId(guildId, threadId);
+          this.stateManager.clearSessionClaudeId(guildId, channelId);
           hint = 'Session auto-reset, please resend your message';
         } else if (error.errorType === ClaudeErrorType.FATAL) {
           hint = 'Check bot config (is Claude CLI available?)';
@@ -662,7 +662,7 @@ export class MessageHandler {
 
       if (this.errorReporter) {
         const sessionInfo = errorSessionId ? ` session=${errorSessionId.slice(0, 8)}` : '';
-        this.errorReporter(guildId, threadId, `${session.name}${sessionInfo}`, error);
+        this.errorReporter(guildId, channelId, `${session.name}${sessionInfo}`, error);
       }
     }
 
@@ -680,7 +680,7 @@ export class MessageHandler {
     threadId: string,
     message: string,
   ): Promise<ChatUsageResult> {
-    const session = this.stateManager.getSession(guildId, threadId);
+    const session = this.stateManager.getSession(guildId, channelId);
     if (!session) throw new Error('Session not found');
     return this.sendChatInternal(guildId, session, message);
   }
@@ -696,9 +696,9 @@ export class MessageHandler {
     input: any,
   ): Promise<string> {
     if (toolName === 'AskUserQuestion') {
-      return this.showAskUserQuestion(guildId, threadId, toolUseId, input as AskUserQuestionInput);
+      return this.showAskUserQuestion(guildId, channelId, toolUseId, input as AskUserQuestionInput);
     } else if (toolName === 'ExitPlanMode') {
-      return this.showExitPlanMode(guildId, threadId, toolUseId, input as ExitPlanModeInput);
+      return this.showExitPlanMode(guildId, channelId, toolUseId, input as ExitPlanModeInput);
     }
     throw new Error(`Unknown interactive tool: ${toolName}`);
   }
@@ -717,7 +717,7 @@ export class MessageHandler {
 
     if (!q.options?.length) {
       await this.mq.send(threadId, `@everyone **${q.header || 'Question'}**\n\n${q.question}\n\nPlease type your reply directly.`, { priority: 'high' });
-      const { promise } = this.interactionRegistry.register(toolUseId, guildId, threadId);
+      const { promise } = this.interactionRegistry.register(toolUseId, guildId, channelId);
       this.interactionRegistry.setWaitingCustomText(toolUseId, true);
       return promise;
     }

@@ -27,7 +27,7 @@ export default function App() {
             <Route path="goals" element={<Goals />} />
             <Route path="goals/:goalId" element={<GoalDetail />} />
             <Route path="tasks" element={<Tasks />} />
-            <Route path="tasks/:threadId" element={<TaskDetail />} />
+            <Route path="tasks/:channelId" element={<TaskDetail />} />
             <Route path="devlogs" element={<DevLogs />} />
             <Route path="ideas" element={<Ideas />} />
             <Route path="kb" element={<KnowledgeBase />} />

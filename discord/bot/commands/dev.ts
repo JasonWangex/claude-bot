@@ -81,11 +81,11 @@ async function handleQdev(
   if (!requireThread(interaction)) return;
 
   const guildId = interaction.guildId!;
-  const threadId = interaction.channelId;
+  const channelId = interaction.channelId;
   const description = interaction.options.getString('description', true);
   const { stateManager, client, config, messageHandler } = deps;
 
-  const session = stateManager.getSession(guildId, threadId);
+  const session = stateManager.getSession(guildId, channelId);
   if (!session) {
     await interaction.reply({ content: 'No session found for this thread.', ephemeral: true });
     return;
@@ -103,8 +103,8 @@ async function handleQdev(
 
     // 2. 获取 root session
     await interaction.editReply(`Branch: \`${branchName}\`\nCreating worktree and thread...`);
-    const rootSession = stateManager.getRootSession(guildId, threadId);
-    const parentThreadId = rootSession?.threadId ?? threadId;
+    const rootSession = stateManager.getRootSession(guildId, channelId);
+    const parentChannelId = rootSession?.channelId ?? threadId;
 
     // 3. 从当前 channel 的 parentId 获取 Category
     const channel = interaction.channel;
@@ -121,15 +121,16 @@ async function handleQdev(
     }
 
     // 4. Fork: 创建 worktree + Text Channel + session
-    const forkResult = await forkTaskCore(guildId, parentThreadId, branchName, categoryId, {
+    const forkResult = await forkTaskCore(guildId, parentChannelId, branchName, categoryId, {
       stateManager,
       client,
       worktreesDir: config.worktreesDir,
+      channelService: deps.channelService,
     }, threadTitle);
 
     // 5. 发送任务描述到新 thread
     await interaction.editReply(`Branch: \`${branchName}\`\nSending task to new thread...`);
-    const newChannel = await client.channels.fetch(forkResult.threadId);
+    const newChannel = await client.channels.fetch(forkResult.channelId);
     if (newChannel && newChannel.isTextBased() && 'send' in newChannel) {
       const descEmbed = new EmbedBuilder()
         .setColor(EmbedColors.PURPLE)
@@ -138,7 +139,7 @@ async function handleQdev(
     }
 
     // 6. 触发 Claude 处理（fire-and-forget）
-    messageHandler.handleBackgroundChat(guildId, forkResult.threadId, description).catch((err) => {
+    messageHandler.handleBackgroundChat(guildId, forkResult.channelId, description).catch((err) => {
       logger.error('qdev background chat failed:', err.message);
     });
 
@@ -146,7 +147,7 @@ async function handleQdev(
     await interaction.editReply(
       `**Task created**\n\n` +
       `Branch: \`${forkResult.branchName}\`\n` +
-      `Thread: <#${forkResult.threadId}>\n` +
+      `Thread: <#${forkResult.channelId}>\n` +
       `Working directory: \`${forkResult.cwd}\`\n\n` +
       `Claude is processing the task in the new thread...`
     );
@@ -166,11 +167,11 @@ async function handleIdea(
   if (!requireThread(interaction)) return;
 
   const guildId = interaction.guildId!;
-  const threadId = interaction.channelId;
+  const channelId = interaction.channelId;
   const args = interaction.options.getString('content') || '';
   const { stateManager, messageQueue } = deps;
 
-  const session = stateManager.getSession(guildId, threadId);
+  const session = stateManager.getSession(guildId, channelId);
   if (!session) {
     await interaction.reply({ content: 'No session found for this thread.', ephemeral: true });
     return;
@@ -242,11 +243,11 @@ async function handleCommit(
   if (!requireThread(interaction)) return;
 
   const guildId = interaction.guildId!;
-  const threadId = interaction.channelId;
+  const channelId = interaction.channelId;
   const message = interaction.options.getString('message') || '';
   const { stateManager, messageHandler, messageQueue } = deps;
 
-  const session = stateManager.getSession(guildId, threadId);
+  const session = stateManager.getSession(guildId, channelId);
   if (!session) {
     await interaction.reply({ content: 'No session found for this thread.', ephemeral: true });
     return;
@@ -270,7 +271,7 @@ async function handleCommit(
     ephemeral: true,
   });
 
-  messageHandler.handleBackgroundChat(guildId, threadId, prompt).catch((err) => {
+  messageHandler.handleBackgroundChat(guildId, channelId, prompt).catch((err) => {
     logger.error('commit failed:', err.message);
     messageQueue.sendLong(threadId, `commit failed: ${err.message}`).catch(() => {});
   });
@@ -334,33 +335,33 @@ async function handleMerge(
 
   const bodyMatch = skillContent.match(/^---[\s\S]*?---\s*([\s\S]*)$/);
   const prompt = (bodyMatch ? bodyMatch[1] : skillContent)
-    .replaceAll('{{TARGET_TOPIC_ID}}', targetSession.threadId)
+    .replaceAll('{{TARGET_TOPIC_ID}}', targetSession.channelId)
     .replaceAll('{{TARGET_BRANCH}}', targetSession.worktreeBranch)
     .replaceAll('{{TARGET_CWD}}', targetSession.cwd)
     .replaceAll('{{MAIN_CWD}}', mainCwd);
 
   // Step 1: 停止 target session 正在运行的 Claude 进程
-  const targetLockKey = StateManager.threadLockKey(guildId, targetSession.threadId);
+  const targetLockKey = StateManager.channelLockKey(guildId, targetSession.channelId);
   const wasRunning = claudeClient.abort(targetLockKey);
   if (wasRunning) {
     logger.info(`[merge] Stopped target session: ${targetSession.name}`);
   }
 
   // Step 2: 清除旧 session，设置 cwd 为 main worktree（等同于 /clear + 改 cwd）
-  stateManager.clearSessionClaudeId(guildId, targetSession.threadId);
-  stateManager.setSessionCwd(guildId, targetSession.threadId, mainCwd);
+  stateManager.clearSessionClaudeId(guildId, targetSession.channelId);
+  stateManager.setSessionCwd(guildId, targetSession.channelId, mainCwd);
 
   await interaction.editReply(
     `Merging: **${targetSession.name}**\n` +
     `Branch: \`${targetSession.worktreeBranch}\`\n` +
-    `Executing in: <#${targetSession.threadId}>`
+    `Executing in: <#${targetSession.channelId}>`
   );
 
   // Step 3: 在 target session 中用全新 Claude 执行 merge
   // merge skill 最后会 DELETE /api/tasks/$TASK_ID，删除 channel 和 session
-  messageHandler.handleBackgroundChat(guildId, targetSession.threadId, prompt).catch((err) => {
+  messageHandler.handleBackgroundChat(guildId, targetSession.channelId, prompt).catch((err) => {
     logger.error('merge failed:', err.message);
-    messageQueue.sendLong(targetSession.threadId, `merge failed: ${err.message}`).catch(() => {});
+    messageQueue.sendLong(targetSession.channelId, `merge failed: ${err.message}`).catch(() => {});
   });
 }
 

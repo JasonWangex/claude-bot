@@ -21,7 +21,7 @@ export class GoalTaskRepo implements IGoalTaskRepo {
     deleteTask: Database.Statement;
     deleteAllByGoal: Database.Statement;
     findByStatus: Database.Statement;
-    findByThreadId: Database.Statement;
+    findByChannelId: Database.Statement;
     getDepsByTask: Database.Statement;
     getDepsByGoal: Database.Statement;
     deleteDeps: Database.Statement;
@@ -94,7 +94,7 @@ export class GoalTaskRepo implements IGoalTaskRepo {
         `SELECT * FROM tasks WHERE goal_id = ? AND status = ? ORDER BY phase ASC, id ASC`,
       ),
 
-      findByThreadId: this.db.prepare(
+      findByChannelId: this.db.prepare(
         `SELECT * FROM tasks WHERE channel_id = ?`,
       ),
 
@@ -190,8 +190,8 @@ export class GoalTaskRepo implements IGoalTaskRepo {
     return rows.map((row) => taskRowToGoalTask(row, depsMap.get(row.id)));
   }
 
-  async findByThreadId(threadId: string): Promise<{ goalId: string; task: GoalTask } | null> {
-    const row = this.stmts.findByThreadId.get(threadId) as GoalTaskRow | undefined;
+  async findByChannelId(channelId: string): Promise<{ goalId: string; task: GoalTask } | null> {
+    const row = this.stmts.findByChannelId.get(channelId) as GoalTaskRow | undefined;
     if (!row) return null;
 
     const depRows = this.stmts.getDepsByTask.all(row.goal_id, row.id) as GoalTaskDepRow[];
@@ -237,7 +237,7 @@ function goalTaskToRow(goalId: string, task: GoalTask): Record<string, unknown> 
     phase: task.phase ?? null,
     status: task.status,
     branch_name: task.branchName ?? null,
-    channel_id: task.threadId ?? null,  // threadId → channel_id 映射
+    channel_id: task.channelId ?? null,
     dispatched_at: task.dispatchedAt ?? null,
     completed_at: task.completedAt ?? null,
     error: task.error ?? null,
@@ -281,7 +281,7 @@ function taskRowToGoalTask(
     auditRetries: row.audit_retries ?? 0,
     status: row.status,
     branchName: row.branch_name ?? undefined,
-    threadId: row.channel_id ?? undefined,  // channel_id → threadId 映射（保持运行时接口兼容）
+    channelId: row.channel_id ?? undefined,
     dispatchedAt: row.dispatched_at ?? undefined,
     completedAt: row.completed_at ?? undefined,
     error: row.error ?? undefined,

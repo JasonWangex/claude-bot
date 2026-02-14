@@ -110,9 +110,9 @@ export class InteractionRegistry {
   /**
    * 查找特定 thread 中等待自定义文本的 entry
    */
-  findWaitingCustomText(guildId: string, threadId: string): PendingEntry | undefined {
+  findWaitingCustomText(guildId: string, channelId: string): PendingEntry | undefined {
     for (const entry of this.pending.values()) {
-      if (entry.guildId === guildId && entry.threadId === threadId && entry.waitingCustomText) {
+      if (entry.guildId === guildId && entry.channelId === threadId && entry.waitingCustomText) {
         return entry;
       }
     }

@@ -13,14 +13,14 @@ export const clearSession: RouteHandler = async (_req, res, params, deps) => {
   const guildId = requireAuth(res);
   if (!guildId) return;
 
-  const threadId = params.threadId;
-  const session = deps.stateManager.getSession(guildId, threadId);
+  const channelId = params.channelId;
+  const session = deps.stateManager.getSession(guildId, channelId);
   if (!session) {
     sendJson(res, 404, { ok: false, error: 'Task not found' });
     return;
   }
 
-  deps.stateManager.clearSessionClaudeId(guildId, threadId);
+  deps.stateManager.clearSessionClaudeId(guildId, channelId);
 
   sendJson(res, 200, {
     ok: true,
@@ -32,8 +32,8 @@ export const compactSession: RouteHandler = async (_req, res, params, deps) => {
   const guildId = requireAuth(res);
   if (!guildId) return;
 
-  const threadId = params.threadId;
-  const session = deps.stateManager.getSession(guildId, threadId);
+  const channelId = params.channelId;
+  const session = deps.stateManager.getSession(guildId, channelId);
   if (!session) {
     sendJson(res, 404, { ok: false, error: 'Task not found' });
     return;
@@ -45,7 +45,7 @@ export const compactSession: RouteHandler = async (_req, res, params, deps) => {
   }
 
   try {
-    const lockKey = StateManager.threadLockKey(guildId, threadId);
+    const lockKey = StateManager.channelLockKey(guildId, channelId);
     const result = await deps.claudeClient.compact(session.claudeSessionId, session.cwd, lockKey);
 
     sendJson(res, 200, {
@@ -61,14 +61,14 @@ export const rewindSession: RouteHandler = async (_req, res, params, deps) => {
   const guildId = requireAuth(res);
   if (!guildId) return;
 
-  const threadId = params.threadId;
-  const session = deps.stateManager.getSession(guildId, threadId);
+  const channelId = params.channelId;
+  const session = deps.stateManager.getSession(guildId, channelId);
   if (!session) {
     sendJson(res, 404, { ok: false, error: 'Task not found' });
     return;
   }
 
-  const result = deps.stateManager.rewindSession(guildId, threadId);
+  const result = deps.stateManager.rewindSession(guildId, channelId);
   if (!result.success) {
     sendJson(res, 400, { ok: false, error: result.reason });
     return;
@@ -84,14 +84,14 @@ export const stopSession: RouteHandler = async (_req, res, params, deps) => {
   const guildId = requireAuth(res);
   if (!guildId) return;
 
-  const threadId = params.threadId;
-  const session = deps.stateManager.getSession(guildId, threadId);
+  const channelId = params.channelId;
+  const session = deps.stateManager.getSession(guildId, channelId);
   if (!session) {
     sendJson(res, 404, { ok: false, error: 'Task not found' });
     return;
   }
 
-  const lockKey = StateManager.threadLockKey(guildId, threadId);
+  const lockKey = StateManager.channelLockKey(guildId, channelId);
   const wasRunning = deps.claudeClient.abort(lockKey);
 
   sendJson(res, 200, {

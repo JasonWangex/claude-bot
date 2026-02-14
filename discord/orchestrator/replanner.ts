@@ -626,7 +626,7 @@ export async function handleReplanByImpact(
       changeDiff + '\n\n' +
       `快照 ID: \`${checkpointId}\``;
 
-    await deps.notify(state.goalThreadId, approvalMessage, 'warning', {
+    await deps.notify(state.goalChannelId, approvalMessage, 'warning', {
       components: buildReplanApprovalButtons(state.goalId, checkpointId),
     });
 
@@ -666,7 +666,7 @@ export async function handleReplanByImpact(
       : '') +
     `\n快照 ID: \`${checkpointId}\``;
 
-  await deps.notify(state.goalThreadId, notifyMessage, assessed === 'low' ? 'info' : 'warning', {
+  await deps.notify(state.goalChannelId, notifyMessage, assessed === 'low' ? 'info' : 'warning', {
     components: buildReplanRollbackButton(state.goalId, checkpointId),
   });
 

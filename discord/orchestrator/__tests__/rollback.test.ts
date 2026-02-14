@@ -20,7 +20,7 @@ function makeState(overrides: Partial<GoalDriveState> = {}): GoalDriveState {
     goalId: 'goal-1',
     goalName: 'Test Goal',
     goalBranch: 'goal/test',
-    goalThreadId: 'thread-1',
+    goalChannelId: 'thread-1',
     baseCwd: '/tmp/test',
     status: 'running',
     createdAt: Date.now() - 60_000,
@@ -52,10 +52,10 @@ function createMockOrchestrator(opts: {
   snapshotTasks?: GoalTask[] | null;
 }) {
   const savedStates: GoalDriveState[] = [];
-  const notifications: Array<{ threadId: string; message: string; type?: string }> = [];
+  const notifications: Array<{ channelId: string; message: string; type?: string }> = [];
   const abortedLockKeys: string[] = [];
   const deletedChannels: string[] = [];
-  const archivedSessions: Array<{ guildId: string; threadId: string; reason?: string }> = [];
+  const archivedSessions: Array<{ guildId: string; channelId: string; reason?: string }> = [];
 
   const mockGoalRepo = {
     get: vi.fn(async () => opts.state ? { ...opts.state, tasks: opts.state.tasks.map(t => ({ ...t })) } : null),
@@ -98,8 +98,8 @@ function createMockOrchestrator(opts: {
   };
 
   const mockMq = {
-    sendLong: vi.fn(async (threadId: string, message: string, opts?: any) => {
-      notifications.push({ threadId, message, type: opts?.embedColor });
+    sendLong: vi.fn(async (channelId: string, message: string, opts?: any) => {
+      notifications.push({ channelId, message, type: opts?.embedColor });
     }),
   };
 
@@ -117,8 +117,8 @@ function createMockOrchestrator(opts: {
   };
 
   const mockStateManager = {
-    archiveSession: vi.fn((guildId: string, threadId: string, userId?: string, reason?: string) => {
-      archivedSessions.push({ guildId, threadId, reason });
+    archiveSession: vi.fn((guildId: string, channelId: string, userId?: string, reason?: string) => {
+      archivedSessions.push({ guildId, channelId, reason });
       return true;
     }),
   };
@@ -155,9 +155,9 @@ describe('rollback: affected task identification', () => {
 
     const currentTasks = [
       makeTask({ id: 't1', status: 'completed' }),
-      makeTask({ id: 't2', status: 'running', depends: ['t1'], branchName: 'feat/t2', threadId: 'ch-t2', dispatchedAt: Date.now() - 10_000 }),
+      makeTask({ id: 't2', status: 'running', depends: ['t1'], branchName: 'feat/t2', channelId: 'ch-t2', dispatchedAt: Date.now() - 10_000 }),
       // t3 was added by replan AFTER the checkpoint
-      makeTask({ id: 't3', status: 'running', depends: ['t1'], branchName: 'feat/t3', threadId: 'ch-t3', dispatchedAt: Date.now() - 5_000 }),
+      makeTask({ id: 't3', status: 'running', depends: ['t1'], branchName: 'feat/t3', channelId: 'ch-t3', dispatchedAt: Date.now() - 5_000 }),
     ];
 
     const snapshotTaskIds = new Set(snapshotTasks.map(t => t.id));
@@ -414,9 +414,9 @@ describe('rollback: task cleanup identification', () => {
 
     const currentTasks = [
       makeTask({ id: 't1', status: 'completed', branchName: 'feat/t1', merged: true }),
-      makeTask({ id: 't2', status: 'running', depends: ['t1'], branchName: 'feat/t2', threadId: 'ch-t2' }),
+      makeTask({ id: 't2', status: 'running', depends: ['t1'], branchName: 'feat/t2', channelId: 'ch-t2' }),
       // t3 新增的，不在快照中
-      makeTask({ id: 't3', status: 'completed', depends: ['t1'], branchName: 'feat/t3', threadId: 'ch-t3' }),
+      makeTask({ id: 't3', status: 'completed', depends: ['t1'], branchName: 'feat/t3', channelId: 'ch-t3' }),
     ];
 
     const snapshotTaskMap = new Map(snapshotTasks.map(t => [t.id, t]));
@@ -427,14 +427,14 @@ describe('rollback: task cleanup identification', () => {
 
       // 快照中不存在 → 清理
       if (!snapshotTask) {
-        if (task.branchName || task.threadId) {
+        if (task.branchName || task.channelId) {
           tasksToCleanup.push(task);
         }
         continue;
       }
 
       // 快照中是 pending 但现在有 branch/thread → 清理
-      if (snapshotTask.status === 'pending' && (task.branchName || task.threadId)) {
+      if (snapshotTask.status === 'pending' && (task.branchName || task.channelId)) {
         tasksToCleanup.push(task);
       }
     }
@@ -460,13 +460,13 @@ describe('rollback: task cleanup identification', () => {
       const snapshotTask = snapshotTaskMap.get(task.id);
 
       if (!snapshotTask) {
-        if (task.branchName || task.threadId) {
+        if (task.branchName || task.channelId) {
           tasksToCleanup.push(task);
         }
         continue;
       }
 
-      if (snapshotTask.status === 'pending' && (task.branchName || task.threadId)) {
+      if (snapshotTask.status === 'pending' && (task.branchName || task.channelId)) {
         tasksToCleanup.push(task);
       }
     }
