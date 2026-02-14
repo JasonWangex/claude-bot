@@ -110,6 +110,19 @@ export class GoalOrchestrator {
     }
   }
 
+  /** 同步 Goal 元数据 status（GoalMetaRepo 管理的 status 字段） */
+  private async syncGoalMetaStatus(goalId: string, status: string): Promise<void> {
+    try {
+      const meta = await this.deps.goalMetaRepo.get(goalId);
+      if (meta) {
+        meta.status = status as any;
+        await this.deps.goalMetaRepo.save(meta);
+      }
+    } catch (err: any) {
+      logger.warn(`[Orchestrator] Failed to sync goal meta status: ${err.message}`);
+    }
+  }
+
   /** 启动 Goal 自动推进 */
   async startDrive(params: StartDriveParams): Promise<GoalDriveState> {
     const { goalId, goalName, goalThreadId, baseCwd: inputCwd, tasks: rawTasks, maxConcurrent = 3 } = params;
@@ -165,6 +178,7 @@ export class GoalOrchestrator {
 
     await this.saveState(state);
     this.activeDrives.set(goalId, state);
+    await this.syncGoalMetaStatus(goalId, 'Processing');
 
     await this.notify(goalThreadId,
       `**Goal Drive started:** ${goalName}\n` +
@@ -873,6 +887,7 @@ export class GoalOrchestrator {
     if (isGoalComplete(state)) {
       state.status = 'completed';
       await this.saveState(state);
+      await this.syncGoalMetaStatus(state.goalId, 'Completed');
       await this.notify(state.goalThreadId,
         `**Goal "${state.goalName}" completed!**\n` +
         `Review branch \`${state.goalBranch}\` and merge to main.`,
@@ -882,6 +897,7 @@ export class GoalOrchestrator {
     }
 
     if (isGoalStuck(state)) {
+      await this.syncGoalMetaStatus(state.goalId, 'Blocking');
       await this.notify(state.goalThreadId,
         `Goal "${state.goalName}" is stuck\n` +
         `May have unresolved dependencies or failed tasks\n` +

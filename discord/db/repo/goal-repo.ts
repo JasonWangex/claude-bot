@@ -43,7 +43,7 @@ export class GoalRepo implements IGoalRepo {
           drive_max_concurrent, drive_created_at, drive_updated_at,
           drive_pending_json
         ) VALUES (
-          @id, @name, COALESCE((SELECT status FROM goals WHERE id = @id), 'Active'),
+          @id, @name, COALESCE((SELECT status FROM goals WHERE id = @id), 'Processing'),
           @drive_status, @drive_branch, @drive_thread_id, @drive_base_cwd,
           @drive_max_concurrent, @drive_created_at, @drive_updated_at,
           @drive_pending_json

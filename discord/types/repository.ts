@@ -37,6 +37,7 @@ export interface Goal {
   blockedBy: string | null;      // 卡点说明
   body: string | null;           // 页面正文 Markdown
   seq: number | null;            // 短序号，用于子任务命名前缀（g1, g2, ...）
+  driveStatus: GoalDriveStatus | null;  // Drive 运行状态（从 goals.drive_status 读取）
 }
 
 /** 开发日志 */

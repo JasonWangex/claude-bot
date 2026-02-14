@@ -21,7 +21,7 @@ export default function Dashboard() {
   const { data: devlogs } = useDevLogs();
   const { data: ideas } = useIdeas();
 
-  const activeGoals = goals?.filter(g => g.status === 'Active') ?? [];
+  const activeGoals = goals?.filter(g => g.status === 'Processing' || g.status === 'Collecting' || g.status === 'Planned' || g.status === 'Blocking') ?? [];
   const totalTasks = tasks?.length ?? 0;
   const activeIdeas = ideas?.filter(i => i.status !== 'Done' && i.status !== 'Dropped') ?? [];
 

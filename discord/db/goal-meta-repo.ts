@@ -7,14 +7,24 @@
 
 import type Database from 'better-sqlite3';
 import type { IGoalMetaRepo, Goal, GoalStatus, GoalType } from '../types/repository.js';
+import type { GoalDriveStatus } from '../types/index.js';
 import type { GoalRow } from '../types/db.js';
+
+const VALID_GOAL_STATUSES: GoalStatus[] = ['Pending', 'Collecting', 'Planned', 'Processing', 'Blocking', 'Completed', 'Merged'];
+
+/** 安全解析 GoalStatus，旧数据 fallback 到 Pending */
+function parseGoalStatus(value: string): GoalStatus {
+  return VALID_GOAL_STATUSES.includes(value as GoalStatus)
+    ? value as GoalStatus
+    : 'Pending';
+}
 
 /** GoalRow → Goal */
 function rowToGoal(row: GoalRow): Goal {
   return {
     id: row.id,
     name: row.name,
-    status: row.status as GoalStatus,
+    status: parseGoalStatus(row.status),
     type: (row.type as GoalType) ?? null,
     project: row.project,
     date: row.date,
@@ -24,6 +34,7 @@ function rowToGoal(row: GoalRow): Goal {
     blockedBy: row.blocked_by,
     body: row.body,
     seq: row.seq ?? null,
+    driveStatus: (row.drive_status as GoalDriveStatus) ?? null,
   };
 }
 

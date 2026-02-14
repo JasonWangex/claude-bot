@@ -90,7 +90,7 @@ const migration: Migration = {
       CREATE TABLE IF NOT EXISTS goals (
         id                    TEXT PRIMARY KEY,
         name                  TEXT NOT NULL,
-        status                TEXT NOT NULL DEFAULT 'Active',
+        status                TEXT NOT NULL DEFAULT 'Pending',
         type                  TEXT,
         project               TEXT,
         date                  TEXT,

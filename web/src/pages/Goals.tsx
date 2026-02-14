@@ -8,12 +8,13 @@ const { Title, Text } = Typography;
 
 const statusOptions = [
   { value: 'all', label: '全部' },
-  { value: 'Active', label: 'Active' },
-  { value: 'Paused', label: 'Paused' },
+  { value: 'Pending', label: 'Pending' },
+  { value: 'Collecting', label: 'Collecting' },
+  { value: 'Planned', label: 'Planned' },
   { value: 'Processing', label: 'Processing' },
-  { value: 'Done', label: 'Done' },
-  { value: 'Idea', label: 'Idea' },
-  { value: 'Abandoned', label: 'Abandoned' },
+  { value: 'Blocking', label: 'Blocking' },
+  { value: 'Completed', label: 'Completed' },
+  { value: 'Merged', label: 'Merged' },
 ];
 
 const UNGROUPED = '__ungrouped__';

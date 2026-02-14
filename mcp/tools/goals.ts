@@ -9,9 +9,9 @@ import { apiGet, apiPost, apiPatch } from '../api-client.js';
 export function registerGoalTools(server: McpServer) {
   server.registerTool('bot_list_goals', {
     title: 'List Goals',
-    description: 'List development goals. Supports filtering by status (Active/Paused/Done/Abandoned), project name, and keyword search.',
+    description: 'List development goals. Supports filtering by status (Pending/Collecting/Planned/Processing/Blocking/Completed/Merged), project name, and keyword search.',
     inputSchema: {
-      status: z.string().optional().describe('Filter by status: Active, Paused, Done, Abandoned'),
+      status: z.string().optional().describe('Filter by status: Pending, Collecting, Planned, Processing, Blocking, Completed, Merged'),
       project: z.string().optional().describe('Filter by project name'),
       q: z.string().optional().describe('Search keyword'),
     },
@@ -42,7 +42,7 @@ export function registerGoalTools(server: McpServer) {
     inputSchema: {
       name: z.string().describe('Goal name'),
       project: z.string().describe('Project name'),
-      status: z.string().optional().describe('Status: Active (default), Paused'),
+      status: z.string().optional().describe('Status: Pending (default), Collecting, Planned, Processing, Blocking, Completed, Merged'),
       type: z.string().optional().describe('Type: 探索型 or 交付型'),
       completion: z.string().optional().describe('Completion criteria'),
       body: z.string().optional().describe('Detailed content with sub-task breakdown (Markdown)'),
@@ -60,7 +60,7 @@ export function registerGoalTools(server: McpServer) {
     inputSchema: {
       goal_id: z.string().describe('Goal ID'),
       name: z.string().optional().describe('New name'),
-      status: z.string().optional().describe('New status: Active, Paused, Done, Abandoned'),
+      status: z.string().optional().describe('New status: Pending, Collecting, Planned, Processing, Blocking, Completed, Merged'),
       type: z.string().optional().describe('New type'),
       project: z.string().optional().describe('New project'),
       completion: z.string().optional().describe('New completion criteria'),

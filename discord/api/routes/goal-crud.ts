@@ -14,8 +14,19 @@ import { sendJson, readJsonBody } from '../middleware.js';
 import { getDb, GoalMetaRepo } from '../../db/index.js';
 import type { Goal, GoalStatus, GoalType } from '../../types/repository.js';
 
-const VALID_STATUSES: GoalStatus[] = ['Idea', 'Processing', 'Active', 'Paused', 'Done', 'Abandoned'];
+const VALID_STATUSES: GoalStatus[] = ['Pending', 'Collecting', 'Planned', 'Processing', 'Blocking', 'Completed', 'Merged'];
 const VALID_TYPES: GoalType[] = ['探索型', '交付型'];
+
+/** 合法的状态转换 */
+const VALID_TRANSITIONS: Record<GoalStatus, GoalStatus[]> = {
+  Pending:    ['Collecting'],
+  Collecting: ['Planned', 'Pending'],
+  Planned:    ['Processing', 'Collecting'],
+  Processing: ['Completed', 'Blocking'],
+  Blocking:   ['Processing', 'Completed'],
+  Completed:  ['Merged', 'Processing'],
+  Merged:     [],
+};
 
 function getRepo() {
   return new GoalMetaRepo(getDb());
@@ -36,6 +47,7 @@ function toApiGoal(goal: Goal) {
     next: goal.next,
     blocked_by: goal.blockedBy,
     body: goal.body,
+    drive_status: goal.driveStatus,
   };
 }
 
@@ -130,7 +142,7 @@ export const createGoal: RouteHandler = async (req, res) => {
     const goal: Goal = {
       id,
       name: body.name.trim(),
-      status: body.status || 'Active',
+      status: body.status || 'Pending',
       type: body.type || null,
       project: body.project?.trim() || null,
       date: body.date || new Date().toISOString().slice(0, 10),
@@ -140,6 +152,7 @@ export const createGoal: RouteHandler = async (req, res) => {
       blockedBy: body.blocked_by?.trim() || null,
       body: body.body || null,
       seq: null,  // auto-assigned by DB (MAX(seq) + 1)
+      driveStatus: null,
     };
 
     await repo.save(goal);
@@ -190,6 +203,18 @@ export const updateGoal: RouteHandler = async (req, res, params) => {
       return;
     }
 
+    // 状态转换校验
+    if (updates.status && updates.status !== existing.status) {
+      const allowed = VALID_TRANSITIONS[existing.status];
+      if (!allowed?.includes(updates.status)) {
+        sendJson(res, 400, {
+          ok: false,
+          error: `Invalid status transition: ${existing.status} → ${updates.status}. Allowed: ${allowed?.join(', ') || 'none (terminal state)'}`,
+        });
+        return;
+      }
+    }
+
     // 合并更新
     const updated: Goal = {
       id: existing.id,
@@ -204,6 +229,7 @@ export const updateGoal: RouteHandler = async (req, res, params) => {
       blockedBy: updates.blocked_by !== undefined ? updates.blocked_by?.trim() ?? null : existing.blockedBy,
       body: updates.body !== undefined ? updates.body : existing.body,
       seq: existing.seq,
+      driveStatus: existing.driveStatus,
     };
 
     await repo.save(updated);

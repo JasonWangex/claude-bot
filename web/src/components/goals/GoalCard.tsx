@@ -13,7 +13,7 @@ function parseProgress(progress: string | null): { completed: number; total: num
 }
 
 export function GoalCard({ goal }: { goal: Goal }) {
-  const isDone = goal.status === 'Done';
+  const isDone = goal.status === 'Completed' || goal.status === 'Merged';
   const prog = parseProgress(goal.progress);
   const percentage = isDone ? 100 : (prog && prog.total > 0 ? Math.round((prog.completed / prog.total) * 100) : 0);
 

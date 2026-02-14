@@ -1,5 +1,5 @@
 // Goal 元数据
-export type GoalStatus = 'Idea' | 'Processing' | 'Active' | 'Paused' | 'Done' | 'Abandoned';
+export type GoalStatus = 'Pending' | 'Collecting' | 'Planned' | 'Processing' | 'Blocking' | 'Completed' | 'Merged';
 export type GoalType = '探索型' | '交付型';
 
 export interface Goal {
@@ -14,6 +14,7 @@ export interface Goal {
   next: string | null;
   blocked_by: string | null;
   body: string | null;
+  drive_status: GoalDriveStatus | null;
 }
 
 // Goal Drive

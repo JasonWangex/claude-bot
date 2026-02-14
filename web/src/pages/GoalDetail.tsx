@@ -105,7 +105,7 @@ export default function GoalDetail() {
         {goal.project && <Tag>{goal.project}</Tag>}
         {goal.progress && (() => {
           const m = goal.progress!.match(/(\d+)\s*\/\s*(\d+)/);
-          const text = goal.status === 'Done' && m ? `${m[2]}/${m[2]} 子任务完成` : goal.progress;
+          const text = (goal.status === 'Completed' || goal.status === 'Merged') && m ? `${m[2]}/${m[2]} 子任务完成` : goal.progress;
           return <Text type="secondary">{text}</Text>;
         })()}
       </Space>

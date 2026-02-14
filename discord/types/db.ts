@@ -16,7 +16,7 @@
 // ================================================================
 
 /** Goal 状态 */
-export type GoalStatus = 'Idea' | 'Processing' | 'Active' | 'Paused' | 'Done' | 'Abandoned';
+export type GoalStatus = 'Pending' | 'Collecting' | 'Planned' | 'Processing' | 'Blocking' | 'Completed' | 'Merged';
 
 /** Goal 类型 */
 export type GoalType = '探索型' | '交付型';

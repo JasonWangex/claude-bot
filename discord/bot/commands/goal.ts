@@ -74,10 +74,11 @@ async function handleGoal(
     try {
       const db = getDb();
       const goalMetaRepo = new GoalMetaRepo(db);
-      const activeGoals = await goalMetaRepo.findByStatus('Active');
+      const collectingGoals = await goalMetaRepo.findByStatus('Collecting');
+      const plannedGoals = await goalMetaRepo.findByStatus('Planned');
       const processingGoals = await goalMetaRepo.findByStatus('Processing');
-      const pausedGoals = await goalMetaRepo.findByStatus('Paused');
-      const allGoals = [...activeGoals, ...processingGoals, ...pausedGoals];
+      const blockingGoals = await goalMetaRepo.findByStatus('Blocking');
+      const allGoals = [...collectingGoals, ...plannedGoals, ...processingGoals, ...blockingGoals];
 
       if (allGoals.length === 0) {
         await messageQueue.send(threadId, 'No active goals found.', {
@@ -88,9 +89,10 @@ async function handleGoal(
       }
 
       const statusEmoji: Record<string, string> = {
-        Active: '\u{1F7E2}',
-        Processing: '\u{1F535}',
-        Paused: '\u23F8\uFE0F',
+        Collecting: '\u{1F4AC}',
+        Planned: '\u{1F4CB}',
+        Processing: '\u{1F7E2}',
+        Blocking: '\u{1F6A7}',
       };
 
       const lines = allGoals.map((goal, i) => {
