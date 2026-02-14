@@ -34,11 +34,6 @@ export interface Session {
   lastMessageAt?: number;
   planMode?: boolean;        // 是否处于 plan mode 等待确认
   model?: string;            // 用户选择的 Claude 模型
-  messageHistory: Array<{    // 最近 50 条消息记录
-    role: 'user' | 'assistant';
-    text: string;
-    timestamp: number;
-  }>;
   messageCount: number;       // 消息历史条数（从 DB message_count 字段）
   parentThreadId?: string;    // 父 Channel ID（fork 产生的子 channel）
   worktreeBranch?: string;    // worktree 分支名（fork 创建的）

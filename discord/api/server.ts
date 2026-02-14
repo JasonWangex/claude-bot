@@ -27,6 +27,7 @@ import { listIdeas, createIdea, getIdea, updateIdea, deleteIdea } from './routes
 import { listKnowledgeBase, createKnowledgeBase, getKnowledgeBaseEntry, updateKnowledgeBase, deleteKnowledgeBase } from './routes/knowledge-base.js';
 import { syncSessions } from './routes/sync.js';
 import { getCommands } from './routes/commands.js';
+import { getSessionConversation } from './routes/sessions.js';
 
 function defineRoutes(): Route[] {
   const r = (method: string, path: string, handler: Route['handler']): Route => {
@@ -110,6 +111,9 @@ function defineRoutes(): Route[] {
 
     // Sync
     r('POST', '/api/sync/sessions', syncSessions),
+
+    // Sessions
+    r('GET', '/api/sessions/:id/conversation', getSessionConversation),
   ];
 }
 

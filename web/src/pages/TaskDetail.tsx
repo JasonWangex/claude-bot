@@ -3,7 +3,6 @@ import { Typography, Breadcrumb, Card, Descriptions, Spin, Space, Alert, Tabs } 
 import { BranchesOutlined, FolderOutlined, ClockCircleOutlined, RobotOutlined } from '@ant-design/icons';
 import { Link } from 'react-router';
 import { TaskTree } from '@/components/tasks/TaskTree';
-import { MessageHistory } from '@/components/tasks/MessageHistory';
 import { InteractionLog } from '@/components/tasks/InteractionLog';
 import { useTask } from '@/lib/hooks/use-tasks';
 import { formatDistanceToNow } from '@/lib/format';
@@ -65,11 +64,6 @@ export default function TaskDetail() {
             key: 'interactions',
             label: '交互日志',
             children: <InteractionLog threadId={threadId} />,
-          },
-          {
-            key: 'messages',
-            label: `消息历史 (${task.message_history.length})`,
-            children: <MessageHistory messages={task.message_history} />,
           },
           ...(task.children?.length ? [{
             key: 'children',

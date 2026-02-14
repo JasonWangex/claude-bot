@@ -26,7 +26,6 @@ function rowToSession(row: SessionRow): Session {
     lastMessageAt: row.last_message_at ?? undefined,
     planMode: row.plan_mode === 1 ? true : false,
     model: row.model ?? undefined,
-    messageHistory: [],
     messageCount: row.message_count,
     parentThreadId: row.parent_thread_id ?? undefined,
     worktreeBranch: row.worktree_branch ?? undefined,
@@ -34,14 +33,8 @@ function rowToSession(row: SessionRow): Session {
 }
 
 function rowToArchivedSession(row: ArchivedSessionRow): ArchivedSession {
-  // 从 JSON 恢复归档的 message history
-  let history: { role: 'user' | 'assistant'; text: string; timestamp: number }[] = [];
-  if (row.message_history_json) {
-    try { history = JSON.parse(row.message_history_json); } catch { /* ignore parse errors */ }
-  }
   return {
     ...rowToSession(row),
-    messageHistory: history,
     archivedAt: row.archived_at,
     archivedBy: row.archived_by ?? undefined,
     archiveReason: row.archive_reason ?? undefined,
@@ -64,7 +57,7 @@ function sessionToParams(session: Session): Record<string, unknown> {
     model: session.model ?? null,
     parent_thread_id: session.parentThreadId ?? null,
     worktree_branch: session.worktreeBranch ?? null,
-    message_count: session.messageCount ?? session.messageHistory.length,
+    message_count: session.messageCount,
   };
 }
 
