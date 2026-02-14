@@ -13,6 +13,7 @@ import Ideas from '@/pages/Ideas';
 import KnowledgeBase from '@/pages/KnowledgeBase';
 import KBDetail from '@/pages/KBDetail';
 import Commands from '@/pages/Commands';
+import Prompts from '@/pages/Prompts';
 import Login from '@/pages/Login';
 
 function RequireAuth() {
@@ -37,6 +38,7 @@ export default function App() {
             <Route path="kb" element={<KnowledgeBase />} />
             <Route path="kb/:kbId" element={<KBDetail />} />
             <Route path="commands" element={<Commands />} />
+            <Route path="prompts" element={<Prompts />} />
           </Route>
         </Route>
       </Routes>
