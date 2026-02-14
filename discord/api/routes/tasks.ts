@@ -221,7 +221,7 @@ export const updateTask: RouteHandler = async (req, res, params, deps) => {
     }
     // 尝试更新 Discord Channel 名
     try {
-      const channel = await deps.client.channels.fetch(threadId);
+      const channel = await deps.client.channels.fetch(channelId);
       if (channel && 'setName' in channel) {
         await (channel as any).setName(newName.slice(0, 100));
       }
@@ -303,7 +303,7 @@ export const deleteTask: RouteHandler = async (req, res, params, deps) => {
 
     deps.stateManager.deleteSession(guildId, channelId);
     // Delete the channel
-    const channel = await deps.client.channels.fetch(threadId).catch(() => null);
+    const channel = await deps.client.channels.fetch(channelId).catch(() => null);
     if (channel && 'delete' in channel) {
       await (channel as any).delete('Task deleted').catch(() => {});
     }
@@ -311,7 +311,7 @@ export const deleteTask: RouteHandler = async (req, res, params, deps) => {
     sendJson(res, 200, {
       ok: true,
       data: {
-        deleted: [threadId, ...(cascade ? children.map(c => c.channelId) : [])],
+        deleted: [channelId, ...(cascade ? children.map(c => c.channelId) : [])],
       },
     });
   } catch (error: any) {
@@ -333,7 +333,7 @@ export const archiveTask: RouteHandler = async (_req, res, params, deps) => {
 
   try {
     deps.stateManager.archiveSession(guildId, channelId, undefined, 'API archive');
-    const channel = await deps.client.channels.fetch(threadId).catch(() => null);
+    const channel = await deps.client.channels.fetch(channelId).catch(() => null);
     if (channel && 'delete' in channel) {
       await (channel as any).delete('Task archived').catch(() => {});
     }
@@ -376,7 +376,7 @@ export const forkTask: RouteHandler = async (req, res, params, deps) => {
   if (!categoryId) {
     // 尝试从当前 channel 的 parentId 获取 Category
     try {
-      const channel = await deps.client.channels.fetch(threadId);
+      const channel = await deps.client.channels.fetch(channelId);
       if (channel && 'parentId' in channel && channel.parentId) {
         const parent = await deps.client.channels.fetch(channel.parentId);
         if (parent && parent.type === ChannelType.GuildCategory) {
@@ -402,10 +402,10 @@ export const forkTask: RouteHandler = async (req, res, params, deps) => {
       ok: true,
       data: {
         channel_id: result.channelId,
-        name: result.threadName,
+        name: result.channelName,
         branch: result.branchName,
         cwd: result.cwd,
-        parent_channel_id: threadId,
+        parent_channel_id: channelId,
       },
     });
   } catch (error: any) {
@@ -433,7 +433,7 @@ export const getTaskInteractions: RouteHandler = async (_req, res, params, deps)
       sendJson(res, 200, {
         ok: true,
         data: {
-          task_id: threadId,
+          task_id: channelId,
           session_id: null,
           interactions: [],
         },
@@ -446,7 +446,7 @@ export const getTaskInteractions: RouteHandler = async (_req, res, params, deps)
     sendJson(res, 200, {
       ok: true,
       data: {
-        task_id: threadId,
+        task_id: channelId,
         session_id: session.claudeSessionId,
         interactions,
       },

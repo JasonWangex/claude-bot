@@ -51,7 +51,7 @@ export class ClaudeClient {
       permissionMode?: string;
       model?: string;
       guildId?: string;
-      threadId?: string;
+      channelId?: string;
       images?: import('../types/index.js').ImageAttachment[];
       sessionName?: string;
       worktreeBranch?: string;
@@ -108,7 +108,7 @@ export class ClaudeClient {
       permissionMode?: string;
       model?: string;
       guildId?: string;
-      threadId?: string;
+      channelId?: string;
       images?: import('../types/index.js').ImageAttachment[];
       sessionName?: string;
       worktreeBranch?: string;
@@ -135,7 +135,7 @@ export class ClaudeClient {
       permissionMode: options.permissionMode,
       model: options.model,
       guildId: options.guildId,
-      threadId: options.channelId,
+      channelId: options.channelId,
       images: options.images,
       appendSystemPrompt,
     };

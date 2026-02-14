@@ -52,7 +52,7 @@ function sessionToParams(session: Session): Record<string, unknown> {
   return {
     id: session.id,
     name: session.name,
-    channel_id: session.channelId,
+    thread_id: session.channelId,
     guild_id: session.guildId,
     claude_session_id: session.claudeSessionId ?? null,
     prev_claude_session_id: session.prevClaudeSessionId ?? null,
@@ -62,7 +62,7 @@ function sessionToParams(session: Session): Record<string, unknown> {
     last_message_at: session.lastMessageAt ?? null,
     plan_mode: session.planMode ? 1 : 0,
     model: session.model ?? null,
-    parent_channel_id: session.parentChannelId ?? null,
+    parent_thread_id: session.parentChannelId ?? null,
     worktree_branch: session.worktreeBranch ?? null,
     message_count: session.messageCount ?? session.messageHistory.length,
   };
@@ -257,7 +257,7 @@ export class SessionRepository implements ISessionRepo {
       this.stmts.upsert.run({
         id: row.id,
         name: row.name,
-        channel_id: row.thread_id,
+        thread_id: row.thread_id,
         guild_id: row.guild_id,
         claude_session_id: row.claude_session_id,
         prev_claude_session_id: row.prev_claude_session_id,
@@ -267,7 +267,7 @@ export class SessionRepository implements ISessionRepo {
         last_message_at: row.last_message_at,
         plan_mode: row.plan_mode,
         model: row.model,
-        parent_channel_id: row.parent_thread_id,
+        parent_thread_id: row.parent_thread_id,
         worktree_branch: row.worktree_branch,
         message_count: row.message_count,
       });

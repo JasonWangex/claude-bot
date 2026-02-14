@@ -81,7 +81,7 @@ async function handleGoal(
       const allGoals = [...collectingGoals, ...plannedGoals, ...processingGoals, ...blockingGoals];
 
       if (allGoals.length === 0) {
-        await messageQueue.send(threadId, 'No active goals found.', {
+        await messageQueue.send(channelId, 'No active goals found.', {
           embedColor: EmbedColors.GRAY,
           priority: 'high',
         });
@@ -119,7 +119,7 @@ async function handleGoal(
       }
 
       await messageQueue.send(
-        threadId,
+        channelId,
         `**Goals** (${allGoals.length} active)\n\n${description}`,
         {
           components: rows as any,
@@ -129,7 +129,7 @@ async function handleGoal(
       );
     } catch (err: any) {
       logger.error('goal list mode failed:', err.message);
-      await messageQueue.sendLong(threadId, `goal query failed: ${err.message}`).catch(() => {});
+      await messageQueue.sendLong(channelId, `goal query failed: ${err.message}`).catch(() => {});
     }
     return;
   }
@@ -154,7 +154,7 @@ async function handleGoal(
     await interaction.reply(`Goal: ${text}...`);
     messageHandler.handleBackgroundChat(guildId, channelId, prompt).catch((err) => {
       logger.error('goal failed:', err.message);
-      messageQueue.sendLong(threadId, `goal failed: ${err.message}`).catch(() => {});
+      messageQueue.sendLong(channelId, `goal failed: ${err.message}`).catch(() => {});
     });
     return;
   }
@@ -175,7 +175,7 @@ async function handleGoal(
     // 2. 获取 root session
     await interaction.editReply(`Branch: \`${branchName}\`\nCreating worktree and thread...`);
     const rootSession = stateManager.getRootSession(guildId, channelId);
-    const parentChannelId = rootSession?.channelId ?? threadId;
+    const parentChannelId = rootSession?.channelId ?? channelId;
 
     // 3. 从当前 channel 的 parentId 获取 Category
     const channel = interaction.channel;

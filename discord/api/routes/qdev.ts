@@ -42,7 +42,7 @@ export const qdev: RouteHandler = async (req, res, params, deps) => {
   let categoryId = body.category_id;
   if (!categoryId) {
     try {
-      const channel = await deps.client.channels.fetch(threadId);
+      const channel = await deps.client.channels.fetch(channelId);
       if (channel && 'parentId' in channel && channel.parentId) {
         const parent = await deps.client.channels.fetch(channel.parentId);
         if (parent && parent.type === ChannelType.GuildCategory) {
@@ -65,7 +65,7 @@ export const qdev: RouteHandler = async (req, res, params, deps) => {
 
     // 2. 找到 root session
     const rootSession = deps.stateManager.getRootSession(guildId, channelId);
-    const parentChannelId = rootSession?.channelId ?? threadId;
+    const parentChannelId = rootSession?.channelId ?? channelId;
 
     // 3. Fork
     const forkResult = await forkTaskCore(guildId, parentChannelId, branchName, categoryId, {
@@ -89,7 +89,7 @@ export const qdev: RouteHandler = async (req, res, params, deps) => {
       ok: true,
       data: {
         channel_id: forkResult.channelId,
-        name: forkResult.threadName,
+        name: forkResult.channelName,
         branch: forkResult.branchName,
         cwd: forkResult.cwd,
         parent_channel_id: parentChannelId,

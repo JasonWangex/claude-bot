@@ -332,7 +332,7 @@ async function handleCd(
   const guildId = interaction.guildId!;
   const channelId = interaction.channelId;
   const { stateManager } = deps;
-  const channelName = (interaction.channel && 'name' in interaction.channel ? interaction.channel.name : null) ?? `channel-${threadId}`;
+  const channelName = (interaction.channel && 'name' in interaction.channel ? interaction.channel.name : null) ?? `channel-${channelId}`;
 
   const session = stateManager.getOrCreateSession(guildId, channelId, {
     name: channelName,

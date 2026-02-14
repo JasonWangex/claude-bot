@@ -200,8 +200,8 @@ export class DiscordBot {
     });
 
     this.client.on(Events.ChannelUpdate, async (oldChannel, newChannel) => {
-      if (!newChannel.guild || !checkAuth(newChannel.guild.id)) return;
       if (newChannel.type !== ChannelType.GuildText) return;
+      if (!('guild' in newChannel) || !newChannel.guild || !checkAuth(newChannel.guild.id)) return;
       if (!this.channelService) return;
       try {
         await this.channelService.syncFromDiscord(newChannel);
@@ -212,7 +212,7 @@ export class DiscordBot {
     });
 
     this.client.on(Events.ChannelDelete, async (channel) => {
-      if (!channel.guild || !checkAuth(channel.guild.id)) return;
+      if (!('guild' in channel) || !channel.guild || !checkAuth(channel.guild.id)) return;
       if (!this.channelService) return;
       try {
         await this.channelService.archiveChannel(channel.id, undefined, 'Discord channel deleted');
@@ -545,7 +545,7 @@ export class DiscordBot {
 
       this.messageHandler.handleBackgroundChat(guildId, channelId, prompt).catch((err) => {
         logger.error('goal drive_prompt failed:', err.message);
-        this.messageQueue.sendLong(threadId, `goal drive_prompt failed: ${err.message}`).catch(() => {});
+        this.messageQueue.sendLong(channelId, `goal drive_prompt failed: ${err.message}`).catch(() => {});
       });
     } catch (err: any) {
       logger.error(`[DiscordBot] handleGoalDrivePrompt error: ${err.message}`);
@@ -622,7 +622,7 @@ export class DiscordBot {
 
           this.messageHandler.handleBackgroundChat(guildId, channelId, prompt).catch((err) => {
             logger.error('idea qdev failed:', err.message);
-            this.messageQueue.sendLong(threadId, `idea qdev failed: ${err.message}`).catch(() => {});
+            this.messageQueue.sendLong(channelId, `idea qdev failed: ${err.message}`).catch(() => {});
           });
           break;
         }
@@ -662,7 +662,7 @@ export class DiscordBot {
 
           this.messageHandler.handleBackgroundChat(guildId, channelId, goalPrompt).catch((err) => {
             logger.error('idea to goal failed:', err.message);
-            this.messageQueue.sendLong(threadId, `idea to goal failed: ${err.message}`).catch(() => {});
+            this.messageQueue.sendLong(channelId, `idea to goal failed: ${err.message}`).catch(() => {});
           });
           break;
         }
@@ -783,7 +783,7 @@ export class DiscordBot {
     logger.info('Discord Bot started');
 
     // 全量同步 Discord Channels 到数据库
-    if (this.channelService) {
+    if (this.channelService && guildId) {
       try {
         const guild = await this.client.guilds.fetch(guildId);
         await guild.channels.fetch(); // 填充缓存
@@ -844,7 +844,7 @@ export class DiscordBot {
 
   sendErrorToGeneral(
     guildId: string | undefined,
-    threadId: string | undefined,
+    channelId: string | undefined,
     source: string,
     error: any,
   ): void {
@@ -852,10 +852,10 @@ export class DiscordBot {
     const generalChannelId = getGeneralChannelId();
     if (!targetGuildId || !generalChannelId) return;
 
-    const threadInfo = threadId ? `Thread <#${threadId}>` : 'General';
+    const channelInfo = channelId ? `Channel <#${channelId}>` : 'General';
     const errMsg = (error?.message || String(error)).slice(0, 500);
     const text = `**Error** [${escapeMarkdown(source)}]\n` +
-      `Source: ${threadInfo}\n` +
+      `Source: ${channelInfo}\n` +
       `\`\`\`\n${errMsg}\n\`\`\``;
 
     this.messageQueue.send(generalChannelId, text, { embedColor: EmbedColors.RED }).catch((e: any) => {

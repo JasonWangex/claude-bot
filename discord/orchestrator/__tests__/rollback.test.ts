@@ -18,6 +18,7 @@ function makeTask(overrides: Partial<GoalTask> = {}): GoalTask {
 function makeState(overrides: Partial<GoalDriveState> = {}): GoalDriveState {
   return {
     goalId: 'goal-1',
+    goalSeq: 1,
     goalName: 'Test Goal',
     goalBranch: 'goal/test',
     goalChannelId: 'thread-1',

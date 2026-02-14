@@ -332,20 +332,21 @@ export class GoalOrchestrator {
     task: GoalTask, state: GoalDriveState,
   ): void {
     (async () => {
+      const usage = this.emptyUsage();
       try {
         // 先跑一次 audit，拿到最新 issues
-        const auditResult = await this.runAudit(goalId, taskId, guildId, threadId, task, state);
+        const auditResult = await this.runAudit(goalId, taskId, guildId, channelId, task, state, usage);
         if (auditResult.verdict === 'pass') {
-          await this.onTaskCompleted(goalId, taskId);
+          await this.onTaskCompleted(goalId, taskId, usage);
           return;
         }
         // 进入标准 fix 循环
-        await this.auditFixLoop(goalId, taskId, guildId, threadId, task, state, auditResult.issues, auditResult.verifyCommands);
+        await this.auditFixLoop(goalId, taskId, guildId, channelId, task, state, auditResult.issues, auditResult.verifyCommands, usage);
       } catch (err: any) {
         const stillRunning = await this.isTaskStillRunning(goalId, taskId);
         if (!stillRunning) return;
         try {
-          await this.onTaskFailed(goalId, taskId, err.message);
+          await this.onTaskFailed(goalId, taskId, err.message, usage);
         } catch (cbErr: any) {
           logger.error(`[Orchestrator] startRefixPipeline onTaskFailed also failed:`, cbErr.message);
         }
@@ -402,7 +403,7 @@ export class GoalOrchestrator {
               `[Pipeline] ${taskId}: 调查结论 — 问题已修复，进入审计验证`,
               'info',
             );
-            this.startRefixPipeline(goalId, taskId, guildId, threadId, task, state);
+            this.startRefixPipeline(goalId, taskId, guildId, channelId, task, state);
             break;
 
           case 'retry':
@@ -1047,13 +1048,13 @@ export class GoalOrchestrator {
     goalId: string,
     taskId: string,
     guildId: string,
-    threadId: string,
+    channelId: string,
     message: string
   ): void {
     (async () => {
       const usage = this.emptyUsage();
       try {
-        logger.info(`[Orchestrator] Task ${taskId} executing in channel ${threadId}`);
+        logger.info(`[Orchestrator] Task ${taskId} executing in channel ${channelId}`);
         const u = await this.deps.messageHandler.handleBackgroundChat(guildId, channelId, message);
         this.accumulateUsage(usage, u);
         logger.info(`[Orchestrator] Task ${taskId} completed`);
@@ -1127,7 +1128,7 @@ export class GoalOrchestrator {
     goalId: string,
     taskId: string,
     guildId: string,
-    threadId: string,
+    channelId: string,
     task: GoalTask,
     state: GoalDriveState,
   ): void {
@@ -1135,12 +1136,12 @@ export class GoalOrchestrator {
     (async () => {
       try {
         if (task.type === '调研') {
-          await this.pipelineResearch(goalId, taskId, guildId, threadId, task, state, usage);
+          await this.pipelineResearch(goalId, taskId, guildId, channelId, task, state, usage);
         } else if (task.type === '代码' && task.complexity === 'complex') {
-          await this.pipelineComplexCode(goalId, taskId, guildId, threadId, task, state, usage);
+          await this.pipelineComplexCode(goalId, taskId, guildId, channelId, task, state, usage);
         } else {
           // 默认路径：代码(simple/无标注) 和其他类型
-          await this.pipelineSimpleCode(goalId, taskId, guildId, threadId, task, state, usage);
+          await this.pipelineSimpleCode(goalId, taskId, guildId, channelId, task, state, usage);
         }
       } catch (err: any) {
         logger.error(`[Orchestrator] Pipeline ${taskId} failed:`, err.message);
@@ -1167,7 +1168,7 @@ export class GoalOrchestrator {
     goalId: string,
     taskId: string,
     guildId: string,
-    threadId: string,
+    channelId: string,
     task: GoalTask,
     state: GoalDriveState,
     usage: ChatUsageResult,
@@ -1200,7 +1201,7 @@ export class GoalOrchestrator {
     goalId: string,
     taskId: string,
     guildId: string,
-    threadId: string,
+    channelId: string,
     task: GoalTask,
     state: GoalDriveState,
     usage: ChatUsageResult,
@@ -1236,7 +1237,7 @@ export class GoalOrchestrator {
     }
 
     // Phase 2: Opus audit
-    const auditResult = await this.runAudit(goalId, taskId, guildId, threadId, task, state, usage);
+    const auditResult = await this.runAudit(goalId, taskId, guildId, channelId, task, state, usage);
 
     if (auditResult.verdict === 'pass') {
       await this.onTaskCompleted(goalId, taskId, usage);
@@ -1244,7 +1245,7 @@ export class GoalOrchestrator {
     }
 
     // Audit 失败 → Sonnet 修复（最多 2 次）
-    await this.auditFixLoop(goalId, taskId, guildId, threadId, task, state, auditResult.issues, auditResult.verifyCommands, usage);
+    await this.auditFixLoop(goalId, taskId, guildId, channelId, task, state, auditResult.issues, auditResult.verifyCommands, usage);
   }
 
   /**
@@ -1254,7 +1255,7 @@ export class GoalOrchestrator {
     goalId: string,
     taskId: string,
     guildId: string,
-    threadId: string,
+    channelId: string,
     task: GoalTask,
     state: GoalDriveState,
     usage: ChatUsageResult,
@@ -1321,7 +1322,7 @@ export class GoalOrchestrator {
     }
 
     // Phase 3: Opus audit
-    const auditResult = await this.runAudit(goalId, taskId, guildId, threadId, task, state, usage);
+    const auditResult = await this.runAudit(goalId, taskId, guildId, channelId, task, state, usage);
 
     if (auditResult.verdict === 'pass') {
       await this.onTaskCompleted(goalId, taskId, usage);
@@ -1329,7 +1330,7 @@ export class GoalOrchestrator {
     }
 
     // Audit 失败 → Sonnet 修复
-    await this.auditFixLoop(goalId, taskId, guildId, threadId, task, state, auditResult.issues, auditResult.verifyCommands, usage);
+    await this.auditFixLoop(goalId, taskId, guildId, channelId, task, state, auditResult.issues, auditResult.verifyCommands, usage);
   }
 
   /**
@@ -1339,7 +1340,7 @@ export class GoalOrchestrator {
     goalId: string,
     taskId: string,
     guildId: string,
-    threadId: string,
+    channelId: string,
     task: GoalTask,
     state: GoalDriveState,
     issues: string[],
@@ -1372,7 +1373,7 @@ export class GoalOrchestrator {
       this.accumulateUsage(usage, fixUsage);
 
       // Re-audit
-      const reAudit = await this.runAudit(goalId, taskId, guildId, threadId, task, state, usage);
+      const reAudit = await this.runAudit(goalId, taskId, guildId, channelId, task, state, usage);
       if (reAudit.verdict === 'pass') {
         await this.onTaskCompleted(goalId, taskId, usage);
         return;
@@ -1393,7 +1394,7 @@ export class GoalOrchestrator {
     goalId: string,
     taskId: string,
     guildId: string,
-    threadId: string,
+    channelId: string,
     task: GoalTask,
     state: GoalDriveState,
     usage: ChatUsageResult,

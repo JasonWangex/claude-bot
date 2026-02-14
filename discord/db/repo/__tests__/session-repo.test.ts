@@ -165,13 +165,13 @@ describe('SessionRepository', () => {
     });
   });
 
-  describe('findByParentThreadId', () => {
+  describe('findByParentChannelId', () => {
     it('should find child sessions', async () => {
       await repo.save(makeSession({ id: 's1', channelId: 't1', parentChannelId: 'parent-1' }));
       await repo.save(makeSession({ id: 's2', channelId: 't2', parentChannelId: 'parent-1' }));
       await repo.save(makeSession({ id: 's3', channelId: 't3', parentChannelId: 'parent-2' }));
 
-      const results = await repo.findByParentThreadId('guild-1', 'parent-1');
+      const results = await repo.findByParentChannelId('guild-1', 'parent-1');
       expect(results).toHaveLength(2);
     });
   });

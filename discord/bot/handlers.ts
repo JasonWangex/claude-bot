@@ -49,7 +49,7 @@ export class MessageHandler {
   private claudeClient: ClaudeClient;
   private interactionRegistry: InteractionRegistry;
   private mq: MessageQueue;
-  private errorReporter?: (guildId: string | undefined, threadId: string | undefined, source: string, error: any) => void;
+  private errorReporter?: (guildId: string | undefined, channelId: string | undefined, source: string, error: any) => void;
 
   constructor(
     stateManager: StateManager,
@@ -63,7 +63,7 @@ export class MessageHandler {
     this.mq = mq;
   }
 
-  setErrorReporter(reporter: (guildId: string | undefined, threadId: string | undefined, source: string, error: any) => void): void {
+  setErrorReporter(reporter: (guildId: string | undefined, channelId: string | undefined, source: string, error: any) => void): void {
     this.errorReporter = reporter;
   }
 
@@ -88,7 +88,7 @@ export class MessageHandler {
       return; // slash command, ignore
     }
 
-    const threadName = message.channel && 'name' in message.channel ? (message.channel as any).name : `thread-${threadId}`;
+    const threadName = message.channel && 'name' in message.channel ? (message.channel as any).name : `thread-${channelId}`;
 
     const session = this.stateManager.getOrCreateSession(guildId, channelId, {
       name: threadName,
@@ -101,10 +101,11 @@ export class MessageHandler {
         await this.executePlanApproval(guildId, channelId, session);
         return;
       }
-      return this.sendChatInternal(guildId, session, text, 'plan');
+      await this.sendChatInternal(guildId, session, text, 'plan');
+      return;
     }
 
-    return this.sendChatInternal(guildId, session, text);
+    await this.sendChatInternal(guildId, session, text);
   }
 
   /**
@@ -118,26 +119,26 @@ export class MessageHandler {
     const attachments = message.attachments.filter(a => a.contentType?.startsWith('image/'));
     if (attachments.size === 0) return;
 
-    const threadName = message.channel && 'name' in message.channel ? (message.channel as any).name : `thread-${threadId}`;
+    const threadName = message.channel && 'name' in message.channel ? (message.channel as any).name : `thread-${channelId}`;
     const session = this.stateManager.getOrCreateSession(guildId, channelId, {
       name: threadName,
       cwd: this.stateManager.getGuildDefaultCwd(guildId),
     });
 
-    const processingMsgId = await this.mq.send(threadId, 'Processing image...', { silent: true });
+    const processingMsgId = await this.mq.send(channelId, 'Processing image...', { silent: true });
 
     try {
       const firstAttachment = attachments.first()!;
       const image = await downloadAndProcessImage(firstAttachment.url);
       logger.info(`[${session.name}] Photo processed: ${image.mediaType}, ${Math.round(image.data.length * 3 / 4 / 1024)}KB`);
 
-      this.mq.delete(threadId, processingMsgId);
+      this.mq.delete(channelId, processingMsgId);
 
       const caption = message.content?.trim() || 'Please look at this image';
-      return this.sendChatInternal(guildId, session, caption, undefined, [image]);
+      await this.sendChatInternal(guildId, session, caption, undefined, [image]);
     } catch (error: any) {
       logger.error(`[${session.name}] Photo processing error:`, error.message);
-      this.mq.edit(threadId, processingMsgId, `Image processing failed: ${error.message}`);
+      this.mq.edit(channelId, processingMsgId, `Image processing failed: ${error.message}`);
     }
   }
 
@@ -146,26 +147,26 @@ export class MessageHandler {
    */
   async sendChatByIds(
     guildId: string,
-    threadId: string,
+    channelId: string,
     text: string,
   ): Promise<void> {
     const session = this.stateManager.getOrCreateSession(guildId, channelId, {
-      name: `thread-${threadId}`,
+      name: `thread-${channelId}`,
       cwd: this.stateManager.getGuildDefaultCwd(guildId),
     });
-    return this.sendChatInternal(guildId, session, text);
+    await this.sendChatInternal(guildId, session, text);
   }
 
   /**
    * Compact session context, show progress in thread
    */
-  private async compactSession(threadId: string, sessionId: string, cwd: string, lockKey: string): Promise<void> {
-    const compactMsgId = await this.mq.send(threadId, 'Compacting context...', { silent: true });
+  private async compactSession(channelId: string, sessionId: string, cwd: string, lockKey: string): Promise<void> {
+    const compactMsgId = await this.mq.send(channelId, 'Compacting context...', { silent: true });
     try {
       await this.claudeClient.compact(sessionId, cwd, lockKey);
-      this.mq.edit(threadId, compactMsgId, 'Context compacted. Executing plan...');
+      this.mq.edit(channelId, compactMsgId, 'Context compacted. Executing plan...');
     } catch (error: any) {
-      this.mq.edit(threadId, compactMsgId, `Compact failed (${error.message}), executing directly...`);
+      this.mq.edit(channelId, compactMsgId, `Compact failed (${error.message}), executing directly...`);
     }
   }
 
@@ -176,14 +177,14 @@ export class MessageHandler {
     this.stateManager.setSessionPlanMode(guildId, channelId, false);
 
     if (!session.claudeSessionId) {
-      await this.mq.send(threadId, 'No active context. Please send `/plan` again.', { silent: true });
+      await this.mq.send(channelId, 'No active context. Please send `/plan` again.', { silent: true });
       return;
     }
 
     const lockKey = StateManager.channelLockKey(guildId, channelId);
-    await this.compactSession(threadId, session.claudeSessionId, session.cwd, lockKey);
+    await this.compactSession(channelId, session.claudeSessionId, session.cwd, lockKey);
 
-    return this.sendChatInternal(guildId, session, '请按照上面的方案执行实现');
+    await this.sendChatInternal(guildId, session, '请按照上面的方案执行实现');
   }
 
   /**
@@ -206,7 +207,7 @@ export class MessageHandler {
 
     for (let round = 0; round < MAX_INTERACTIVE_ROUNDS; round++) {
 
-    this.mq.resetThreadState(threadId);
+    this.mq.resetThreadState(channelId);
     logger.info(`[${session.name}] Message:`, text.substring(0, 100));
     this.stateManager.updateSessionMessage(guildId, channelId, text, 'user');
 
@@ -220,7 +221,7 @@ export class MessageHandler {
       .setStyle(ButtonStyle.Danger);
     const stopRow = new ActionRowBuilder<ButtonBuilder>().addComponents(stopButton);
 
-    let progressMsgId = await this.mq.send(threadId, `Thinking${modeLabel}...`, { components: [stopRow as any], priority: 'high', silent: true, embedColor: EmbedColors.GRAY });
+    let progressMsgId = await this.mq.send(channelId, `Thinking${modeLabel}...`, { components: [stopRow as any], priority: 'high', silent: true, embedColor: EmbedColors.GRAY });
 
     let lastProgressText = `Thinking${modeLabel}...`;
     let toolUseCount = 0;
@@ -252,8 +253,8 @@ export class MessageHandler {
       if (recreatingProgress) return;
       recreatingProgress = true;
       try {
-        mq.delete(threadId, progressMsgId);
-        progressMsgId = await mq.send(threadId, lastProgressText, { components: [stopRow as any], silent: true, embedColor: EmbedColors.GRAY });
+        mq.delete(channelId, progressMsgId);
+        progressMsgId = await mq.send(channelId, lastProgressText, { components: [stopRow as any], silent: true, embedColor: EmbedColors.GRAY });
         allProgressMsgIds.add(progressMsgId);
       } finally {
         recreatingProgress = false;
@@ -273,7 +274,7 @@ export class MessageHandler {
             ? textFlushedContent + '\n\n' + newContent
             : newContent;
           if (combined.length <= 2000) {
-            mq.edit(threadId, textPlaceholderMsgId, combined);
+            mq.edit(channelId, textPlaceholderMsgId, combined);
             textFlushedContent = combined;
             lastTextFlushTime = Date.now();
             logger.debug(`[${session.name}] flushText: edited placeholder (${combined.length} chars)`);
@@ -284,11 +285,11 @@ export class MessageHandler {
 
         // 新发一条消息（sendLong 自动选格式：<2000 普通 / 2000-4096 embed / >4096 response.md）
         if (newContent.length <= 2000) {
-          textPlaceholderMsgId = await mq.send(threadId, newContent, { priority: 'high', silent: true });
+          textPlaceholderMsgId = await mq.send(channelId, newContent, { priority: 'high', silent: true });
           textFlushedContent = newContent;
           logger.debug(`[${session.name}] flushText: sent new msg ${textPlaceholderMsgId?.slice(-6)}`);
         } else {
-          await mq.sendLong(threadId, newContent, { priority: 'high', silent: true });
+          await mq.sendLong(channelId, newContent, { priority: 'high', silent: true });
           textPlaceholderMsgId = null;
           textFlushedContent = '';
           logger.debug(`[${session.name}] flushText: sent long msg (${newContent.length} chars)`);
@@ -319,7 +320,7 @@ export class MessageHandler {
           .setLabel('Cancel')
           .setStyle(ButtonStyle.Secondary);
         const queuedRow = new ActionRowBuilder<ButtonBuilder>().addComponents(interruptButton, cancelButton);
-        mq.edit(threadId, progressMsgId, `Queued (position ${pos})...`, { components: [queuedRow as any], embedColor: EmbedColors.GRAY });
+        mq.edit(channelId, progressMsgId, `Queued (position ${pos})...`, { components: [queuedRow as any], embedColor: EmbedColors.GRAY });
         return;
       }
       if (event.type === 'system' && subtype === 'lock_acquired') {
@@ -330,22 +331,22 @@ export class MessageHandler {
           : 'Thinking';
         const newText = `${prefix}... (${elapsed()})`;
         lastProgressText = newText;
-        mq.edit(threadId, progressMsgId, newText, { components: [stopRow as any], embedColor: EmbedColors.GRAY });
+        mq.edit(channelId, progressMsgId, newText, { components: [stopRow as any], embedColor: EmbedColors.GRAY });
         return;
       }
       if (event.type === 'system' && subtype === 'session_reset') {
-        mq.edit(threadId, progressMsgId, 'Context too long, auto-reset...', { components: [stopRow as any], embedColor: EmbedColors.YELLOW });
+        mq.edit(channelId, progressMsgId, 'Context too long, auto-reset...', { components: [stopRow as any], embedColor: EmbedColors.YELLOW });
         this.stateManager.clearSessionClaudeId(guildId, channelId);
         return;
       }
       if (event.type === 'system' && subtype === 'retrying') {
-        mq.edit(threadId, progressMsgId, 'Error, retrying...', { components: [stopRow as any], embedColor: EmbedColors.YELLOW });
+        mq.edit(channelId, progressMsgId, 'Error, retrying...', { components: [stopRow as any], embedColor: EmbedColors.YELLOW });
         return;
       }
       if (event.type === 'system' && subtype === 'stall_warning') {
         const secs = (event as any).stallSeconds || '?';
         const newText = `${lastProgressText}\n> Stalled ${secs}s (${elapsed()})... may be deep-thinking\n> Use Stop to cancel`;
-        mq.edit(threadId, progressMsgId, newText, { components: [stopRow as any], embedColor: EmbedColors.YELLOW });
+        mq.edit(channelId, progressMsgId, newText, { components: [stopRow as any], embedColor: EmbedColors.YELLOW });
         return;
       }
       if (event.type === 'system' && subtype === 'reset_state') {
@@ -364,7 +365,7 @@ export class MessageHandler {
 
       // 压缩状态事件: {type:"system", subtype:"status", status:"compacting"|null}
       if (event.type === 'system' && subtype === 'status' && event.status === 'compacting') {
-        mq.edit(threadId, progressMsgId, `Compacting context... (${elapsed()})`, { components: [stopRow as any], embedColor: EmbedColors.GRAY });
+        mq.edit(channelId, progressMsgId, `Compacting context... (${elapsed()})`, { components: [stopRow as any], embedColor: EmbedColors.GRAY });
         return;
       }
       // compact_boundary 携带 compact_metadata
@@ -372,7 +373,7 @@ export class MessageHandler {
         compactPreTokens = event.compact_metadata.pre_tokens;
       }
       if (subtype === 'compact_boundary') {
-        mq.edit(threadId, progressMsgId, `Context compacted, thinking... (${elapsed()})`, { components: [stopRow as any], embedColor: EmbedColors.GRAY });
+        mq.edit(channelId, progressMsgId, `Context compacted, thinking... (${elapsed()})`, { components: [stopRow as any], embedColor: EmbedColors.GRAY });
         return;
       }
 
@@ -433,7 +434,7 @@ export class MessageHandler {
             if (newText !== lastProgressText && now - lastEditTime >= 5000) {
               lastProgressText = newText;
               lastEditTime = now;
-              mq.edit(threadId, progressMsgId, newText, { components: [stopRow as any], embedColor: EmbedColors.GRAY });
+              mq.edit(channelId, progressMsgId, newText, { components: [stopRow as any], embedColor: EmbedColors.GRAY });
               // 回写进度到 executor，用于中断上下文保存
               this.claudeClient.updateProgressInfo(lockKey, newText, toolUseCount);
             }
@@ -467,7 +468,7 @@ export class MessageHandler {
         permissionMode: mode === 'plan' ? 'plan' : undefined,
         model: effectiveModel,
         guildId,
-        threadId,
+        channelId,
         images,
         sessionName: session.name,
         worktreeBranch: session.worktreeBranch,
@@ -495,7 +496,7 @@ export class MessageHandler {
         await mq.drain(10000);
 
         for (const msgId of allProgressMsgIds) {
-          mq.delete(threadId, msgId);
+          mq.delete(channelId, msgId);
         }
 
         // 补发内容
@@ -506,21 +507,21 @@ export class MessageHandler {
             try {
               const planContent = readFileSync(planFile.filePath, 'utf-8').trim();
               if (planContent) {
-                await mq.sendLong(threadId, planContent, { priority: 'high', silent: true });
+                await mq.sendLong(channelId, planContent, { priority: 'high', silent: true });
                 planSent = true;
               }
             } catch {}
           }
         }
         if (!planSent && sentTextCount === 0 && response.result.trim()) {
-          await mq.sendLong(threadId, response.result, { priority: 'high', silent: true });
+          await mq.sendLong(channelId, response.result, { priority: 'high', silent: true });
         }
 
         if (planSent) fileChanges.length = 0;
 
         // 显示 Discord Buttons 等待用户输入
         const answer = await this.showInteractivePrompt(
-          guildId, threadId, pi.toolUseId, pi.toolName, pi.input
+          guildId, channelId, pi.toolUseId, pi.toolName, pi.input
         );
 
         // 构造后续消息
@@ -534,7 +535,7 @@ export class MessageHandler {
         } else {
           if (answer === 'compact_execute') {
             const updatedSession = this.stateManager.getSession(guildId, channelId)!;
-            await this.compactSession(threadId, response.sessionId, updatedSession.cwd, response.sessionId);
+            await this.compactSession(channelId, response.sessionId, updatedSession.cwd, response.sessionId);
             followUpText = '请按照方案执行实现';
           } else if (answer === 'approve') {
             followUpText = '请按照方案执行实现';
@@ -561,12 +562,12 @@ export class MessageHandler {
       await mq.drain();
 
       for (const msgId of allProgressMsgIds) {
-        mq.delete(threadId, msgId);
+        mq.delete(channelId, msgId);
       }
 
       if (sentTextCount === 0 && response.result.trim()) {
         logger.debug(`[${session.name}] No text sent during stream, sending result as fallback`);
-        await mq.sendLong(threadId, response.result, { silent: true });
+        await mq.sendLong(channelId, response.result, { silent: true });
       }
 
       // 完成标记
@@ -597,20 +598,20 @@ export class MessageHandler {
         && fileChanges.every(fc => fc.filePath.includes('.claude/plans/') && fc.filePath.endsWith('.md'));
       if (fileChanges.length > 0 && !skipChangesHtml) {
         const html = buildChangesHtml(fileChanges);
-        await mq.sendDocument(threadId, html, 'changes.html',
+        await mq.sendDocument(channelId, html, 'changes.html',
           `${fileChanges.length} file(s) changed`, { silent: true });
       }
 
       if (mode === 'plan') {
         this.stateManager.setSessionPlanMode(guildId, channelId, true);
-        await mq.send(threadId,
+        await mq.send(channelId,
           `@everyone Plan generated${summary}\n\n` +
           `Reply "ok" to compact context and execute.\n` +
           `Reply with anything else to continue discussing.`,
           { priority: 'high', embedColor: EmbedColors.GREEN }
         );
       } else {
-        await mq.send(threadId, `@everyone Done${summary}`, { priority: 'high', embedColor: EmbedColors.GREEN });
+        await mq.send(channelId, `@everyone Done${summary}`, { priority: 'high', embedColor: EmbedColors.GREEN });
       }
 
     } catch (error: any) {
@@ -622,13 +623,13 @@ export class MessageHandler {
       await mq.drain(3000).catch(() => {});
 
       for (const msgId of allProgressMsgIds) {
-        if (msgId !== progressMsgId) mq.delete(threadId, msgId);
+        if (msgId !== progressMsgId) mq.delete(channelId, msgId);
       }
 
       if (fileChanges.length > 0) {
         try {
           const html = buildChangesHtml(fileChanges);
-          await mq.sendDocument(threadId, html, 'changes.html',
+          await mq.sendDocument(channelId, html, 'changes.html',
             `${fileChanges.length} file(s) changed`, { silent: true });
         } catch {}
       }
@@ -638,7 +639,7 @@ export class MessageHandler {
         const stoppedText = lastProgressText && lastProgressText !== `Thinking${modeLabel}...`
           ? `Stopped (after ${lastProgressText})`
           : 'Stopped';
-        mq.edit(threadId, progressMsgId, stoppedText, { embedColor: EmbedColors.YELLOW });
+        mq.edit(channelId, progressMsgId, stoppedText, { embedColor: EmbedColors.YELLOW });
         return totalUsage;
       }
 
@@ -658,7 +659,7 @@ export class MessageHandler {
         }
       }
 
-      mq.edit(threadId, progressMsgId, `Error:\n${error.message}\n\n${hint}`, { embedColor: EmbedColors.RED });
+      mq.edit(channelId, progressMsgId, `Error:\n${error.message}\n\n${hint}`, { embedColor: EmbedColors.RED });
 
       if (this.errorReporter) {
         const sessionInfo = errorSessionId ? ` session=${errorSessionId.slice(0, 8)}` : '';
@@ -677,7 +678,7 @@ export class MessageHandler {
    */
   async handleBackgroundChat(
     guildId: string,
-    threadId: string,
+    channelId: string,
     message: string,
   ): Promise<ChatUsageResult> {
     const session = this.stateManager.getSession(guildId, channelId);
@@ -690,7 +691,7 @@ export class MessageHandler {
    */
   private async showInteractivePrompt(
     guildId: string,
-    threadId: string,
+    channelId: string,
     toolUseId: string,
     toolName: string,
     input: any,
@@ -708,7 +709,7 @@ export class MessageHandler {
    */
   private async showAskUserQuestion(
     guildId: string,
-    threadId: string,
+    channelId: string,
     toolUseId: string,
     input: AskUserQuestionInput,
   ): Promise<string> {
@@ -716,14 +717,14 @@ export class MessageHandler {
     if (!q) return 'No question';
 
     if (!q.options?.length) {
-      await this.mq.send(threadId, `@everyone **${q.header || 'Question'}**\n\n${q.question}\n\nPlease type your reply directly.`, { priority: 'high' });
+      await this.mq.send(channelId, `@everyone **${q.header || 'Question'}**\n\n${q.question}\n\nPlease type your reply directly.`, { priority: 'high' });
       const { promise } = this.interactionRegistry.register(toolUseId, guildId, channelId);
       this.interactionRegistry.setWaitingCustomText(toolUseId, true);
       return promise;
     }
 
     const { promise, customIdPrefix } = this.interactionRegistry.register(
-      toolUseId, guildId, threadId, q.options.map(o => o.label)
+      toolUseId, guildId, channelId, q.options.map(o => o.label)
     );
 
     // 构建问题文本
@@ -754,7 +755,7 @@ export class MessageHandler {
       rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(buttons.slice(i, i + 5)));
     }
 
-    await this.mq.send(threadId, `@everyone\n${questionText}`, { components: rows as any, priority: 'high' });
+    await this.mq.send(channelId, `@everyone\n${questionText}`, { components: rows as any, priority: 'high' });
 
     return promise;
   }
@@ -764,12 +765,12 @@ export class MessageHandler {
    */
   private async showExitPlanMode(
     guildId: string,
-    threadId: string,
+    channelId: string,
     toolUseId: string,
     input: ExitPlanModeInput,
   ): Promise<string> {
     const { promise, customIdPrefix } = this.interactionRegistry.register(
-      toolUseId, guildId, threadId, undefined, { noTimeout: true }
+      toolUseId, guildId, channelId, undefined, { noTimeout: true }
     );
 
     let text = '@everyone **Plan ready, waiting for confirmation**\n';
@@ -802,7 +803,7 @@ export class MessageHandler {
         .setStyle(ButtonStyle.Secondary),
     );
 
-    await this.mq.send(threadId, text, { components: [row1 as any, row2 as any], priority: 'high' });
+    await this.mq.send(channelId, text, { components: [row1 as any, row2 as any], priority: 'high' });
 
     return promise;
   }

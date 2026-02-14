@@ -232,7 +232,7 @@ async function handleAttach(
   const guildId = interaction.guildId!;
   const channelId = interaction.channelId;
   const { stateManager, claudeClient } = deps;
-  const threadName = (interaction.channel && 'name' in interaction.channel ? interaction.channel.name : null) ?? `thread-${threadId}`;
+  const threadName = (interaction.channel && 'name' in interaction.channel ? interaction.channel.name : null) ?? `thread-${channelId}`;
 
   const session = stateManager.getOrCreateSession(guildId, channelId, {
     name: threadName,
@@ -254,7 +254,7 @@ async function handleAttach(
 
   // 检查是否有其他 thread 持有该 session
   const holder = stateManager.findSessionHolder(guildId, targetSessionId);
-  if (holder && holder.channelId === threadId) {
+  if (holder && holder.channelId === channelId) {
     await interaction.reply({ content: 'Already linked to this session.', ephemeral: true });
     return;
   }

@@ -104,7 +104,7 @@ async function handleQdev(
     // 2. 获取 root session
     await interaction.editReply(`Branch: \`${branchName}\`\nCreating worktree and thread...`);
     const rootSession = stateManager.getRootSession(guildId, channelId);
-    const parentChannelId = rootSession?.channelId ?? threadId;
+    const parentChannelId = rootSession?.channelId ?? channelId;
 
     // 3. 从当前 channel 的 parentId 获取 Category
     const channel = interaction.channel;
@@ -192,7 +192,7 @@ async function handleIdea(
       .replace('{{SKILL_ARGS}}', args);
 
     await interaction.reply('Recording idea...');
-    spawnSkillProcess('idea', prompt, session.cwd, threadId, messageQueue);
+    spawnSkillProcess('idea', prompt, session.cwd, channelId, messageQueue);
   } else {
     // 列表模式：直接查询数据库，Embed + 按钮展示
     await interaction.reply('Querying ideas...');
@@ -203,7 +203,7 @@ async function handleIdea(
       const ideas = await ideaRepo.findByStatus('Idea');
 
       if (ideas.length === 0) {
-        await messageQueue.send(threadId, 'No undeveloped ideas found.', {
+        await messageQueue.send(channelId, 'No undeveloped ideas found.', {
           embedColor: EmbedColors.GRAY,
           priority: 'high',
         });
@@ -218,7 +218,7 @@ async function handleIdea(
       const rows = buildIdeaPromoteButtons(ideas);
 
       await messageQueue.send(
-        threadId,
+        channelId,
         `**Ideas** (${ideas.length} undeveloped)\n\n${description}`,
         {
           components: rows as any,
@@ -228,7 +228,7 @@ async function handleIdea(
       );
     } catch (err: any) {
       logger.error('idea list mode failed:', err.message);
-      await messageQueue.sendLong(threadId, `idea query failed: ${err.message}`).catch(() => {});
+      await messageQueue.sendLong(channelId, `idea query failed: ${err.message}`).catch(() => {});
     }
   }
 }
@@ -273,7 +273,7 @@ async function handleCommit(
 
   messageHandler.handleBackgroundChat(guildId, channelId, prompt).catch((err) => {
     logger.error('commit failed:', err.message);
-    messageQueue.sendLong(threadId, `commit failed: ${err.message}`).catch(() => {});
+    messageQueue.sendLong(channelId, `commit failed: ${err.message}`).catch(() => {});
   });
 }
 
