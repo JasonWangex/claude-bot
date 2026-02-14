@@ -25,6 +25,7 @@ import { qdev } from './routes/qdev.js';
 import { listDevLogs, getDevLog, createDevLog } from './routes/devlogs.js';
 import { listIdeas, createIdea, getIdea, updateIdea, deleteIdea } from './routes/ideas.js';
 import { listKnowledgeBase, createKnowledgeBase, getKnowledgeBaseEntry, updateKnowledgeBase, deleteKnowledgeBase } from './routes/knowledge-base.js';
+import { listPrompts, getPrompt, updatePrompt, refreshPrompts } from './routes/prompts.js';
 
 function defineRoutes(): Route[] {
   const r = (method: string, path: string, handler: Route['handler']): Route => {
@@ -102,6 +103,12 @@ function defineRoutes(): Route[] {
     r('GET',    '/api/kb/:id', getKnowledgeBaseEntry),
     r('PATCH',  '/api/kb/:id', updateKnowledgeBase),
     r('DELETE', '/api/kb/:id', deleteKnowledgeBase),
+
+    // Prompt Config
+    r('GET',    '/api/prompts',         listPrompts),
+    r('POST',   '/api/prompts/refresh', refreshPrompts),
+    r('GET',    '/api/prompts/:key',    getPrompt),
+    r('PATCH',  '/api/prompts/:key',    updatePrompt),
   ];
 }
 

@@ -6,6 +6,7 @@
  */
 
 import type { ClaudeClient } from '../claude/client.js';
+import type { PromptConfigService } from '../services/prompt-config-service.js';
 import { logger } from '../utils/logger.js';
 import { execGit } from './git-ops.js';
 import { getConflictFiles, hasConflictMarkers, abortMerge } from './goal-branch.js';
@@ -27,6 +28,7 @@ export async function resolveConflictsWithAI(
   goalWorktreeDir: string,
   subtaskBranch: string,
   taskDescription: string,
+  promptService: PromptConfigService,
 ): Promise<ConflictResolutionResult> {
   try {
     const conflictFiles = await getConflictFiles(goalWorktreeDir);
@@ -37,7 +39,12 @@ export async function resolveConflictsWithAI(
 
     logger.info(`[ConflictResolver] Resolving ${conflictFiles.length} conflicted files: ${conflictFiles.join(', ')}`);
 
-    const prompt = buildPrompt(conflictFiles, subtaskBranch, taskDescription);
+    const filesList = conflictFiles.map(f => `- ${f}`).join('\n');
+    const prompt = promptService.render('orchestrator.conflict_resolver', {
+      SUBTASK_BRANCH: subtaskBranch,
+      TASK_DESCRIPTION: taskDescription,
+      CONFLICT_FILES: filesList,
+    });
 
     await claudeClient.chat(prompt, {
       cwd: goalWorktreeDir,
@@ -68,37 +75,4 @@ export async function resolveConflictsWithAI(
     await abortMerge(goalWorktreeDir);
     return { resolved: false, error: err.message };
   }
-}
-
-function buildPrompt(
-  conflictFiles: string[],
-  subtaskBranch: string,
-  taskDescription: string,
-): string {
-  return [
-    `You are resolving Git merge conflicts. Branch \`${subtaskBranch}\` is being merged into the current branch.`,
-    ``,
-    `Subtask description: ${taskDescription}`,
-    ``,
-    `The following files have conflicts:`,
-    ...conflictFiles.map(f => `- ${f}`),
-    ``,
-    `Instructions:`,
-    `1. Read each conflicted file to understand the conflict markers (<<<<<<< HEAD, =======, >>>>>>>)`,
-    `2. HEAD is the current goal branch (accumulated work from other subtasks)`,
-    `3. The incoming changes are from the subtask branch (the work described above)`,
-    `4. Resolve by keeping BOTH sides' valid changes — do not discard either side's work`,
-    `5. Use the Edit tool to fix each file, removing all conflict markers`,
-    ``,
-    `Common patterns:`,
-    `- Import conflicts: keep all imports from both sides`,
-    `- package.json / config files: merge both sets of entries`,
-    `- Adjacent code changes: include both additions in the correct order`,
-    `- Same function modified: carefully combine the logic from both sides`,
-    ``,
-    `Rules:`,
-    `- Do NOT run git add, git commit, or any git commands`,
-    `- Do NOT run install, build, or test commands`,
-    `- ONLY edit the conflicted files to resolve the conflicts`,
-  ].join('\n');
 }

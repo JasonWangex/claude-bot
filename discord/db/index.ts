@@ -22,6 +22,8 @@ import migration006 from './migrations/006_add_message_count.js';
 import migration007 from './migrations/007_drop_message_history.js';
 import migration008 from './migrations/008_add_knowledge_base.js';
 import migration009 from './migrations/009_add_usage_columns.js';
+import migration010 from './migrations/010_add_session_slots.js';
+import migration011 from './migrations/011_add_prompt_configs.js';
 
 const allMigrations: Migration[] = [
   migration001,
@@ -33,6 +35,8 @@ const allMigrations: Migration[] = [
   migration007,
   migration008,
   migration009,
+  migration010,
+  migration011,
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -125,3 +129,4 @@ export { GoalRepo, GoalTaskRepo, CheckpointRepo } from './repo/index.js';
 export { SessionRepository, GuildRepository } from './repo/index.js';
 export { InteractionLogRepository } from './interaction-log-repo.js';
 export { KnowledgeBaseRepository } from './knowledge-base-repo.js';
+export { PromptConfigRepository } from './prompt-config-repo.js';

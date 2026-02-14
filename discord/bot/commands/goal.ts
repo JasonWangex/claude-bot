@@ -4,9 +4,6 @@
  * newSession=true 时先 fork（创建 worktree + channel），再在新 session 中执行 goal skill。
  */
 
-import { readFile } from 'fs/promises';
-import { homedir } from 'os';
-import { join } from 'path';
 import {
   SlashCommandBuilder,
   ChannelType,
@@ -135,22 +132,13 @@ async function handleGoal(
   }
 
   // 以下路径需要加载 goal skill
-  const skillPath = join(homedir(), '.claude/skills/goal/SKILL.md');
-  let skillContent: string;
-  try {
-    skillContent = await readFile(skillPath, 'utf-8');
-  } catch {
-    await interaction.reply({ content: 'Skill file not found: ~/.claude/skills/goal/SKILL.md', ephemeral: true });
-    return;
-  }
-
-  const bodyMatch = skillContent.match(/^---[\s\S]*?---\s*([\s\S]*)$/);
-  const promptTemplate = (bodyMatch ? bodyMatch[1] : skillContent)
-    .replace('{{SKILL_ARGS}}', text);
+  const promptTemplate = deps.promptService.render('skill.goal', {
+    SKILL_ARGS: text,
+  });
 
   if (!newSession) {
     // 有参数，当前 session：转发给 Claude
-    const prompt = promptTemplate.replace('{{THREAD_ID}}', threadId);
+    const prompt = deps.promptService.applyVars(promptTemplate, { THREAD_ID: threadId });
     await interaction.reply(`Goal: ${text}...`);
     messageHandler.handleBackgroundChat(guildId, threadId, prompt).catch((err) => {
       logger.error('goal failed:', err.message);
@@ -209,7 +197,7 @@ async function handleGoal(
     }
 
     // 6. 在新 session 中触发 goal skill（注入新 channel 的 thread ID）
-    const prompt = promptTemplate.replace('{{THREAD_ID}}', forkResult.threadId);
+    const prompt = deps.promptService.applyVars(promptTemplate, { THREAD_ID: forkResult.threadId });
     messageHandler.handleBackgroundChat(guildId, forkResult.threadId, prompt).catch((err) => {
       logger.error('goal (new session) background chat failed:', err.message);
     });

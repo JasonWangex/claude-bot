@@ -4,9 +4,6 @@
  */
 
 import { spawn } from 'child_process';
-import { readFile } from 'fs/promises';
-import { homedir } from 'os';
-import { join } from 'path';
 import {
   SlashCommandBuilder,
   ChannelType,
@@ -177,19 +174,8 @@ async function handleIdea(
   }
 
   if (args) {
-    // 记录模式：加载 skill，独立进程，不占用 session
-    const skillPath = join(homedir(), '.claude/skills/idea/SKILL.md');
-    let skillContent: string;
-    try {
-      skillContent = await readFile(skillPath, 'utf-8');
-    } catch {
-      await interaction.reply({ content: 'Skill file not found: ~/.claude/skills/idea/SKILL.md', ephemeral: true });
-      return;
-    }
-    const bodyMatch = skillContent.match(/^---[\s\S]*?---\s*([\s\S]*)$/);
-    const prompt = (bodyMatch ? bodyMatch[1] : skillContent)
-      .replace('{{SKILL_ARGS}}', args);
-
+    // 记录模式：从数据库加载 skill 模板
+    const prompt = deps.promptService.render('skill.idea', { SKILL_ARGS: args });
     await interaction.reply('Recording idea...');
     spawnSkillProcess('idea', prompt, session.cwd, threadId, messageQueue);
   } else {
@@ -252,18 +238,7 @@ async function handleCommit(
     return;
   }
 
-  const skillPath = join(homedir(), '.claude/skills/commit/SKILL.md');
-  let skillContent: string;
-  try {
-    skillContent = await readFile(skillPath, 'utf-8');
-  } catch {
-    await interaction.reply({ content: 'Skill file not found: ~/.claude/skills/commit/SKILL.md', ephemeral: true });
-    return;
-  }
-
-  const bodyMatch = skillContent.match(/^---[\s\S]*?---\s*([\s\S]*)$/);
-  const prompt = (bodyMatch ? bodyMatch[1] : skillContent)
-    .replace('{{SKILL_ARGS}}', message);
+  const prompt = deps.promptService.render('skill.commit', { SKILL_ARGS: message });
 
   await interaction.reply({
     content: `Reviewing and committing code...${message ? `\nHint: ${message}` : ''}`,
@@ -323,21 +298,12 @@ async function handleMerge(
   }
 
   // 加载 skill
-  const skillPath = join(homedir(), '.claude/skills/merge/SKILL.md');
-  let skillContent: string;
-  try {
-    skillContent = await readFile(skillPath, 'utf-8');
-  } catch {
-    await interaction.editReply('Skill file not found: ~/.claude/skills/merge/SKILL.md');
-    return;
-  }
-
-  const bodyMatch = skillContent.match(/^---[\s\S]*?---\s*([\s\S]*)$/);
-  const prompt = (bodyMatch ? bodyMatch[1] : skillContent)
-    .replaceAll('{{TARGET_TOPIC_ID}}', targetSession.threadId)
-    .replaceAll('{{TARGET_BRANCH}}', targetSession.worktreeBranch)
-    .replaceAll('{{TARGET_CWD}}', targetSession.cwd)
-    .replaceAll('{{MAIN_CWD}}', mainCwd);
+  const prompt = deps.promptService.render('skill.merge', {
+    TARGET_TOPIC_ID: targetSession.threadId,
+    TARGET_BRANCH: targetSession.worktreeBranch,
+    TARGET_CWD: targetSession.cwd,
+    MAIN_CWD: mainCwd,
+  });
 
   // Step 1: 停止 target session 正在运行的 Claude 进程
   const targetLockKey = StateManager.threadLockKey(guildId, targetSession.threadId);

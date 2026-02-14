@@ -11,6 +11,7 @@ import type { MessageQueue } from '../bot/message-queue.js';
 import type { DiscordBotConfig } from '../types/index.js';
 import type { GoalOrchestrator } from '../orchestrator/index.js';
 import type { GoalStatus, GoalType } from '../types/db.js';
+import type { PromptConfigService } from '../services/prompt-config-service.js';
 
 // ========== 通用 ==========
 
@@ -30,6 +31,7 @@ export interface ApiDeps {
   mq: MessageQueue;
   config: DiscordBotConfig;
   orchestrator?: GoalOrchestrator;
+  promptService: PromptConfigService;
 }
 
 // ========== 路由 ==========

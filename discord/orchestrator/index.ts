@@ -49,6 +49,7 @@ import {
   buildTaskFailedButtons,
 } from './goal-buttons.js';
 import type { IGoalMetaRepo, IGoalTaskRepo, IGoalCheckpointRepo } from '../types/repository.js';
+import type { PromptConfigService } from '../services/prompt-config-service.js';
 
 interface OrchestratorDeps {
   stateManager: StateManager;
@@ -61,6 +62,7 @@ interface OrchestratorDeps {
   goalMetaRepo: IGoalMetaRepo;
   goalTaskRepo: IGoalTaskRepo;
   checkpointRepo: IGoalCheckpointRepo;
+  promptService: PromptConfigService;
 }
 
 /** startDrive 的入参 */
@@ -520,70 +522,34 @@ export class GoalOrchestrator {
    * 构建 feedback 调查 prompt
    */
   private buildFeedbackInvestigationPrompt(task: GoalTask, state: GoalDriveState): string {
+    const ps = this.deps.promptService;
     const fb = task.feedback!;
 
-    // 收集依赖任务状态
-    const depInfos = task.depends.map(depId => {
-      const dep = state.tasks.find(t => t.id === depId);
-      if (!dep) return `  - ${depId}: (unknown)`;
-      return `  - ${this.getTaskLabel(state, dep.id)}: ${dep.description} (status: ${dep.status}, merged: ${dep.merged ?? false})`;
-    });
-
-    const lines: string[] = [
-      `You are investigating a blocked task for Goal "${state.goalName}".`,
-      ``,
-      `## Blocked Task`,
-      `ID: ${this.getTaskLabel(state, task.id)}`,
-      `Description: ${task.description}`,
-      ``,
-      `## Feedback (written by the previous executor)`,
-      `Type: ${fb.type}`,
-      `Reason: ${fb.reason}`,
-      ...(fb.details ? [`Details: ${fb.details}`] : []),
-    ];
-
-    if (depInfos.length > 0) {
-      lines.push(``, `## Dependencies`, ...depInfos);
+    // 构建依赖 section 文本
+    let depSection = '';
+    if (task.depends.length > 0) {
+      const depInfos = task.depends.map(depId => {
+        const dep = state.tasks.find(t => t.id === depId);
+        if (!dep) return `  - ${depId}: (unknown)`;
+        return `  - ${this.getTaskLabel(state, dep.id)}: ${dep.description} (status: ${dep.status}, merged: ${dep.merged ?? false})`;
+      });
+      depSection = `## Dependencies\n${depInfos.join('\n')}\n\n`;
     }
 
-    lines.push(
-      ``,
-      `## Your Job`,
-      `1. **Understand** the feedback: What exactly is blocking this task?`,
-      `2. **Investigate** the codebase: Check if the blocker is still valid`,
-      `   - If it's a dependency issue (e.g. code from a dependency task is not available), check if the dependency has been merged into the goal branch`,
-      `   - If it's a missing file/API/module issue, search the codebase to see if it exists now`,
-      `   - If it's a clarification question, try to infer the answer from context`,
-      `3. **Fix if possible**: If you can resolve the blocker, do so:`,
-      `   - Pull latest from goal branch: \`git merge ${state.goalBranch}\` (to get merged dependency code)`,
-      `   - Make the necessary code changes to unblock and complete the task`,
-      `   - Run build/test to verify`,
-      `   - Commit your changes`,
-      `4. **Write your conclusion** to \`feedback/${task.id}-investigate.json\``,
-      ``,
-      `## Conclusion File Format (feedback/${task.id}-investigate.json)`,
-      '```json',
-      `{`,
-      `  "action": "continue" | "retry" | "replan" | "escalate",`,
-      `  "reason": "Brief explanation of what you found and did",`,
-      `  "details": "Optional additional context"`,
-      `}`,
-      '```',
-      ``,
-      `## Action Meanings`,
-      `- **continue**: You fixed the issue and the code is ready for audit verification`,
-      `- **retry**: The task needs to start completely from scratch (e.g. wrong approach, branch is corrupted)`,
-      `- **replan**: The task definition itself needs to change (e.g. scope was wrong, task should be split)`,
-      `- **escalate**: Cannot be resolved automatically — needs human intervention`,
-      ``,
-      `## Rules`,
-      `- Prefer "continue" if you can fix the issue — this saves the most work`,
-      `- Use "retry" only if the existing code is unsalvageable`,
-      `- Use "escalate" only as last resort when you truly cannot determine the right action`,
-      `- After writing the conclusion file: \`git add feedback/${task.id}-investigate.json && git commit -m "investigate: ${this.getTaskLabel(state, task.id)}"\``,
-    );
+    // 构建 feedback details 文本
+    const feedbackDetails = fb.details ? `Details: ${fb.details}` : '';
 
-    return lines.join('\n');
+    return ps.render('orchestrator.feedback_investigation', {
+      GOAL_NAME: state.goalName,
+      TASK_LABEL: this.getTaskLabel(state, task.id),
+      TASK_DESCRIPTION: task.description,
+      FEEDBACK_TYPE: fb.type,
+      FEEDBACK_REASON: fb.reason,
+      FEEDBACK_DETAILS: feedbackDetails,
+      DEP_SECTION: depSection,
+      GOAL_BRANCH: state.goalBranch,
+      TASK_ID: task.id,
+    });
   }
 
   /**
@@ -1522,36 +1488,20 @@ export class GoalOrchestrator {
     originalIssues: string[],
     verifyCommands: string[],
   ): string {
+    const ps = this.deps.promptService;
     const issueList = originalIssues.map((issue, i) => `  ${i + 1}. ${issue}`).join('\n');
 
-    return [
-      `You just finished fixing audit issues. Now perform a **self-review** to catch remaining problems before the senior reviewer checks.`,
-      ``,
-      `## Task`,
-      `ID: ${this.getTaskLabel(state, task.id)}`,
-      `Description: ${task.description}`,
-      ``,
-      `## Original Issues You Fixed`,
-      issueList,
-      ``,
-      `## Self-Review Instructions`,
-      `1. Read your recent changes (\`git diff HEAD~1\`)`,
-      `2. Verify each original issue is actually fixed`,
-      verifyCommands.length > 0
-        ? `3. Run these verification commands:\n${verifyCommands.map(c => `   - \`${c}\``).join('\n')}`
-        : `3. Run build and test commands`,
-      `4. Check for new errors (typos, missing imports, logic errors)`,
-      `5. Write self-review result to \`feedback/${task.id}-self-review.json\`:`,
-      '```json',
-      `{ "allIssuesFixed": true|false, "remainingIssues": [...], "notes": "..." }`,
-      '```',
-      `6. Commit the file: \`git add feedback/${task.id}-self-review.json && git commit -m "Self-review"\``,
-      ``,
-      `## Rules`,
-      `- Be **honest** — better to catch issues now than fail Opus audit`,
-      `- If verify commands fail, set \`allIssuesFixed: false\``,
-      `- Do NOT re-fix issues — just report what you find`,
-    ].join('\n');
+    const verifyCmdsSection = verifyCommands.length > 0
+      ? `3. Run these verification commands:\n${verifyCommands.map(c => `   - \`${c}\``).join('\n')}`
+      : `3. Run build and test commands`;
+
+    return ps.render('orchestrator.self_review', {
+      TASK_LABEL: this.getTaskLabel(state, task.id),
+      TASK_DESCRIPTION: task.description,
+      ISSUE_LIST: issueList,
+      VERIFY_COMMANDS_SECTION: verifyCmdsSection,
+      TASK_ID: task.id,
+    });
   }
 
   /**
@@ -1766,71 +1716,40 @@ export class GoalOrchestrator {
    * 分析代码 → 写 .task-plan.md → commit → 不写实现代码
    */
   private buildPlanPrompt(task: GoalTask, state: GoalDriveState, taskDetailPlan?: TaskDetailPlan): string {
-    const lines: string[] = [
-      `You are a senior architect planning the implementation of a subtask for Goal "${state.goalName}".`,
-      ``,
-      `## Task to Plan`,
-      `ID: ${this.getTaskLabel(state, task.id)}`,
-      `Description: ${task.description}`,
-    ];
+    const ps = this.deps.promptService;
+    const label = this.getTaskLabel(state, task.id);
+    const parts: string[] = [];
 
-    // 注入详细计划作为参考（来自 Goal body）
+    // 主模板
+    parts.push(ps.render('orchestrator.plan', {
+      GOAL_NAME: state.goalName,
+      TASK_LABEL: label,
+      TASK_DESCRIPTION: task.description,
+    }));
+
+    // 条件 section：详细计划
     if (taskDetailPlan) {
-      lines.push(``, formatDetailPlanForPrompt(taskDetailPlan));
-      lines.push(
-        ``,
-        `**NOTE**: The detailed plan above is from the goal planning phase. Use it as a **reference** to understand the design intent, but verify against the actual codebase and adapt as needed. Your .task-plan.md should be grounded in actual code structure.`,
-      );
+      const s = ps.tryRender('orchestrator.plan.detail_plan', {
+        DETAIL_PLAN_TEXT: formatDetailPlanForPrompt(taskDetailPlan),
+      });
+      if (s) parts.push(s);
     }
 
+    // 条件 section：依赖
     if (task.depends.length > 0) {
-      const depInfos = task.depends.map(depId => {
+      const depList = task.depends.map(depId => {
         const dep = state.tasks.find(t => t.id === depId);
         return dep ? `  - ${this.getTaskLabel(state, dep.id)}: ${dep.description} (${dep.status})` : `  - ${depId}: (unknown)`;
-      });
-      lines.push(``, `## Dependencies (completed before this task)`, ...depInfos);
+      }).join('\n');
+      const s = ps.tryRender('orchestrator.plan.dependencies', { DEP_LIST: depList });
+      if (s) parts.push(s);
     }
 
-    lines.push(
-      ``,
-      `## Your Job`,
-      `1. Analyze the existing codebase relevant to this task`,
-      `2. Identify all files that need to be modified or created`,
-      `3. Design the implementation approach with specific steps`,
-      `4. Write a detailed plan to \`.task-plan.md\` in the working directory`,
-      `5. \`git add .task-plan.md && git commit -m "plan: ${this.getTaskLabel(state, task.id)} implementation plan"\``,
-      ``,
-      `## Plan File Format (.task-plan.md)`,
-      '```markdown',
-      `# Implementation Plan: ${this.getTaskLabel(state, task.id)}`,
-      ``,
-      `## Overview`,
-      `<Brief summary of what needs to be done>`,
-      ``,
-      `## Files to Modify`,
-      `- \`path/to/file1.ts\` — <what changes and why>`,
-      `- \`path/to/file2.ts\` — <what changes and why>`,
-      ``,
-      `## Implementation Steps`,
-      `1. <Step 1 with specific details>`,
-      `2. <Step 2 with specific details>`,
-      `...`,
-      ``,
-      `## Key Decisions`,
-      `- <Decision 1 and rationale>`,
-      ``,
-      `## Edge Cases / Risks`,
-      `- <Risk 1 and mitigation>`,
-      '```',
-      ``,
-      `## CRITICAL Rules`,
-      `- Do NOT write any implementation code — only the plan`,
-      `- The plan must be specific enough that a different developer can implement it without ambiguity`,
-      `- Focus on the "what" and "why", include code snippets only as examples/references`,
-      `- After writing and committing the plan file, STOP`,
-    );
+    // 固定 section：指令
+    const instr = ps.tryRender('orchestrator.plan.instructions', { TASK_LABEL: label });
+    if (instr) parts.push(instr);
 
-    return lines.join('\n');
+    return parts.join('\n\n');
   }
 
   /**
@@ -1838,56 +1757,30 @@ export class GoalOrchestrator {
    * 先读 .task-plan.md → 按步骤实施 → 不偏离方向
    */
   private buildExecuteWithPlanPrompt(task: GoalTask, state: GoalDriveState, taskDetailPlan?: TaskDetailPlan): string {
-    const lines: string[] = [
-      `You are a code executor implementing a subtask for Goal "${state.goalName}".`,
-      `A senior architect has already created a detailed plan for you.`,
-      ``,
-      `## Current Task`,
-      `ID: ${this.getTaskLabel(state, task.id)}`,
-      `Description: ${task.description}`,
-    ];
+    const ps = this.deps.promptService;
+    const label = this.getTaskLabel(state, task.id);
+    const parts: string[] = [];
 
-    // 注入详细计划作为背景（可选，来自 Goal body）
+    // 主模板
+    parts.push(ps.render('orchestrator.execute_with_plan', {
+      GOAL_NAME: state.goalName,
+      TASK_LABEL: label,
+      TASK_DESCRIPTION: task.description,
+    }));
+
+    // 条件 section：详细计划
     if (taskDetailPlan) {
-      lines.push(``, formatDetailPlanForPrompt(taskDetailPlan));
-      lines.push(
-        ``,
-        `**NOTE**: The detailed plan above is from the goal planning phase. It provides design intent and context. However, **your primary guide is the .task-plan.md file** created by the architect, which is grounded in the actual codebase.`,
-      );
+      const s = ps.tryRender('orchestrator.execute_with_plan.detail_plan', {
+        DETAIL_PLAN_TEXT: formatDetailPlanForPrompt(taskDetailPlan),
+      });
+      if (s) parts.push(s);
     }
 
-    lines.push(
-      ``,
-      `## Instructions`,
-      `1. **First**, read the plan file: \`cat .task-plan.md\``,
-      `2. Follow the plan step by step — implement each step in order`,
-      `3. After implementation, **verify the code works**:`,
-      `   - Detect the project's build system (package.json, Makefile, pyproject.toml, Cargo.toml, etc.)`,
-      `   - Run the appropriate build/compile command and fix any errors`,
-      `   - Run the appropriate test command and fix any failures`,
-      `4. Commit your changes only when build and tests pass`,
-      ``,
-      `## CRITICAL Rules`,
-      `- Follow the plan exactly — do not deviate or add features not in the plan`,
-      `- If a plan step is unclear, make the simplest reasonable interpretation`,
-      `- Do not modify files not mentioned in the plan unless absolutely necessary`,
-      `- If you encounter a blocker that prevents following the plan, write a feedback file:`,
-      `  \`feedback/${task.id}.json\` with \`{"type": "blocked", "reason": "..."}\``,
-      `  then \`git add && git commit\` and stop`,
-    );
+    // 固定 section：指令 + feedback 协议
+    const instr = ps.tryRender('orchestrator.execute_with_plan.instructions', { TASK_ID: task.id });
+    if (instr) parts.push(instr);
 
-    // Feedback protocol (simplified)
-    lines.push(
-      ``,
-      `## Feedback Protocol`,
-      `If blocked, write \`feedback/${task.id}.json\`:`,
-      '```json',
-      `{"type": "blocked", "reason": "brief description", "details": "..."}`,
-      '```',
-      `Then \`git add && git commit\` and stop.`,
-    );
-
-    return lines.join('\n');
+    return parts.join('\n\n');
   }
 
   /**
@@ -1895,70 +1788,34 @@ export class GoalOrchestrator {
    * 运行 build/test 验证 + 读 git diff → 审查正确性/完整性/bug → 写 audit verdict 文件
    */
   private buildAuditPrompt(task: GoalTask, state: GoalDriveState, taskDetailPlan?: TaskDetailPlan): string {
-    const lines: string[] = [
-      `You are a senior code reviewer auditing a subtask implementation for Goal "${state.goalName}".`,
-      ``,
-      `## Task Being Audited`,
-      `ID: ${this.getTaskLabel(state, task.id)}`,
-      `Description: ${task.description}`,
-    ];
+    const ps = this.deps.promptService;
+    const label = this.getTaskLabel(state, task.id);
+    const parts: string[] = [];
 
-    // 注入详细计划作为审查基准（可选，来自 Goal body）
+    // 主模板
+    parts.push(ps.render('orchestrator.audit', {
+      GOAL_NAME: state.goalName,
+      TASK_LABEL: label,
+      TASK_DESCRIPTION: task.description,
+    }));
+
+    // 条件 section：详细计划
     if (taskDetailPlan) {
-      lines.push(``, formatDetailPlanForPrompt(taskDetailPlan));
-      lines.push(
-        ``,
-        `**NOTE**: The detailed plan above is from the goal planning phase. Use it as a **baseline** to verify whether the implementation matches the original design intent.`,
-      );
+      const s = ps.tryRender('orchestrator.audit.detail_plan', {
+        DETAIL_PLAN_TEXT: formatDetailPlanForPrompt(taskDetailPlan),
+      });
+      if (s) parts.push(s);
     }
 
-    lines.push(
-      ``,
-      `## Instructions`,
-      `1. Run \`git log --oneline\` to see all commits, then \`git diff ${state.goalBranch}...HEAD\` to see all changes since branching from the goal branch`,
-      `2. **Verify the code builds and tests pass** before reviewing:`,
-      `   - Detect the project's build system by looking for config files: \`package.json\`, \`Makefile\`, \`pyproject.toml\`, \`Cargo.toml\`, \`pom.xml\`, \`build.gradle\`, \`CMakeLists.txt\`, etc.`,
-      `   - Run the appropriate **build/compile** command (e.g. \`npm run build\`, \`tsc --noEmit\`, \`make\`, \`cargo build\`, \`mvn compile\`, \`go build ./...\`)`,
-      `   - Run the appropriate **test** command (e.g. \`npm test\`, \`pytest\`, \`cargo test\`, \`mvn test\`, \`go test ./...\`)`,
-      `   - Build failures and test failures are **always "error" severity** issues`,
-      `   - If no build/test configuration is found, note this in the summary and proceed with code review only`,
-      `3. Review the changes for:`,
-      `   - **Correctness**: Does the code do what the task description requires?`,
-      `   - **Completeness**: Are all aspects of the task addressed?`,
-      `   - **Bugs**: Are there obvious bugs, edge cases, or runtime errors?`,
-      `   - **Security**: Any security vulnerabilities (injection, XSS, etc.)?`,
-      `4. Write your verdict to \`feedback/${task.id}-audit.json\``,
-      `5. \`git add feedback/${task.id}-audit.json && git commit -m "audit: ${this.getTaskLabel(state, task.id)}"\``,
-      ``,
-      `## Verdict File Format (feedback/${task.id}-audit.json)`,
-      '```json',
-      `{`,
-      `  "verdict": "pass" | "fail",`,
-      `  "summary": "Brief overall assessment",`,
-      `  "verifyCommands": ["the build command you ran", "the test command you ran"],`,
-      `  "issues": [`,
-      `    {`,
-      `      "severity": "error" | "warning",`,
-      `      "file": "path/to/file.ts",`,
-      `      "line": 42,`,
-      `      "description": "What's wrong and why"`,
-      `    }`,
-      `  ]`,
-      `}`,
-      '```',
-      ``,
-      `**IMPORTANT**: The \`verifyCommands\` array must list the exact build/test commands you ran. These will be passed to the fixer so they can re-verify after applying fixes.`,
-      ``,
-      `## Verdict Rules`,
-      `- **pass**: No "error" severity issues. Warnings are acceptable.`,
-      `- **fail**: At least one "error" severity issue found.`,
-      `- Build failures and test failures are ALWAYS "error" severity`,
-      `- Be pragmatic — minor style issues are "warning", not "error"`,
-      `- Focus on functional correctness, not code style preferences`,
-      `- If no code changes are found (empty diff), verdict is "pass"`,
-    );
+    // 固定 section：指令
+    const instr = ps.tryRender('orchestrator.audit.instructions', {
+      GOAL_BRANCH: state.goalBranch,
+      TASK_ID: task.id,
+      TASK_LABEL: label,
+    });
+    if (instr) parts.push(instr);
 
-    return lines.join('\n');
+    return parts.join('\n\n');
   }
 
   /**
@@ -1973,78 +1830,53 @@ export class GoalOrchestrator {
     verifyCommands: string[] = [],
     taskDetailPlan?: TaskDetailPlan,
   ): string {
+    const ps = this.deps.promptService;
+    const label = this.getTaskLabel(state, task.id);
     const issueList = issues.map((issue, i) => `  ${i + 1}. ${issue}`).join('\n');
+    const parts: string[] = [];
 
-    const lines: string[] = [
-      `You are fixing audit issues found in a code review for Goal "${state.goalName}".`,
-      ``,
-      `## Task`,
-      `ID: ${this.getTaskLabel(state, task.id)}`,
-      `Description: ${task.description}`,
-    ];
+    // 主模板
+    parts.push(ps.render('orchestrator.fix', {
+      GOAL_NAME: state.goalName,
+      TASK_LABEL: label,
+      TASK_DESCRIPTION: task.description,
+    }));
 
-    // 注入详细计划作为参考（可选，来自 Goal body）
+    // 条件 section：详细计划
     if (taskDetailPlan) {
-      lines.push(``, formatDetailPlanForPrompt(taskDetailPlan));
-      lines.push(
-        ``,
-        `**NOTE**: The detailed plan above is from the goal planning phase. It can help you understand the original design intent while fixing the issues.`,
-      );
+      const s = ps.tryRender('orchestrator.fix.detail_plan', {
+        DETAIL_PLAN_TEXT: formatDetailPlanForPrompt(taskDetailPlan),
+      });
+      if (s) parts.push(s);
     }
 
-    lines.push(``);
-
-    // 前置展示 Opus 的整体审查评价（完整传递，不截断）
+    // 条件 section：审查摘要
     if (auditSummary) {
-      lines.push(
-        `## Code Review Summary`,
-        `The senior reviewer (Opus) provided this overall assessment:`,
-        ``,
-        `> ${auditSummary}`,
-        ``,
-        `Based on this assessment, the following specific issues need to be fixed:`,
-        ``,
-      );
+      const s = ps.tryRender('orchestrator.fix.audit_summary', {
+        AUDIT_SUMMARY: auditSummary,
+      });
+      if (s) parts.push(s);
     }
 
-    lines.push(
-      `## Audit Issues to Fix`,
-      issueList,
-      ``,
-      `## Instructions`,
-      `1. Read each issue carefully`,
-      `2. Fix only the issues listed above — do not add new features or refactor unrelated code`,
-      `3. For each fix, make the minimal change necessary`,
-    );
+    // 固定 section：指令（含 issue 列表）
+    const instr = ps.tryRender('orchestrator.fix.instructions', { ISSUE_LIST: issueList });
+    if (instr) parts.push(instr);
 
+    // 条件 section：验证命令
     if (verifyCommands.length > 0) {
-      lines.push(
-        `4. **After all fixes, run these verification commands** to ensure nothing is broken:`,
-      );
-      verifyCommands.forEach(cmd => lines.push(`   - \`${cmd}\``));
-      lines.push(
-        `5. If any verification command fails, fix the new errors before committing`,
-        `6. Commit your fixes only when all verification commands pass`,
-      );
+      const cmds = verifyCommands.map(cmd => `   - \`${cmd}\``).join('\n');
+      const s = ps.tryRender('orchestrator.fix.verify_section', { VERIFY_COMMANDS: cmds });
+      if (s) parts.push(s);
     } else {
-      lines.push(
-        `4. **Verify the code works** — detect the project's build system (package.json, Makefile, pyproject.toml, etc.) and run the appropriate build and test commands`,
-        `5. If any build or test fails after your fix, fix those errors too before committing`,
-        `6. Commit your fixes only when build and tests pass`,
-      );
+      const s = ps.tryRender('orchestrator.fix.verify_fallback', {});
+      if (s) parts.push(s);
     }
 
-    lines.push(
-      ``,
-      `## CRITICAL Rules`,
-      `- Only fix "error" severity issues — ignore warnings`,
-      `- Do not modify code unrelated to the listed issues`,
-      `- If an issue is unclear or unfixable, skip it and note why in a comment`,
-      `- **You MUST run build and test commands to verify your fixes** — do not just assume the code compiles`,
-      `- After fixing, the code should be in a state that would pass the same audit`,
-    );
+    // 固定 section：关键规则
+    const rules = ps.tryRender('orchestrator.fix.critical_rules', {});
+    if (rules) parts.push(rules);
 
-    return lines.join('\n');
+    return parts.join('\n\n');
   }
 
   private async onTaskCompleted(goalId: string, taskId: string, usage?: ChatUsageResult): Promise<void> {
@@ -2186,6 +2018,7 @@ export class GoalOrchestrator {
         triggerTaskId,
         feedback,
         completedDiffStats,
+        promptService: this.deps.promptService,
       };
 
       const result = await replanTasks(ctx);
@@ -2914,6 +2747,7 @@ export class GoalOrchestrator {
           goalWorktreeDir,
           branchName,
           task.description,
+          this.deps.promptService,
         );
 
         if (resolution.resolved) {
@@ -2968,112 +2802,58 @@ export class GoalOrchestrator {
   }
 
   private buildTaskPrompt(task: GoalTask, state: GoalDriveState, taskDetailPlan?: TaskDetailPlan): string {
+    const ps = this.deps.promptService;
     const label = this.getTaskLabel(state, task.id);
-    const lines: string[] = [
-      `You are a subtask executor for Goal "${state.goalName}".`,
-      ``,
-      `## Current Task`,
-      `ID: ${label}`,
-      `Type: ${task.type}`,
-      `Description: ${task.description}`,
-    ];
+    const parts: string[] = [];
 
-    // 注入详细计划（来自 Goal body）
+    // 主模板
+    parts.push(ps.render('orchestrator.task', {
+      GOAL_NAME: state.goalName,
+      TASK_LABEL: label,
+      TASK_TYPE: task.type,
+      TASK_DESCRIPTION: task.description,
+    }));
+
+    // 条件 section：详细计划
     if (taskDetailPlan) {
-      lines.push(``, formatDetailPlanForPrompt(taskDetailPlan));
-      lines.push(
-        ``,
-        `**IMPORTANT**: The detailed plan above comes from the goal planning phase. Follow it where applicable, but adapt to actual codebase constraints if needed.`,
-      );
+      const s = ps.tryRender('orchestrator.task.detail_plan', {
+        DETAIL_PLAN_TEXT: formatDetailPlanForPrompt(taskDetailPlan),
+      });
+      if (s) parts.push(s);
     }
 
-    // 依赖上下文：列出已完成的前置任务，帮助 executor 理解背景
+    // 条件 section：依赖
     if (task.depends.length > 0) {
-      const depInfos = task.depends.map(depId => {
+      const depList = task.depends.map(depId => {
         const dep = state.tasks.find(t => t.id === depId);
         return dep ? `  - ${this.getTaskLabel(state, dep.id)}: ${dep.description} (${dep.status})` : `  - ${depId}: (unknown)`;
-      });
-      lines.push(``, `## Dependencies (completed before this task)`, ...depInfos);
+      }).join('\n');
+      const s = ps.tryRender('orchestrator.task.dependencies', { DEP_LIST: depList });
+      if (s) parts.push(s);
     }
 
-    // 通用要求
-    lines.push(
-      ``,
-      `## Requirements`,
-      `1. Focus on completing the task above`,
-      `2. After implementation, **verify the code works** — detect the project's build system (package.json, Makefile, pyproject.toml, Cargo.toml, etc.) and run the appropriate build and test commands`,
-      `3. Fix any build or test failures before committing`,
-      `4. If you need user decisions, ask clearly`,
-      `5. Do not modify code unrelated to this task`,
-    );
+    // 固定 sections（tryRender 容错）
+    const req = ps.tryRender('orchestrator.task.requirements', {});
+    if (req) parts.push(req);
+    const fb = ps.tryRender('orchestrator.task.feedback_protocol', { TASK_ID: task.id });
+    if (fb) parts.push(fb);
 
-    // ── Feedback 协议 ──
-    lines.push(
-      ``,
-      `## Feedback Protocol`,
-      `When you encounter situations described below, write a feedback file and then **end your session**.`,
-      ``,
-      `**File path:** \`feedback/${task.id}.json\` (relative to working directory)`,
-      `**Format:**`,
-      '```json',
-      `{`,
-      `  "type": "replan" | "blocked" | "clarify",`,
-      `  "reason": "brief summary of why",`,
-      `  "details": {}  // optional, structured data depending on type`,
-      `}`,
-      '```',
-      ``,
-      `After writing the feedback file, you MUST \`git add\` and \`git commit\` it, then **stop working**. The orchestrator will read your feedback and decide the next action.`,
-    );
-
-    // ── 调研任务特殊规则 ──
+    // 条件 section：调研任务
     if (task.type === '调研') {
-      lines.push(
-        ``,
-        `## Research Task Rules`,
-        `This is a **research task**. When you finish your research:`,
-        `1. You **MUST** write a feedback file before ending`,
-        `2. Use \`type: "replan"\` with your findings in \`details\``,
-        `3. Example:`,
-        '```json',
-        `{`,
-        `  "type": "replan",`,
-        `  "reason": "Research completed — findings may affect task plan",`,
-        `  "details": {`,
-        `    "findings": "Your research conclusions here",`,
-        `    "recommendations": ["actionable suggestion 1", "suggestion 2"],`,
-        `    "affectedTasks": ["t3", "t4"]`,
-        `  }`,
-        `}`,
-        '```',
-        `4. Do NOT write implementation code — only research, document, and report back via feedback`,
-      );
+      const s = ps.tryRender('orchestrator.task.research_rules', { TASK_ID: task.id });
+      if (s) parts.push(s);
     }
 
-    // ── 阻塞触发场景 ──
-    lines.push(
-      ``,
-      `## When to Write Feedback`,
-      `Write a feedback file (and stop) if any of these occur:`,
-      `- **Blocked:** You hit a technical blocker you cannot resolve (missing API, wrong architecture, external dependency). Use \`type: "blocked"\`, describe the blocker in \`reason\`, and include attempted solutions in \`details\`.`,
-      `- **Needs Clarification:** The task description is ambiguous or you discover conflicting requirements. Use \`type: "clarify"\`, list your questions in \`details.questions\`.`,
-      `- **Scope Mismatch:** You realize the task requires changes far beyond its description, or should be split into multiple tasks. Use \`type: "replan"\`, describe the discovered scope in \`details\`.`,
-      `- **Dependency Issue:** A completed dependency task is incorrect or insufficient for your work. Use \`type: "blocked"\`, reference the dependency in \`details.dependencyId\`.`,
-    );
+    const wf = ps.tryRender('orchestrator.task.when_to_feedback', {});
+    if (wf) parts.push(wf);
 
-    // ── 占位任务引导 ──
+    // 条件 section：占位任务
     if (task.type === '占位') {
-      lines.push(
-        ``,
-        `## Placeholder Task`,
-        `This is a **placeholder task**. It exists as a structural marker in the task graph.`,
-        `- Placeholder tasks are normally NOT dispatched automatically.`,
-        `- If you are seeing this, the task was triggered manually or by an unusual condition.`,
-        `- **Do not write code.** Instead, write a \`type: "clarify"\` feedback asking the orchestrator why this task was dispatched, then stop.`,
-      );
+      const s = ps.tryRender('orchestrator.task.placeholder_rules', {});
+      if (s) parts.push(s);
     }
 
-    return lines.join('\n');
+    return parts.join('\n\n');
   }
 
   private findWorktreeDir(worktreeListOutput: string, branchName: string): string | null {

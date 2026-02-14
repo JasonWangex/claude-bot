@@ -8,6 +8,7 @@ import type { ClaudeClient } from '../../claude/client.js';
 import type { MessageHandler } from '../handlers.js';
 import type { MessageQueue } from '../message-queue.js';
 import type { DiscordBotConfig } from '../../types/index.js';
+import type { PromptConfigService } from '../../services/prompt-config-service.js';
 
 export interface CommandDeps {
   stateManager: StateManager;
@@ -16,4 +17,5 @@ export interface CommandDeps {
   config: DiscordBotConfig;
   messageHandler: MessageHandler;
   messageQueue: MessageQueue;
+  promptService: PromptConfigService;
 }

@@ -9,6 +9,7 @@
 
 import type { GoalDriveState, GoalTask, GoalTaskFeedback } from '../types/index.js';
 import type { Goal, IGoalTaskRepo, IGoalMetaRepo, IGoalCheckpointRepo } from '../types/repository.js';
+import type { PromptConfigService } from '../services/prompt-config-service.js';
 import { chatCompletion } from '../utils/llm.js';
 import { execGit } from './git-ops.js';
 import { logger } from '../utils/logger.js';
@@ -37,6 +38,7 @@ export interface ReplanContext {
   triggerTaskId: string;
   feedback: GoalTaskFeedback;
   completedDiffStats: Map<string, string>; // taskId → git diff --stat output
+  promptService: PromptConfigService;
 }
 
 /** 应用变更后的结果 */
@@ -737,112 +739,66 @@ export async function collectCompletedDiffStats(
 // ==================== Prompt 构建 ====================
 
 function buildReplanPrompt(ctx: ReplanContext): string {
-  const { state, goalMeta, triggerTaskId, feedback, completedDiffStats } = ctx;
+  const { state, goalMeta, triggerTaskId, feedback, completedDiffStats, promptService } = ctx;
 
-  const lines: string[] = [];
+  // 构建动态变量值
+  const goalBody = goalMeta?.body
+    ? `Description:\n${goalMeta.body.slice(0, 2000)}`
+    : '';
+  const completionCriteria = goalMeta?.completion
+    ? `Completion criteria: ${goalMeta.completion}`
+    : '';
 
-  // 1. 角色与任务说明
-  lines.push(
-    `You are a task replanner for a software development goal orchestrator.`,
-    `Your job is to analyze feedback from a subtask and produce a structured JSON plan update.`,
-    ``,
-  );
-
-  // 2. Goal 描述
-  lines.push(`## Goal`);
-  lines.push(`Name: ${state.goalName}`);
-  if (goalMeta?.body) {
-    lines.push(`Description:`);
-    lines.push(goalMeta.body.slice(0, 2000));
-  }
-  if (goalMeta?.completion) {
-    lines.push(`Completion criteria: ${goalMeta.completion}`);
-  }
-  lines.push(``);
-
-  // 3. 当前任务全景（含状态）
-  lines.push(`## Current Tasks`);
-  for (const task of state.tasks) {
+  // 当前任务列表
+  const currentTasks = state.tasks.map(task => {
     const deps = task.depends.length > 0 ? ` [depends: ${task.depends.join(', ')}]` : '';
     const phase = task.phase != null ? ` (phase ${task.phase})` : '';
-    lines.push(`- ${task.id}: [${task.status}] ${task.type} — ${task.description}${deps}${phase}`);
-  }
-  lines.push(``);
+    return `- ${task.id}: [${task.status}] ${task.type} — ${task.description}${deps}${phase}`;
+  }).join('\n');
 
-  // 4. 触发 replan 的原因和 feedback 内容
-  lines.push(`## Replan Trigger`);
-  lines.push(`Task: ${triggerTaskId}`);
-  lines.push(`Feedback type: ${feedback.type}`);
-  lines.push(`Reason: ${feedback.reason}`);
+  // Feedback details
+  let feedbackDetails = '';
   if (feedback.details) {
-    lines.push(`Details:`);
     const detailStr = typeof feedback.details === 'string'
       ? feedback.details
       : JSON.stringify(feedback.details, null, 2);
-    lines.push(detailStr.slice(0, 3000));
+    feedbackDetails = `Details:\n${detailStr.slice(0, 3000)}`;
   }
-  lines.push(``);
 
-  // 5. 已完成任务的产出摘要
+  // 已完成任务 diff stats
+  let completedStats = '';
   if (completedDiffStats.size > 0) {
-    lines.push(`## Completed Task Output (git diff stat)`);
+    const statsLines: string[] = [`## Completed Task Output (git diff stat)`];
     for (const [taskId, stat] of completedDiffStats) {
       const task = state.tasks.find(t => t.id === taskId);
-      lines.push(`### ${taskId}: ${task?.description ?? 'unknown'}`);
-      lines.push('```');
-      lines.push(stat.slice(0, 500));
-      lines.push('```');
+      statsLines.push(`### ${taskId}: ${task?.description ?? 'unknown'}`);
+      statsLines.push('```');
+      statsLines.push(stat.slice(0, 500));
+      statsLines.push('```');
     }
-    lines.push(``);
+    completedStats = statsLines.join('\n') + '\n';
   }
 
-  // 6. 约束
-  lines.push(
-    `## Constraints`,
-    `1. **NEVER modify completed or skipped tasks** — their IDs: ${
-      state.tasks.filter(t => t.status === 'completed' || t.status === 'skipped').map(t => t.id).join(', ') || 'none'
-    }`,
-    `2. **NEVER modify running or dispatched tasks** — their IDs: ${
-      state.tasks.filter(t => t.status === 'running' || t.status === 'dispatched').map(t => t.id).join(', ') || 'none'
-    }`,
-    `3. New task IDs must not collide with existing IDs`,
-    `4. Dependencies must reference valid task IDs (existing or newly added)`,
-    `5. Keep changes minimal — only modify what the feedback necessitates`,
-    `6. Preserve the overall goal direction`,
-    ``,
-  );
+  const immutableCompleted = state.tasks
+    .filter(t => t.status === 'completed' || t.status === 'skipped')
+    .map(t => t.id).join(', ') || 'none';
+  const immutableRunning = state.tasks
+    .filter(t => t.status === 'running' || t.status === 'dispatched')
+    .map(t => t.id).join(', ') || 'none';
 
-  // 7. 输出格式
-  lines.push(
-    `## Output Format`,
-    `Respond with a single JSON object (no markdown fences, no extra text):`,
-    ``,
-    `{`,
-    `  "changes": [`,
-    `    { "action": "add", "task": { "id": "t8", "description": "...", "type": "代码", "depends": ["t3"], "phase": 3, "complexity": "simple" } },`,
-    `    { "action": "modify", "taskId": "t5", "updates": { "description": "new desc", "depends": ["t3", "t8"], "complexity": "complex" } },`,
-    `    { "action": "remove", "taskId": "t7", "reason": "superseded by t8" },`,
-    `    { "action": "reorder", "taskId": "t6", "newDepends": ["t8"], "newPhase": 3 }`,
-    `  ],`,
-    `  "reasoning": "Explanation of why these changes are needed",`,
-    `  "impactLevel": "low" | "medium" | "high"`,
-    `}`,
-    ``,
-    `Impact levels (assessed by affected pending tasks):`,
-    `- low: affects ≤1 pending task (description tweaks, dependency reorder)`,
-    `- medium: affects 2-3 pending tasks (task additions/removals, but overall direction unchanged)`,
-    `- high: affects ≥4 pending tasks, OR significant restructuring with both add+remove that changes direction`,
-    `Note: low/medium changes are auto-applied; high requires user approval.`,
-    ``,
-    `Valid task types: 代码, 手动, 调研, 占位`,
-    `Task granularity: split by **feature/functionality**, NOT by technical layer. One feature = one task, even if it touches frontend + backend + API.`,
-    `Valid complexity (for 代码 tasks): "simple" (straightforward logic, has patterns to follow) or "complex" (needs architecture design or cross-module coordination). Default: "simple"`,
-    `Valid actions: add, modify, remove, reorder`,
-    ``,
-    `If no changes are needed, return: { "changes": [], "reasoning": "...", "impactLevel": "low" }`,
-  );
-
-  return lines.join('\n');
+  return promptService.render('orchestrator.replan', {
+    GOAL_NAME: state.goalName,
+    GOAL_BODY: goalBody,
+    COMPLETION_CRITERIA: completionCriteria,
+    CURRENT_TASKS: currentTasks,
+    TRIGGER_TASK_ID: triggerTaskId,
+    FEEDBACK_TYPE: feedback.type,
+    FEEDBACK_REASON: feedback.reason,
+    FEEDBACK_DETAILS: feedbackDetails,
+    COMPLETED_DIFF_STATS: completedStats,
+    IMMUTABLE_COMPLETED: immutableCompleted,
+    IMMUTABLE_RUNNING: immutableRunning,
+  });
 }
 
 // ==================== 响应解析 ====================

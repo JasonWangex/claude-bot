@@ -256,3 +256,36 @@ export interface IKnowledgeBaseRepo {
   findByCategory(category: string): Promise<KnowledgeBase[]>;
   search(query: string): Promise<KnowledgeBase[]>;
 }
+
+// ==================== Prompt 配置 ====================
+
+/** Prompt 配置（运行时类型） */
+export interface PromptConfig {
+  key: string;
+  category: 'skill' | 'orchestrator';
+  name: string;
+  description: string | null;
+  template: string;
+  variables: string[];         // 解析后的变量列表
+  parentKey: string | null;
+  sortOrder: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * Prompt 配置仓库
+ *
+ * 管理 prompt 模板。
+ * 主键: key
+ */
+export interface IPromptConfigRepo {
+  get(key: string): Promise<PromptConfig | null>;
+  getAll(): Promise<PromptConfig[]>;
+  save(config: PromptConfig): Promise<void>;
+  delete(key: string): Promise<boolean>;
+
+  // —— 查询 ——
+  findByCategory(category: 'skill' | 'orchestrator'): Promise<PromptConfig[]>;
+  findChildren(parentKey: string): Promise<PromptConfig[]>;
+}
