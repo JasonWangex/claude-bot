@@ -47,7 +47,7 @@ export async function registerSlashCommands(token: string, applicationId: string
 }
 
 const GENERAL_CMDS = new Set(['login', 'start', 'help', 'status']);
-const TASK_CMDS = new Set(['task', 'close', 'info', 'cd']);
+const TASK_CMDS = new Set(['close', 'info', 'cd']);
 const SESSION_CMDS = new Set(['clear', 'compact', 'rewind', 'plan', 'stop', 'attach']);
 const MODEL_CMDS = new Set(['model']);
 const DEV_CMDS = new Set(['qdev', 'idea', 'commit', 'merge']);

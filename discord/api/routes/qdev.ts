@@ -18,6 +18,15 @@ import { forkTaskCore } from '../../utils/fork-task.js';
 import { generateBranchName } from '../../utils/git-utils.js';
 import { generateTopicTitle } from '../../utils/llm.js';
 import { logger } from '../../utils/logger.js';
+import { TaskRepo } from '../../db/repo/task-repo.js';
+import { getDb } from '../../db/index.js';
+
+// 模块级 lazy init（同 tasks.ts 中 getInteractionRepo 模式）
+let taskRepo: TaskRepo | null = null;
+function getTaskRepo(): TaskRepo {
+  if (!taskRepo) taskRepo = new TaskRepo(getDb());
+  return taskRepo;
+}
 
 export const qdev: RouteHandler = async (req, res, params, deps) => {
   const guildId = requireAuth(res);
@@ -73,6 +82,19 @@ export const qdev: RouteHandler = async (req, res, params, deps) => {
       client: deps.client,
       worktreesDir: deps.config.worktreesDir,
     }, threadTitle);
+
+    // 3b. 保存 task 到数据库（goal_id=null 表示独立任务）
+    const repo = getTaskRepo();
+    await repo.save({
+      id: forkResult.threadId,       // channel ID 作为 task ID
+      description,
+      type: '代码',
+      depends: [],
+      status: 'dispatched',
+      branchName: forkResult.branchName,
+      threadId: forkResult.threadId,  // channel_id
+      dispatchedAt: Date.now(),
+    }, null);  // goalId = null（独立任务）
 
     // 4. 发送任务描述到新 channel
     const newChannel = await deps.client.channels.fetch(forkResult.threadId);

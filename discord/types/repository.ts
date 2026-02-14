@@ -11,11 +11,14 @@ import type {
   GuildState,
   GoalDriveState,
   GoalDriveStatus,
+  Task,
+  TaskStatus,
   GoalTask,
   GoalTaskStatus,
   GoalCheckpoint,
   Channel,
   ClaudeSession,
+  ChatUsageResult,
 } from './index.js';
 
 // ==================== 新增实体类型 ====================
@@ -148,21 +151,43 @@ export interface IGoalMetaRepo {
 }
 
 /**
+ * Task 仓库
+ *
+ * 管理独立 Task 和 Goal 子任务的统一仓库。
+ * 主键: taskId (全局唯一)
+ * goalId 为可选字段（null 表示独立任务，如 qdev）
+ */
+export interface ITaskRepo {
+  // —— CRUD（taskId 为主键）——
+  getById(taskId: string): Promise<Task | null>;
+  save(task: Task, goalId?: string | null): Promise<void>;
+  saveAll(tasks: Task[], goalId?: string | null): Promise<void>;
+  delete(taskId: string): Promise<boolean>;
+
+  // —— Goal 维度查询 ——
+  getAllByGoal(goalId: string): Promise<Task[]>;
+  deleteAllByGoal(goalId: string): Promise<void>;
+  findByStatus(goalId: string, status: TaskStatus): Promise<Task[]>;
+
+  // —— 全局查询 ——
+  findByChannelId(channelId: string): Promise<{ goalId: string | null; task: Task } | null>;
+
+  // —— 聚合 ——
+  getGoalUsageTotals(goalId: string): ChatUsageResult;
+}
+
+/**
  * GoalTask 仓库
+ *
+ * @deprecated Use ITaskRepo instead
  *
  * 管理 Goal 下的子任务。
  * 复合键: (goalId, taskId)
  */
-export interface IGoalTaskRepo {
+export interface IGoalTaskRepo extends ITaskRepo {
+  /** @deprecated Use getById(taskId) instead */
   get(goalId: string, taskId: string): Promise<GoalTask | null>;
-  getAllByGoal(goalId: string): Promise<GoalTask[]>;
-  save(goalId: string, task: GoalTask): Promise<void>;
-  saveAll(goalId: string, tasks: GoalTask[]): Promise<void>;
-  delete(goalId: string, taskId: string): Promise<boolean>;
-  deleteAllByGoal(goalId: string): Promise<void>;
-
-  // —— 查询 ——
-  findByStatus(goalId: string, status: GoalTaskStatus): Promise<GoalTask[]>;
+  /** @deprecated Use findByChannelId(channelId) instead */
   findByThreadId(threadId: string): Promise<{ goalId: string; task: GoalTask } | null>;
 }
 
