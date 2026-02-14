@@ -1,0 +1,19 @@
+{
+  "verdict": "fail",
+  "summary": "删除 migration 005 导致版本号不连续 (4→6)，migrate.ts 的连续性校验会抛出错误，66 个测试失败。不能简单删除 migration 文件，需要保留一个空的 version 5 占位 migration 或修改校验逻辑。其余代码变更（repo、executor、API、前端、类型）清理完整正确。",
+  "verifyCommands": ["npx vitest run"],
+  "issues": [
+    {
+      "severity": "error",
+      "file": "discord/db/index.ts",
+      "line": 27,
+      "description": "从 allMigrations 数组中移除了 migration005，导致版本号从 [1,2,3,4,6,7,8,9,10,11] 不连续。migrate.ts:38-43 的校验逻辑 `sorted[i].version !== i + 1` 会在 index=4 时期望 version=5 但得到 6，抛出 'Migration 版本号不连续: 期望 5，得到 6 (add_message_count)'。测试结果：66 failed / 52 passed。修复方案：不要删除 migration005 文件，而是将其 up() 改为空操作（保留 CREATE TABLE IF NOT EXISTS 或纯空函数），保持版本号连续。或者新增一个 version=5 的 no-op migration 占位。"
+    },
+    {
+      "severity": "error",
+      "file": "discord/db/repo/__tests__/test-helpers.ts",
+      "line": 17,
+      "description": "test-helpers 的 allMigrations 数组同样跳过了 migration005，版本号不连续，导致所有使用 createTestDb() 的测试全部失败。修复方式需与 db/index.ts 一致。"
+    }
+  ]
+}
