@@ -56,12 +56,12 @@ async function handleGoal(
   if (!requireThread(interaction)) return;
 
   const guildId = interaction.guildId!;
-  const threadId = interaction.channelId;
+  const channelId = interaction.channelId;
   const text = interaction.options.getString('text') || '';
   const newSession = interaction.options.getBoolean('new_session') ?? false;
   const { stateManager, client, config, messageHandler, messageQueue } = deps;
 
-  const session = stateManager.getSession(guildId, threadId);
+  const session = stateManager.getSession(guildId, channelId);
   if (!session) {
     await interaction.reply({ content: 'No session found for this thread.', ephemeral: true });
     return;
@@ -81,7 +81,7 @@ async function handleGoal(
       const allGoals = [...collectingGoals, ...plannedGoals, ...processingGoals, ...blockingGoals];
 
       if (allGoals.length === 0) {
-        await messageQueue.send(threadId, 'No active goals found.', {
+        await messageQueue.send(channelId, 'No active goals found.', {
           embedColor: EmbedColors.GRAY,
           priority: 'high',
         });
@@ -119,7 +119,7 @@ async function handleGoal(
       }
 
       await messageQueue.send(
-        threadId,
+        channelId,
         `**Goals** (${allGoals.length} active)\n\n${description}`,
         {
           components: rows as any,
@@ -129,7 +129,7 @@ async function handleGoal(
       );
     } catch (err: any) {
       logger.error('goal list mode failed:', err.message);
-      await messageQueue.sendLong(threadId, `goal query failed: ${err.message}`).catch(() => {});
+      await messageQueue.sendLong(channelId, `goal query failed: ${err.message}`).catch(() => {});
     }
     return;
   }
@@ -150,11 +150,11 @@ async function handleGoal(
 
   if (!newSession) {
     // 有参数，当前 session：转发给 Claude
-    const prompt = promptTemplate.replace('{{THREAD_ID}}', threadId);
+    const prompt = promptTemplate.replace('{{THREAD_ID}}', channelId);
     await interaction.reply(`Goal: ${text}...`);
-    messageHandler.handleBackgroundChat(guildId, threadId, prompt).catch((err) => {
+    messageHandler.handleBackgroundChat(guildId, channelId, prompt).catch((err) => {
       logger.error('goal failed:', err.message);
-      messageQueue.sendLong(threadId, `goal failed: ${err.message}`).catch(() => {});
+      messageQueue.sendLong(channelId, `goal failed: ${err.message}`).catch(() => {});
     });
     return;
   }
@@ -174,8 +174,8 @@ async function handleGoal(
 
     // 2. 获取 root session
     await interaction.editReply(`Branch: \`${branchName}\`\nCreating worktree and thread...`);
-    const rootSession = stateManager.getRootSession(guildId, threadId);
-    const parentThreadId = rootSession?.threadId ?? threadId;
+    const rootSession = stateManager.getRootSession(guildId, channelId);
+    const parentChannelId = rootSession?.channelId ?? channelId;
 
     // 3. 从当前 channel 的 parentId 获取 Category
     const channel = interaction.channel;
@@ -192,15 +192,16 @@ async function handleGoal(
     }
 
     // 4. Fork: 创建 worktree + Text Channel + session
-    const forkResult = await forkTaskCore(guildId, parentThreadId, branchName, categoryId, {
+    const forkResult = await forkTaskCore(guildId, parentChannelId, branchName, categoryId, {
       stateManager,
       client,
       worktreesDir: config.worktreesDir,
+      channelService: deps.channelService,
     }, threadTitle);
 
     // 5. 发送 goal 描述到新 channel
     await interaction.editReply(`Branch: \`${branchName}\`\nSending goal to new thread...`);
-    const newChannel = await client.channels.fetch(forkResult.threadId);
+    const newChannel = await client.channels.fetch(forkResult.channelId);
     if (newChannel && newChannel.isTextBased() && 'send' in newChannel) {
       const descEmbed = new EmbedBuilder()
         .setColor(EmbedColors.PURPLE)
@@ -209,8 +210,8 @@ async function handleGoal(
     }
 
     // 6. 在新 session 中触发 goal skill（注入新 channel 的 thread ID）
-    const prompt = promptTemplate.replace('{{THREAD_ID}}', forkResult.threadId);
-    messageHandler.handleBackgroundChat(guildId, forkResult.threadId, prompt).catch((err) => {
+    const prompt = promptTemplate.replace('{{THREAD_ID}}', forkResult.channelId);
+    messageHandler.handleBackgroundChat(guildId, forkResult.channelId, prompt).catch((err) => {
       logger.error('goal (new session) background chat failed:', err.message);
     });
 
@@ -218,7 +219,7 @@ async function handleGoal(
     await interaction.editReply(
       `**Goal session created**\n\n` +
       `Branch: \`${forkResult.branchName}\`\n` +
-      `Thread: <#${forkResult.threadId}>\n` +
+      `Thread: <#${forkResult.channelId}>\n` +
       `Working directory: \`${forkResult.cwd}\`\n\n` +
       `Claude is processing the goal in the new thread...`
     );

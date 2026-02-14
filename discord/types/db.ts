@@ -26,6 +26,7 @@ export type { GoalDriveStatus, GoalTaskStatus, GoalTaskType } from './index.js';
 
 // ================================================================
 // sessions 表 — 对应 Session 接口
+// @deprecated - 将被 ChannelRow + ClaudeSessionRow 替代（migration 010）
 // ================================================================
 
 export interface SessionRow {
@@ -33,7 +34,7 @@ export interface SessionRow {
   id: string;
   /** 用户自定义名称 */
   name: string;
-  /** Discord Channel ID */
+  /** Discord Channel ID (DB 列名仍为 thread_id) */
   thread_id: string;
   /** Discord Guild ID */
   guild_id: string;
@@ -57,7 +58,7 @@ export interface SessionRow {
   plan_mode: number;
   /** 用户选择的 Claude 模型 */
   model: string | null;
-  /** 父 Channel ID（fork 产生的子 channel） */
+  /** 父 Channel ID（fork 产生的子 channel，DB 列名仍为 parent_thread_id） */
   parent_thread_id: string | null;
   /** worktree 分支名 */
   worktree_branch: string | null;
@@ -86,6 +87,7 @@ export interface GuildRow {
 
 // ================================================================
 // archived_sessions 表 — 对应 ArchivedSession 接口
+// @deprecated - 将被 ChannelRow (status='archived') 替代（migration 010）
 // ================================================================
 
 export interface ArchivedSessionRow extends SessionRow {
@@ -151,8 +153,11 @@ export interface GoalRow {
 
 // ================================================================
 // goal_tasks 表 — 对应 GoalTask 接口
+// @deprecated - 已重命名为 TaskRow（migration 010）
+// Use TaskRow instead
 // ================================================================
 
+/** @deprecated Use TaskRow from migration 010 */
 export interface GoalTaskRow {
   /** 任务 ID，如 "t1", "t2" — Goal 内唯一。对外命名时带 goal seq 前缀如 "g2t1" */
   id: string;
@@ -175,7 +180,7 @@ export interface GoalTaskRow {
   /** git 分支名 */
   branch_name: string | null;
   /** 对应的 Discord Thread ID */
-  thread_id: string | null;
+  channel_id: string | null;
   /** 派发时间 (Unix ms) */
   dispatched_at: number | null;
   /** 完成时间 (Unix ms) */
@@ -206,8 +211,11 @@ export interface GoalTaskRow {
 
 // ================================================================
 // goal_task_deps 表 — GoalTask.depends 多对多关系
+// @deprecated - 已重命名为 TaskDepRow（migration 010）
+// Use TaskDepRow instead
 // ================================================================
 
+/** @deprecated Use TaskDepRow from migration 010 */
 export interface GoalTaskDepRow {
   /** 任务 ID (FOREIGN KEY → goal_tasks) */
   task_id: string;
@@ -346,6 +354,104 @@ export interface KnowledgeBaseRow {
   created_at: number;
   /** 更新时间 (Unix ms) */
   updated_at: number;
+}
+
+// ================================================================
+// channels 表
+// ================================================================
+
+export interface ChannelRow {
+  id: string;                    // Discord Channel ID (PK)
+  guild_id: string;
+  name: string;
+  cwd: string;
+  worktree_branch: string | null;
+  parent_channel_id: string | null;
+  status: 'active' | 'archived';
+  archived_at: number | null;
+  archived_by: string | null;
+  archive_reason: string | null;
+  message_count: number;
+  created_at: number;
+  last_message: string | null;
+  last_message_at: number | null;
+}
+
+// ================================================================
+// claude_sessions 表
+// ================================================================
+
+export interface ClaudeSessionRow {
+  id: string;                    // UUID (PK)
+  claude_session_id: string | null;
+  prev_claude_session_id: string | null;
+  channel_id: string | null;
+  model: string | null;
+  plan_mode: number;             // 0/1
+  status: 'active' | 'closed';
+  created_at: number;
+  closed_at: number | null;
+}
+
+// ================================================================
+// channel_session_links 表
+// ================================================================
+
+export interface ChannelSessionLinkRow {
+  channel_id: string;
+  claude_session_id: string;
+  linked_at: number;
+  unlinked_at: number | null;
+}
+
+// ================================================================
+// sync_cursors 表
+// ================================================================
+
+export interface SyncCursorRow {
+  source: string;
+  cursor: string;
+  updated_at: number;
+}
+
+// ================================================================
+// tasks 表（原 goal_tasks）
+// ================================================================
+
+export interface TaskRow {
+  id: string;                    // 全局唯一 PK
+  goal_id: string | null;       // nullable
+  description: string;
+  type: '代码' | '手动' | '调研' | '占位';
+  phase: number | null;
+  complexity: 'simple' | 'complex' | null;
+  pipeline_phase: string | null;
+  audit_retries: number;
+  status: string;
+  branch_name: string | null;
+  channel_id: string | null;    // 替代 thread_id
+  dispatched_at: number | null;
+  completed_at: number | null;
+  error: string | null;
+  merged: number;
+  notified_blocked: number;
+  feedback_json: string | null;
+  tokens_in: number | null;
+  tokens_out: number | null;
+  cache_read_in: number | null;
+  cache_write_in: number | null;
+  cost_usd: number | null;
+  duration_ms: number | null;
+}
+
+// ================================================================
+// task_deps 表（原 goal_task_deps）
+// ================================================================
+
+export interface TaskDepRow {
+  task_id: string;
+  depends_on_task_id: string;
+  goal_id: string | null;
 }
 
 // ================================================================

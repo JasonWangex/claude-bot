@@ -10,16 +10,18 @@ import { isGitRepo, getRepoName, createWorktree, removeWorktree } from './git-ut
 import { logger } from './logger.js';
 import { EmbedColors } from '../bot/message-queue.js';
 import type { StateManager } from '../bot/state.js';
+import type { ChannelService } from '../services/channel-service.js';
 
 export interface ForkTaskDeps {
   stateManager: StateManager;
   client: Client;
   worktreesDir: string;
+  channelService?: ChannelService;
 }
 
 export interface ForkTaskResult {
-  threadId: string;
-  threadName: string;
+  channelId: string;
+  channelName: string;
   branchName: string;
   cwd: string;
 }
@@ -29,7 +31,7 @@ export interface ForkTaskResult {
  */
 export async function forkTaskCore(
   guildId: string,
-  parentThreadId: string,
+  parentChannelId: string,
   branchName: string,
   categoryId: string,
   deps: ForkTaskDeps,
@@ -37,7 +39,7 @@ export async function forkTaskCore(
 ): Promise<ForkTaskResult> {
   const { stateManager, client, worktreesDir } = deps;
 
-  const session = stateManager.getSession(guildId, parentThreadId);
+  const session = stateManager.getSession(guildId, parentChannelId);
   if (!session) {
     throw new Error('Parent thread not found');
   }
@@ -53,7 +55,7 @@ export async function forkTaskCore(
   await mkdir(worktreesDir, { recursive: true });
   await createWorktree(session.cwd, worktreeDir, branchName);
 
-  const newThreadName = threadTitle || `${session.name}/${branchName}`;
+  const newChannelName = threadTitle || `${session.name}/${branchName}`;
 
   // 验证 Category 存在
   const category = await client.channels.fetch(categoryId);
@@ -65,7 +67,7 @@ export async function forkTaskCore(
   try {
     const guild = await client.guilds.fetch(guildId);
     textChannel = await guild.channels.create({
-      name: newThreadName.slice(0, 100),
+      name: newChannelName.slice(0, 100),
       type: ChannelType.GuildText,
       parent: categoryId,
       reason: `Fork task: ${branchName}`,
@@ -85,16 +87,24 @@ export async function forkTaskCore(
     throw err;
   }
 
-  const newThreadId = textChannel.id;
-  stateManager.getOrCreateSession(guildId, newThreadId, {
-    name: newThreadName,
+  const newChannelId = textChannel.id;
+  stateManager.getOrCreateSession(guildId, newChannelId, {
+    name: newChannelName,
     cwd: worktreeDir,
   });
-  stateManager.setSessionForkInfo(guildId, newThreadId, parentThreadId, branchName);
+  stateManager.setSessionForkInfo(guildId, newChannelId, parentChannelId, branchName);
+
+  // 同步到 channels 表
+  if (deps.channelService) {
+    await deps.channelService.ensureChannel(newChannelId, guildId, newChannelName, worktreeDir, {
+      parentChannelId: parentChannelId,
+      worktreeBranch: branchName,
+    });
+  }
 
   return {
-    threadId: newThreadId,
-    threadName: newThreadName,
+    channelId: newChannelId,
+    channelName: newChannelName,
     branchName,
     cwd: worktreeDir,
   };

@@ -80,8 +80,8 @@ async function handleClear(
   if (!requireThread(interaction)) return;
 
   const guildId = interaction.guildId!;
-  const threadId = interaction.channelId;
-  deps.stateManager.clearSessionClaudeId(guildId, threadId);
+  const channelId = interaction.channelId;
+  deps.stateManager.clearSessionClaudeId(guildId, channelId);
   await interaction.reply('Context cleared. Next message will start a new Claude session.');
 }
 
@@ -95,10 +95,10 @@ async function handleCompact(
   if (!requireThread(interaction)) return;
 
   const guildId = interaction.guildId!;
-  const threadId = interaction.channelId;
+  const channelId = interaction.channelId;
   const { stateManager, claudeClient } = deps;
 
-  const session = stateManager.getSession(guildId, threadId);
+  const session = stateManager.getSession(guildId, channelId);
   if (!session?.claudeSessionId) {
     await interaction.reply({ content: 'No active Claude context to compact.', ephemeral: true });
     return;
@@ -121,7 +121,7 @@ async function handleCompact(
   };
 
   try {
-    const lockKey = StateManager.threadLockKey(guildId, threadId);
+    const lockKey = StateManager.channelLockKey(guildId, channelId);
     await claudeClient.compact(session.claudeSessionId, session.cwd, lockKey, onProgress);
 
     let info = 'Context compacted';
@@ -147,9 +147,9 @@ async function handleRewind(
   if (!requireThread(interaction)) return;
 
   const guildId = interaction.guildId!;
-  const threadId = interaction.channelId;
+  const channelId = interaction.channelId;
 
-  const result = deps.stateManager.rewindSession(guildId, threadId);
+  const result = deps.stateManager.rewindSession(guildId, channelId);
   if (!result.success) {
     await interaction.reply({ content: result.reason || 'Cannot rewind', ephemeral: true });
     return;
@@ -168,10 +168,10 @@ async function handlePlan(
   if (!requireThread(interaction)) return;
 
   const guildId = interaction.guildId!;
-  const threadId = interaction.channelId;
+  const channelId = interaction.channelId;
   const message = interaction.options.getString('message', true);
 
-  deps.stateManager.setSessionPlanMode(guildId, threadId, true);
+  deps.stateManager.setSessionPlanMode(guildId, channelId, true);
 
   // TODO: Phase 5 — 将消息路由到 messageHandler.handleTextWithMode()
   await interaction.reply(`Plan mode enabled. Processing: ${message.slice(0, 100)}...`);
@@ -187,16 +187,16 @@ async function handleStop(
   if (!requireThread(interaction)) return;
 
   const guildId = interaction.guildId!;
-  const threadId = interaction.channelId;
+  const channelId = interaction.channelId;
   const { stateManager, claudeClient, messageHandler } = deps;
 
-  const session = stateManager.getSession(guildId, threadId);
+  const session = stateManager.getSession(guildId, channelId);
   if (!session) {
     await interaction.reply({ content: 'No session found.', ephemeral: true });
     return;
   }
 
-  const lockKey = StateManager.threadLockKey(guildId, threadId);
+  const lockKey = StateManager.channelLockKey(guildId, channelId);
   const followUpMessage = interaction.options.getString('message');
 
   if (followUpMessage) {
@@ -208,7 +208,7 @@ async function handleStop(
     }
     await interaction.reply(`Interrupting and sending: ${followUpMessage.slice(0, 100)}...`);
     // 新消息通过正常流程发送，会自动 acquireLock 等待进程退出后执行
-    messageHandler.sendChatByIds(guildId, threadId, followUpMessage).catch(err => {
+    messageHandler.sendChatByIds(guildId, channelId, followUpMessage).catch(err => {
       logger.error(`[/stop follow-up] error:`, err.message);
     });
   } else {
@@ -230,11 +230,11 @@ async function handleAttach(
   if (!requireThread(interaction)) return;
 
   const guildId = interaction.guildId!;
-  const threadId = interaction.channelId;
+  const channelId = interaction.channelId;
   const { stateManager, claudeClient } = deps;
-  const threadName = (interaction.channel && 'name' in interaction.channel ? interaction.channel.name : null) ?? `thread-${threadId}`;
+  const threadName = (interaction.channel && 'name' in interaction.channel ? interaction.channel.name : null) ?? `thread-${channelId}`;
 
-  const session = stateManager.getOrCreateSession(guildId, threadId, {
+  const session = stateManager.getOrCreateSession(guildId, channelId, {
     name: threadName,
     cwd: stateManager.getGuildDefaultCwd(guildId),
   });
@@ -254,13 +254,13 @@ async function handleAttach(
 
   // 检查是否有其他 thread 持有该 session
   const holder = stateManager.findSessionHolder(guildId, targetSessionId);
-  if (holder && holder.threadId === threadId) {
+  if (holder && holder.channelId === channelId) {
     await interaction.reply({ content: 'Already linked to this session.', ephemeral: true });
     return;
   }
 
   if (holder) {
-    const holderLockKey = StateManager.threadLockKey(guildId, holder.threadId);
+    const holderLockKey = StateManager.channelLockKey(guildId, holder.channelId);
     if (claudeClient.isRunning(holderLockKey)) {
       await interaction.reply({
         content: `Thread "${holder.name}" is currently using this session. Stop it first.`,
@@ -268,10 +268,10 @@ async function handleAttach(
       });
       return;
     }
-    stateManager.clearSessionClaudeId(guildId, holder.threadId);
+    stateManager.clearSessionClaudeId(guildId, holder.channelId);
   }
 
-  const currentLockKey = StateManager.threadLockKey(guildId, threadId);
+  const currentLockKey = StateManager.channelLockKey(guildId, channelId);
   if (claudeClient.isRunning(currentLockKey)) {
     await interaction.reply({
       content: 'Current thread has a running task. Stop it first.',
@@ -280,7 +280,7 @@ async function handleAttach(
     return;
   }
 
-  stateManager.setSessionClaudeId(guildId, threadId, targetSessionId);
+  stateManager.setSessionClaudeId(guildId, channelId, targetSessionId);
 
   let msg = `Linked to Claude Session: \`${targetSessionId.slice(0, 8)}...\``;
   if (holder) {

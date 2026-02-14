@@ -1,16 +1,25 @@
 {
   "verdict": "fail",
-  "summary": "TypeScript 编译通过，migration/类型/UPSERT/5处替换/内存同步均正确。但 save() 简化后不再写 message_history 表，导致 2 个 message history 测试失败——测试期望 save() 写入消息历史并读回，与新行为不匹配。",
-  "verifyCommands": [
-    "./node_modules/.bin/tsc --noEmit",
-    "./node_modules/.bin/vitest run discord/db/repo/__tests__/session-repo.test.ts"
-  ],
+  "summary": "Logger 多 Transport 架构实现正确（Logger 类 + createLogger 工厂 + ConsoleTransport + DiscordTransport），API 向后兼容，测试 8/8 通过，TSC 在包含所有本地改动时无新增错误。但核心实现文件全部未提交（unstaged/untracked），已提交的 discord.ts 引用了未提交代码，导致仅用已提交代码 TSC 编译失败。需要 git add + commit 所有实现文件。",
+  "verifyCommands": ["npx tsc --noEmit", "npx vitest run discord/utils/__tests__/logger.test.ts"],
   "issues": [
     {
       "severity": "error",
-      "file": "discord/db/repo/__tests__/session-repo.test.ts",
-      "line": 90,
-      "description": "save() 简化后不再写 message_history 表，但测试 'should save and retrieve message history'（L90）和 'should replace message history on save'（L108）仍期望 save() 写入消息历史。需要更新测试：改用 addMessageAndTrim() 写入消息，或改为验证 messageCount 字段而非 messageHistory 数组。"
+      "file": "discord/utils/logger.ts",
+      "line": 1,
+      "description": "核心实现文件全部未提交（unstaged/untracked），需要 git add + commit：(1) discord/utils/logger.ts — Logger 类 + createLogger 工厂方法（modified, unstaged）；(2) discord/utils/transports/ — console-transport.ts、discord-transport.ts、index.ts（untracked）；(3) discord/types/index.ts — botLogsChannelId 字段（modified, unstaged）；(4) discord/utils/config.ts — botLogsChannelId 配置读取（modified, unstaged）；(5) discord/utils/env.ts — getBotLogsChannelId 函数（modified, unstaged）；(6) discord/utils/__tests__/logger.test.ts（untracked）。已提交的 discord/bot/discord.ts 导入了 DiscordTransport 并使用 config.botLogsChannelId 和 logger.addTransport()，而这些导出均来自未提交文件，导致仅用已提交代码 TSC 报 3 个编译错误（TS2339 x2 + TS2339）。"
+    },
+    {
+      "severity": "warning",
+      "file": "discord/utils/transports/discord-transport.ts",
+      "line": 65,
+      "description": "潜在循环日志风险：MessageQueue（message-queue.ts:25）内部使用全局 logger，DiscordTransport.log() 调用 MessageQueue.send()。若 send() 失败，messageQueue 内的 catch 块调用 logger.error() → 再次触发 DiscordTransport.log() → 再次调用 send()。当前因异步 Promise 链不会造成栈溢出，但可能导致重复的失败日志消息。建议在 DiscordTransport 中加入防重入标志，或让 messageQueue 的错误处理使用 console.error 而非 logger。"
+    },
+    {
+      "severity": "warning",
+      "file": "discord/utils/env.ts",
+      "line": 102,
+      "description": "getBotLogsChannelId() 函数未被任何代码引用。config.ts 直接读取 process.env.BOT_LOGS_CHANNEL_ID，未使用该辅助函数。建议移除此死代码或在 config.ts 中改用它以保持与 getGeneralChannelId() 等函数的一致性。"
     }
   ]
 }

@@ -36,7 +36,7 @@ function rowToSession(row: SessionRow): Session {
   return {
     id: row.id,
     name: row.name,
-    threadId: row.thread_id,
+    channelId: row.thread_id,
     guildId: row.guild_id,
     claudeSessionId: row.claude_session_id ?? undefined,
     prevClaudeSessionId: row.prev_claude_session_id ?? undefined,
@@ -48,22 +48,15 @@ function rowToSession(row: SessionRow): Session {
     lastMessageAt: row.last_message_at ?? undefined,
     planMode: row.plan_mode === 1 ? true : false,
     model: row.model ?? undefined,
-    messageHistory: [],
     messageCount: row.message_count,
-    parentThreadId: row.parent_thread_id ?? undefined,
+    parentChannelId: row.parent_thread_id ?? undefined,
     worktreeBranch: row.worktree_branch ?? undefined,
   };
 }
 
 function rowToArchivedSession(row: ArchivedSessionRow): ArchivedSession {
-  // 从 JSON 恢复归档的 message history
-  let history: { role: 'user' | 'assistant'; text: string; timestamp: number }[] = [];
-  if (row.message_history_json) {
-    try { history = JSON.parse(row.message_history_json); } catch { /* ignore parse errors */ }
-  }
   return {
     ...rowToSession(row),
-    messageHistory: history,
     archivedAt: row.archived_at,
     archivedBy: row.archived_by ?? undefined,
     archiveReason: row.archive_reason ?? undefined,
@@ -74,7 +67,7 @@ function sessionToParams(session: Session): Record<string, unknown> {
   return {
     id: session.id,
     name: session.name,
-    thread_id: session.threadId,
+    thread_id: session.channelId,
     guild_id: session.guildId,
     claude_session_id: session.claudeSessionId ?? null,
     prev_claude_session_id: session.prevClaudeSessionId ?? null,
@@ -86,9 +79,9 @@ function sessionToParams(session: Session): Record<string, unknown> {
     last_message_at: session.lastMessageAt ?? null,
     plan_mode: session.planMode ? 1 : 0,
     model: session.model ?? null,
-    parent_thread_id: session.parentThreadId ?? null,
+    parent_thread_id: session.parentChannelId ?? null,
     worktree_branch: session.worktreeBranch ?? null,
-    message_count: session.messageCount ?? session.messageHistory.length,
+    message_count: session.messageCount,
   };
 }
 
@@ -121,17 +114,17 @@ export class SessionRepository implements ISessionRepo {
   private prepareStatements(): void {
     this.stmts = {
       getByKey: this.db.prepare(
-        `SELECT * FROM sessions WHERE guild_id = ? AND thread_id = ?`,
+        `SELECT * FROM _deprecated_sessions WHERE guild_id = ? AND thread_id = ?`,
       ),
 
       getAllByGuild: this.db.prepare(
-        `SELECT * FROM sessions WHERE guild_id = ?`,
+        `SELECT * FROM _deprecated_sessions WHERE guild_id = ?`,
       ),
 
-      getAll: this.db.prepare(`SELECT * FROM sessions`),
+      getAll: this.db.prepare(`SELECT * FROM _deprecated_sessions`),
 
       upsert: this.db.prepare(`
-        INSERT INTO sessions (
+        INSERT INTO _deprecated_sessions (
           id, name, thread_id, guild_id, claude_session_id, prev_claude_session_id,
           session_ids_json, prev_session_ids_json,
           cwd, created_at, last_message, last_message_at, plan_mode, model,
@@ -159,43 +152,43 @@ export class SessionRepository implements ISessionRepo {
       `),
 
       deleteByKey: this.db.prepare(
-        `DELETE FROM sessions WHERE guild_id = ? AND thread_id = ?`,
+        `DELETE FROM _deprecated_sessions WHERE guild_id = ? AND thread_id = ?`,
       ),
 
       deleteById: this.db.prepare(
-        `DELETE FROM sessions WHERE id = ?`,
+        `DELETE FROM _deprecated_sessions WHERE id = ?`,
       ),
 
       findByClaudeSession: this.db.prepare(
-        `SELECT * FROM sessions WHERE guild_id = ? AND claude_session_id = ?`,
+        `SELECT * FROM _deprecated_sessions WHERE guild_id = ? AND claude_session_id = ?`,
       ),
 
       findByParent: this.db.prepare(
-        `SELECT * FROM sessions WHERE guild_id = ? AND parent_thread_id = ?`,
+        `SELECT * FROM _deprecated_sessions WHERE guild_id = ? AND parent_thread_id = ?`,
       ),
 
       clearParentRef: this.db.prepare(
-        `UPDATE sessions SET parent_thread_id = NULL WHERE guild_id = ? AND parent_thread_id = ?`,
+        `UPDATE _deprecated_sessions SET parent_thread_id = NULL WHERE guild_id = ? AND parent_thread_id = ?`,
       ),
 
-      count: this.db.prepare(`SELECT COUNT(*) as cnt FROM sessions`),
+      count: this.db.prepare(`SELECT COUNT(*) as cnt FROM _deprecated_sessions`),
 
       updateLastMessage: this.db.prepare(
-        `UPDATE sessions SET last_message = ?, last_message_at = ? WHERE id = ?`,
+        `UPDATE _deprecated_sessions SET last_message = ?, last_message_at = ? WHERE id = ?`,
       ),
 
       getArchivedByKey: this.db.prepare(
-        `SELECT * FROM archived_sessions WHERE guild_id = ? AND thread_id = ?`,
+        `SELECT * FROM _deprecated_archived_sessions WHERE guild_id = ? AND thread_id = ?`,
       ),
 
       getAllArchivedByGuild: this.db.prepare(
-        `SELECT * FROM archived_sessions WHERE guild_id = ?`,
+        `SELECT * FROM _deprecated_archived_sessions WHERE guild_id = ?`,
       ),
 
-      getAllArchived: this.db.prepare(`SELECT * FROM archived_sessions`),
+      getAllArchived: this.db.prepare(`SELECT * FROM _deprecated_archived_sessions`),
 
       insertArchived: this.db.prepare(`
-        INSERT INTO archived_sessions (
+        INSERT INTO _deprecated_archived_sessions (
           id, name, thread_id, guild_id, claude_session_id, prev_claude_session_id,
           session_ids_json, prev_session_ids_json,
           cwd, created_at, last_message, last_message_at, plan_mode, model,
@@ -211,15 +204,15 @@ export class SessionRepository implements ISessionRepo {
       `),
 
       deleteArchived: this.db.prepare(
-        `DELETE FROM archived_sessions WHERE guild_id = ? AND thread_id = ?`,
+        `DELETE FROM _deprecated_archived_sessions WHERE guild_id = ? AND thread_id = ?`,
       ),
     };
   }
 
   // ==================== ISessionRepo CRUD ====================
 
-  async get(guildId: string, threadId: string): Promise<Session | null> {
-    const row = this.stmts.getByKey.get(guildId, threadId) as SessionRow | undefined;
+  async get(guildId: string, channelId: string): Promise<Session | null> {
+    const row = this.stmts.getByKey.get(guildId, channelId) as SessionRow | undefined;
     if (!row) return null;
     return rowToSession(row);
   }
@@ -233,8 +226,8 @@ export class SessionRepository implements ISessionRepo {
     this.stmts.upsert.run(sessionToParams(session));
   }
 
-  async delete(guildId: string, threadId: string): Promise<boolean> {
-    const result = this.stmts.deleteByKey.run(guildId, threadId);
+  async delete(guildId: string, channelId: string): Promise<boolean> {
+    const result = this.stmts.deleteByKey.run(guildId, channelId);
     return result.changes > 0;
   }
 
@@ -246,15 +239,15 @@ export class SessionRepository implements ISessionRepo {
     return rowToSession(row);
   }
 
-  async findByParentThreadId(guildId: string, parentThreadId: string): Promise<Session[]> {
-    const rows = this.stmts.findByParent.all(guildId, parentThreadId) as SessionRow[];
+  async findByParentChannelId(guildId: string, parentChannelId: string): Promise<Session[]> {
+    const rows = this.stmts.findByParent.all(guildId, parentChannelId) as SessionRow[];
     return rows.map((row) => rowToSession(row));
   }
 
   // ==================== ISessionRepo 归档 ====================
 
-  async archive(guildId: string, threadId: string, userId?: string, reason?: string): Promise<boolean> {
-    const row = this.stmts.getByKey.get(guildId, threadId) as SessionRow | undefined;
+  async archive(guildId: string, channelId: string, userId?: string, reason?: string): Promise<boolean> {
+    const row = this.stmts.getByKey.get(guildId, channelId) as SessionRow | undefined;
     if (!row) return false;
 
     const archiveTransaction = this.db.transaction(() => {
@@ -270,16 +263,16 @@ export class SessionRepository implements ISessionRepo {
       // 删除 sessions
       this.stmts.deleteById.run(row.id);
 
-      // 清除子 session 的 parentThreadId 引用
-      this.stmts.clearParentRef.run(guildId, threadId);
+      // 清除子 session 的 parentChannelId 引用
+      this.stmts.clearParentRef.run(guildId, channelId);
     });
 
     archiveTransaction();
     return true;
   }
 
-  async restore(guildId: string, threadId: string): Promise<boolean> {
-    const row = this.stmts.getArchivedByKey.get(guildId, threadId) as ArchivedSessionRow | undefined;
+  async restore(guildId: string, channelId: string): Promise<boolean> {
+    const row = this.stmts.getArchivedByKey.get(guildId, channelId) as ArchivedSessionRow | undefined;
     if (!row) return false;
 
     const restoreTransaction = this.db.transaction(() => {
@@ -305,15 +298,15 @@ export class SessionRepository implements ISessionRepo {
       });
 
       // 删除 archived_sessions 记录
-      this.stmts.deleteArchived.run(guildId, threadId);
+      this.stmts.deleteArchived.run(guildId, channelId);
     });
 
     restoreTransaction();
     return true;
   }
 
-  async getArchived(guildId: string, threadId: string): Promise<ArchivedSession | null> {
-    const row = this.stmts.getArchivedByKey.get(guildId, threadId) as ArchivedSessionRow | undefined;
+  async getArchived(guildId: string, channelId: string): Promise<ArchivedSession | null> {
+    const row = this.stmts.getArchivedByKey.get(guildId, channelId) as ArchivedSessionRow | undefined;
     if (!row) return null;
     return rowToArchivedSession(row);
   }
@@ -344,8 +337,8 @@ export class SessionRepository implements ISessionRepo {
     return rows.map(rowToArchivedSession);
   }
 
-  /** 清除子 session 的 parentThreadId 引用 */
-  clearParentRefs(guildId: string, parentThreadId: string): void {
-    this.stmts.clearParentRef.run(guildId, parentThreadId);
+  /** 清除子 session 的 parentChannelId 引用 */
+  clearParentRefs(guildId: string, parentChannelId: string): void {
+    this.stmts.clearParentRef.run(guildId, parentChannelId);
   }
 }

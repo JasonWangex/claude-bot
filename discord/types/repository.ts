@@ -11,9 +11,14 @@ import type {
   GuildState,
   GoalDriveState,
   GoalDriveStatus,
+  Task,
+  TaskStatus,
   GoalTask,
   GoalTaskStatus,
   GoalCheckpoint,
+  Channel,
+  ClaudeSession,
+  ChatUsageResult,
 } from './index.js';
 
 // ==================== 新增实体类型 ====================
@@ -74,24 +79,24 @@ export interface Idea {
 /**
  * Session 仓库
  *
- * 管理 Discord Thread 对应的会话，包括活跃会话和归档会话。
- * 复合键: (guildId, threadId)
+ * 管理 Discord Channel 对应的会话，包括活跃会话和归档会话。
+ * 复合键: (guildId, channelId)
  */
 export interface ISessionRepo {
   // —— CRUD ——
-  get(guildId: string, threadId: string): Promise<Session | null>;
+  get(guildId: string, channelId: string): Promise<Session | null>;
   getAll(guildId: string): Promise<Session[]>;
   save(session: Session): Promise<void>;
-  delete(guildId: string, threadId: string): Promise<boolean>;
+  delete(guildId: string, channelId: string): Promise<boolean>;
 
   // —— 查询 ——
   findByClaudeSessionId(guildId: string, claudeSessionId: string): Promise<Session | null>;
-  findByParentThreadId(guildId: string, parentThreadId: string): Promise<Session[]>;
+  findByParentChannelId(guildId: string, parentChannelId: string): Promise<Session[]>;
 
   // —— 归档 ——
-  archive(guildId: string, threadId: string, userId?: string, reason?: string): Promise<boolean>;
-  restore(guildId: string, threadId: string): Promise<boolean>;
-  getArchived(guildId: string, threadId: string): Promise<ArchivedSession | null>;
+  archive(guildId: string, channelId: string, userId?: string, reason?: string): Promise<boolean>;
+  restore(guildId: string, channelId: string): Promise<boolean>;
+  getArchived(guildId: string, channelId: string): Promise<ArchivedSession | null>;
   getAllArchived(guildId: string): Promise<ArchivedSession[]>;
 
   // —— 统计 ——
@@ -146,22 +151,42 @@ export interface IGoalMetaRepo {
 }
 
 /**
+ * Task 仓库
+ *
+ * 管理独立 Task 和 Goal 子任务的统一仓库。
+ * 主键: taskId (全局唯一)
+ * goalId 为可选字段（null 表示独立任务，如 qdev）
+ */
+export interface ITaskRepo {
+  // —— CRUD（taskId 为主键）——
+  getById(taskId: string): Promise<Task | null>;
+  save(task: Task, goalId?: string | null): Promise<void>;
+  saveAll(tasks: Task[], goalId?: string | null): Promise<void>;
+  delete(taskId: string): Promise<boolean>;
+
+  // —— Goal 维度查询 ——
+  getAllByGoal(goalId: string): Promise<Task[]>;
+  deleteAllByGoal(goalId: string): Promise<void>;
+  findByStatus(goalId: string, status: TaskStatus): Promise<Task[]>;
+
+  // —— 全局查询 ——
+  findByChannelId(channelId: string): Promise<{ goalId: string | null; task: Task } | null>;
+
+  // —— 聚合 ——
+  getGoalUsageTotals(goalId: string): ChatUsageResult;
+}
+
+/**
  * GoalTask 仓库
+ *
+ * @deprecated Use ITaskRepo instead
  *
  * 管理 Goal 下的子任务。
  * 复合键: (goalId, taskId)
  */
-export interface IGoalTaskRepo {
+export interface IGoalTaskRepo extends ITaskRepo {
+  /** @deprecated Use getById(taskId) instead */
   get(goalId: string, taskId: string): Promise<GoalTask | null>;
-  getAllByGoal(goalId: string): Promise<GoalTask[]>;
-  save(goalId: string, task: GoalTask): Promise<void>;
-  saveAll(goalId: string, tasks: GoalTask[]): Promise<void>;
-  delete(goalId: string, taskId: string): Promise<boolean>;
-  deleteAllByGoal(goalId: string): Promise<void>;
-
-  // —— 查询 ——
-  findByStatus(goalId: string, status: GoalTaskStatus): Promise<GoalTask[]>;
-  findByThreadId(threadId: string): Promise<{ goalId: string; task: GoalTask } | null>;
 }
 
 /**
@@ -255,4 +280,50 @@ export interface IKnowledgeBaseRepo {
   findByProject(project: string): Promise<KnowledgeBase[]>;
   findByCategory(category: string): Promise<KnowledgeBase[]>;
   search(query: string): Promise<KnowledgeBase[]>;
+}
+
+// ==================== 新表 Repository 接口（migration 010 引入）====================
+
+/**
+ * Channel 仓库
+ *
+ * 管理 Discord Channel 实体（替代 sessions 表中的 Channel 部分）。
+ * 主键: id (Discord Channel ID)
+ */
+export interface IChannelRepo {
+  get(channelId: string): Promise<Channel | null>;
+  getByGuild(guildId: string): Promise<Channel[]>;
+  getByGuildAndStatus(guildId: string, status: 'active' | 'archived'): Promise<Channel[]>;
+  save(channel: Channel): Promise<void>;
+  delete(channelId: string): Promise<boolean>;
+  archive(channelId: string, userId?: string, reason?: string): Promise<boolean>;
+  restore(channelId: string): Promise<boolean>;
+  count(status?: 'active' | 'archived'): Promise<number>;
+}
+
+/**
+ * ClaudeSession 仓库
+ *
+ * 管理 Claude CLI 会话实体（替代 sessions 表中的会话部分）。
+ * 主键: id (UUID)
+ */
+export interface IClaudeSessionRepo {
+  get(id: string): Promise<ClaudeSession | null>;
+  getByChannel(channelId: string): Promise<ClaudeSession[]>;
+  getActiveByChannel(channelId: string): Promise<ClaudeSession | null>;
+  findByClaudeSessionId(claudeSessionId: string): Promise<ClaudeSession | null>;
+  save(session: ClaudeSession): Promise<void>;
+  close(id: string): Promise<boolean>;
+}
+
+/**
+ * SyncCursor 仓库
+ *
+ * 管理同步游标（跟踪各数据源的同步进度）。
+ * 主键: source
+ */
+export interface ISyncCursorRepo {
+  get(source: string): Promise<string | null>;
+  set(source: string, cursor: string): Promise<void>;
+  delete(source: string): Promise<boolean>;
 }

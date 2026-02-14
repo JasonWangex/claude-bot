@@ -27,7 +27,7 @@ interface ActiveProcess {
   outputFile?: string;
   stderrFile?: string;
   guildId?: string;
-  threadId?: string;
+  channelId?: string;
   claudeSessionId?: string;
   cwd?: string;
   lastProgressText?: string;
@@ -52,6 +52,9 @@ export class ClaudeExecutor {
   private interruptContext: Map<string, { lastProgressText: string; toolUseCount: number }> = new Map();
   private processDir: string;
   private registryFile: string;
+
+  // Session sync callback (injected by bot)
+  onSessionSync?: (sessionId: string, channelId?: string, model?: string) => void;
 
   constructor(claudeCliPath: string = 'claude', commandTimeout: number = 300000, stallTimeout: number = 60000) {
     this.claudeCliPath = claudeCliPath;
@@ -160,7 +163,7 @@ export class ClaudeExecutor {
       this.activeProcesses.set(lockKey, {
         child, flags, timeoutHandle: null, killTimer: null,
         outputFile, stderrFile,
-        guildId: options.guildId, threadId: options.threadId,
+        guildId: options.guildId, channelId: options.channelId,
         cwd: options.cwd,
       });
 
@@ -453,6 +456,18 @@ export class ClaudeExecutor {
         // 解析 JSONL 写入 interaction_log
         if (archivedJsonlPath && lastSessionId) {
           this.processInteractionLog(archivedJsonlPath, lastSessionId);
+        }
+
+        // 同步到 claude_sessions 表
+        if (lastSessionId && this.onSessionSync) {
+          const model = resultEvent?.modelUsage
+            ? Object.keys(resultEvent.modelUsage)[0]
+            : undefined;
+          try {
+            this.onSessionSync(lastSessionId, active?.threadId, model);
+          } catch (e: any) {
+            logger.warn(`Session sync failed: ${e.message}`);
+          }
         }
 
         if (flags.aborted) {
@@ -790,7 +805,7 @@ export class ClaudeExecutor {
           outputFile: active.outputFile,
           stderrFile: active.stderrFile || '',
           guildId: active.guildId || '',
-          threadId: active.threadId || '',
+          channelId: active.channelId || '',
           lockKey,
           claudeSessionId: active.claudeSessionId,
           cwd: active.cwd,
@@ -853,7 +868,7 @@ export class ClaudeExecutor {
         logger.info(`Orphaned process PID=${entry.pid} already completed`);
         await onResult({
           guildId: entry.guildId,
-          threadId: entry.threadId,
+          channelId: entry.channelId,
           lockKey: entry.lockKey,
           claudeSessionId: parseResult.sessionId || entry.claudeSessionId,
           status: 'completed',
@@ -872,7 +887,7 @@ export class ClaudeExecutor {
         logger.warn(`Orphaned process PID=${entry.pid} died without result`);
         await onResult({
           guildId: entry.guildId,
-          threadId: entry.threadId,
+          channelId: entry.channelId,
           lockKey: entry.lockKey,
           status: 'failed',
         });
@@ -894,7 +909,7 @@ export class ClaudeExecutor {
         logger.info(`Orphaned process PID=${entry.pid} ${parseResult.resultEvent ? 'completed' : 'exited'}`);
         await onResult({
           guildId: entry.guildId,
-          threadId: entry.threadId,
+          channelId: entry.channelId,
           lockKey: entry.lockKey,
           claudeSessionId: parseResult.sessionId || entry.claudeSessionId,
           status: parseResult.resultEvent ? 'completed' : 'failed',
@@ -1000,6 +1015,19 @@ export class ClaudeExecutor {
     // 解析 JSONL 写入 interaction_log
     if (archivedJsonlPath && sessionId) {
       this.processInteractionLog(archivedJsonlPath, sessionId);
+    }
+
+    // 同步到 claude_sessions 表（重连场景）
+    if (sessionId && this.onSessionSync) {
+      const parseResult = this.parseOutputFile(entry.outputFile);
+      const model = parseResult.resultEvent?.modelUsage
+        ? Object.keys(parseResult.resultEvent.modelUsage)[0]
+        : undefined;
+      try {
+        this.onSessionSync(sessionId, entry.threadId, model);
+      } catch (e: any) {
+        logger.warn(`Session sync failed (reconnect): ${e.message}`);
+      }
     }
   }
 

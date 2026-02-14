@@ -6,6 +6,7 @@ import {
   Client,
   GatewayIntentBits,
   Events,
+  ChannelType,
 } from 'discord.js';
 import { StateManager } from './state.js';
 import { InteractionRegistry } from './interaction-registry.js';
@@ -15,19 +16,26 @@ import { ClaudeClient } from '../claude/client.js';
 import { DiscordBotConfig } from '../types/index.js';
 import { checkAuth } from './auth.js';
 import { logger } from '../utils/logger.js';
+import { DiscordTransport } from '../utils/transports/discord-transport.js';
 import { ApiServer } from '../api/server.js';
 import { GoalOrchestrator } from '../orchestrator/index.js';
 import { parseGoalButtonId, GOAL_MODAL_PREFIX, buildApproveWithModsModal } from '../orchestrator/goal-buttons.js';
 import { parseIdeaButtonId, buildIdeaAdvanceChoiceButtons } from './idea-buttons.js';
 import { initDb, getDb, closeDb } from '../db/index.js';
-import { GoalRepo, GoalTaskRepo, CheckpointRepo } from '../db/repo/index.js';
+import { GoalRepo, TaskRepo, CheckpointRepo } from '../db/repo/index.js';
 import { GoalMetaRepo } from '../db/goal-meta-repo.js';
 import { IdeaRepository } from '../db/idea-repo.js';
 import { SessionRepository } from '../db/repo/session-repo.js';
 import { GuildRepository } from '../db/repo/guild-repo.js';
+import { ChannelRepository } from '../db/repo/channel-repo.js';
+import { ClaudeSessionRepository } from '../db/repo/claude-session-repo.js';
+import { SyncCursorRepository } from '../db/repo/sync-cursor-repo.js';
+import { ChannelService } from '../services/channel-service.js';
 import { getAuthorizedGuildId, getGeneralChannelId } from '../utils/env.js';
 import { escapeMarkdown } from './message-utils.js';
 import { registerSlashCommands, routeCommand } from './commands/index.js';
+import { SessionSyncService } from '../sync/session-sync-service.js';
+import { join } from 'path';
 import { MODEL_OPTIONS, getModelLabel } from './commands/task.js';
 import type { CommandDeps } from './commands/types.js';
 
@@ -42,6 +50,8 @@ export class DiscordBot {
   private apiServer: ApiServer | null = null;
   private orchestrator: GoalOrchestrator | null = null;
   private cleanupInterval: NodeJS.Timeout | null = null;
+  private sessionSyncService: SessionSyncService;
+  private channelService: ChannelService | null = null;
 
   constructor(config: DiscordBotConfig) {
     this.config = config;
@@ -58,7 +68,12 @@ export class DiscordBot {
     const db = initDb();
     const sessionRepo = new SessionRepository(db);
     const guildRepo = new GuildRepository(db);
-    this.stateManager = new StateManager(config.defaultWorkDir, sessionRepo, guildRepo);
+    const channelRepo = new ChannelRepository(db);
+    const claudeSessionRepo = new ClaudeSessionRepository(db);
+    const syncCursorRepo = new SyncCursorRepository(db);
+
+    this.channelService = new ChannelService(channelRepo, claudeSessionRepo, syncCursorRepo);
+    this.stateManager = new StateManager(config.defaultWorkDir, sessionRepo, guildRepo, channelRepo, claudeSessionRepo);
     this.interactionRegistry = new InteractionRegistry();
     this.claudeClient = new ClaudeClient(
       config.claudeCliPath,
@@ -68,7 +83,19 @@ export class DiscordBot {
     );
     this.messageQueue = new MessageQueue(this.client);
     this.messageHandler = new MessageHandler(this.stateManager, this.claudeClient, this.interactionRegistry, this.messageQueue);
-    this.messageHandler.setErrorReporter((guildId, threadId, source, error) => this.sendErrorToGeneral(guildId, threadId, source, error));
+    this.messageHandler.setErrorReporter((guildId, channelId, source, error) => this.sendErrorToGeneral(guildId, channelId, source, error));
+
+    // 初始化 SessionSyncService
+    const claudeProjectsDir = join(process.env.HOME || '/tmp', '.claude', 'projects');
+    this.sessionSyncService = new SessionSyncService(db, claudeProjectsDir);
+
+    // 注入 executor 回调
+    this.claudeClient.setSessionSyncCallback((sessionId, channelId, model) => {
+      this.sessionSyncService.syncSession(sessionId, channelId, model);
+    });
+
+    // 配置全局 logger transports
+    this.setupLogger();
 
     this.registerHandlers();
 
@@ -79,6 +106,19 @@ export class DiscordBot {
     }, 60 * 60 * 1000);
   }
 
+  private setupLogger(): void {
+    // 如果配置了 Bot Logs Channel，添加 Discord Transport
+    // 注意：ConsoleTransport 已在 logger.ts 全局初始化时添加，此处不需要重复添加
+    if (this.config.botLogsChannelId) {
+      const discordTransport = new DiscordTransport({
+        messageQueue: this.messageQueue,
+        channelId: this.config.botLogsChannelId,
+        minLevel: 'info', // 只记录 info 及以上级别的日志到 Discord
+      });
+      logger.addTransport(discordTransport);
+    }
+  }
+
   private getCommandDeps(): CommandDeps {
     return {
       stateManager: this.stateManager,
@@ -87,6 +127,7 @@ export class DiscordBot {
       config: this.config,
       messageHandler: this.messageHandler,
       messageQueue: this.messageQueue,
+      channelService: this.channelService ?? undefined,
     };
   }
 
@@ -173,6 +214,42 @@ export class DiscordBot {
     this.client.on(Events.Error, (err) => {
       logger.error('Discord client error:', err);
     });
+
+    // Discord Channel 事件同步（同步到 channels 表）
+    this.client.on(Events.ChannelCreate, async (channel) => {
+      if (!channel.guild || !checkAuth(channel.guild.id)) return;
+      if (channel.type !== ChannelType.GuildText) return;
+      if (!this.channelService) return;
+      try {
+        await this.channelService.syncFromDiscord(channel);
+        logger.info(`Channel created: ${channel.name} (${channel.id})`);
+      } catch (err: any) {
+        logger.error('ChannelCreate sync error:', err);
+      }
+    });
+
+    this.client.on(Events.ChannelUpdate, async (oldChannel, newChannel) => {
+      if (newChannel.type !== ChannelType.GuildText) return;
+      if (!('guild' in newChannel) || !newChannel.guild || !checkAuth(newChannel.guild.id)) return;
+      if (!this.channelService) return;
+      try {
+        await this.channelService.syncFromDiscord(newChannel);
+        logger.info(`Channel updated: ${newChannel.name} (${newChannel.id})`);
+      } catch (err: any) {
+        logger.error('ChannelUpdate sync error:', err);
+      }
+    });
+
+    this.client.on(Events.ChannelDelete, async (channel) => {
+      if (!('guild' in channel) || !channel.guild || !checkAuth(channel.guild.id)) return;
+      if (!this.channelService) return;
+      try {
+        await this.channelService.archiveChannel(channel.id, undefined, 'Discord channel deleted');
+        logger.info(`Channel deleted: ${channel.id}`);
+      } catch (err: any) {
+        logger.error('ChannelDelete archive error:', err);
+      }
+    });
   }
 
   // ========== Component Interaction Handlers ==========
@@ -201,9 +278,9 @@ export class DiscordBot {
 
     // Thread 模型切换
     if (customId === 'model_select') {
-      const threadId = interaction.channelId;
+      const channelId = interaction.channelId;
       const model = selected === 'follow_default' ? undefined : selected;
-      this.stateManager.setSessionModel(guildId, threadId, model);
+      this.stateManager.setSessionModel(guildId, channelId, model);
       const label = model ? getModelLabel(model) : `${getModelLabel(this.stateManager.getGuildDefaultModel(guildId))} (follow default)`;
       await interaction.update({
         content: `Model set to: **${label}**`,
@@ -464,7 +541,7 @@ export class DiscordBot {
    */
   private async handleGoalDrivePrompt(interaction: any, goalId: string): Promise<void> {
     const guildId = interaction.guildId!;
-    const threadId = interaction.channelId;
+    const channelId = interaction.channelId;
 
     try {
       await interaction.update({ content: '正在准备推进 Goal...', components: [] }).catch(() => {});
@@ -493,11 +570,11 @@ export class DiscordBot {
       const bodyMatch = skillContent.match(/^---[\s\S]*?---\s*([\s\S]*)$/);
       const prompt = (bodyMatch ? bodyMatch[1] : skillContent)
         .replace('{{SKILL_ARGS}}', goal.name)
-        .replace('{{THREAD_ID}}', threadId);
+        .replace('{{THREAD_ID}}', channelId);
 
-      this.messageHandler.handleBackgroundChat(guildId, threadId, prompt).catch((err) => {
+      this.messageHandler.handleBackgroundChat(guildId, channelId, prompt).catch((err) => {
         logger.error('goal drive_prompt failed:', err.message);
-        this.messageQueue.sendLong(threadId, `goal drive_prompt failed: ${err.message}`).catch(() => {});
+        this.messageQueue.sendLong(channelId, `goal drive_prompt failed: ${err.message}`).catch(() => {});
       });
     } catch (err: any) {
       logger.error(`[DiscordBot] handleGoalDrivePrompt error: ${err.message}`);
@@ -518,7 +595,7 @@ export class DiscordBot {
 
     const { action, ideaId } = parsed;
     const guildId = interaction.guildId!;
-    const threadId = interaction.channelId;
+    const channelId = interaction.channelId;
 
     try {
       switch (action) {
@@ -572,9 +649,9 @@ export class DiscordBot {
           const prompt = (bodyMatch ? bodyMatch[1] : skillContent)
             .replace('{{SKILL_ARGS}}', `推进 Idea "${idea.name}" (project: ${idea.project}, id: ${idea.id}) 到开发`);
 
-          this.messageHandler.handleBackgroundChat(guildId, threadId, prompt).catch((err) => {
+          this.messageHandler.handleBackgroundChat(guildId, channelId, prompt).catch((err) => {
             logger.error('idea qdev failed:', err.message);
-            this.messageQueue.sendLong(threadId, `idea qdev failed: ${err.message}`).catch(() => {});
+            this.messageQueue.sendLong(channelId, `idea qdev failed: ${err.message}`).catch(() => {});
           });
           break;
         }
@@ -610,11 +687,11 @@ export class DiscordBot {
           const goalBodyMatch = goalSkillContent.match(/^---[\s\S]*?---\s*([\s\S]*)$/);
           const goalPrompt = (goalBodyMatch ? goalBodyMatch[1] : goalSkillContent)
             .replace('{{SKILL_ARGS}}', idea.name)
-            .replace('{{THREAD_ID}}', threadId);
+            .replace('{{THREAD_ID}}', channelId);
 
-          this.messageHandler.handleBackgroundChat(guildId, threadId, goalPrompt).catch((err) => {
+          this.messageHandler.handleBackgroundChat(guildId, channelId, goalPrompt).catch((err) => {
             logger.error('idea to goal failed:', err.message);
-            this.messageQueue.sendLong(threadId, `idea to goal failed: ${err.message}`).catch(() => {});
+            this.messageQueue.sendLong(channelId, `idea to goal failed: ${err.message}`).catch(() => {});
           });
           break;
         }
@@ -728,17 +805,40 @@ export class DiscordBot {
     // 启动消息队列
     this.messageQueue.start();
 
+    // 启动 Session 同步服务
+    this.sessionSyncService.start();
+
     const guildId = this.config.authorizedGuildId;
     await registerSlashCommands(this.config.discordToken, this.config.applicationId, guildId);
 
     await this.client.login(this.config.discordToken);
     logger.info('Discord Bot started');
 
+    // 全量同步 Discord Channels 到数据库
+    if (this.channelService && guildId) {
+      try {
+        const guild = await this.client.guilds.fetch(guildId);
+        await guild.channels.fetch(); // 填充缓存
+        const textChannels = guild.channels.cache.filter(c => c.type === ChannelType.GuildText);
+        let syncCount = 0;
+        for (const [, channel] of textChannels) {
+          await this.channelService.syncFromDiscord(channel);
+          syncCount++;
+        }
+        const db = getDb();
+        const syncCursorRepo = new SyncCursorRepository(db);
+        await syncCursorRepo.set('discord_channels', String(Date.now()));
+        logger.info(`Synced ${syncCount} Discord channels to database`);
+      } catch (err: any) {
+        logger.error('Failed to sync Discord channels:', err);
+      }
+    }
+
     // 启动 Orchestrator
     const db = getDb();
     const goalRepo = new GoalRepo(db);
     const goalMetaRepo = new GoalMetaRepo(db);
-    const goalTaskRepo = new GoalTaskRepo(db);
+    const taskRepo = new TaskRepo(db);
     const checkpointRepo = new CheckpointRepo(db);
     const orchestrator = new GoalOrchestrator({
       stateManager: this.stateManager,
@@ -749,7 +849,7 @@ export class DiscordBot {
       config: this.config,
       goalRepo,
       goalMetaRepo,
-      goalTaskRepo,
+      taskRepo,
       checkpointRepo,
     });
     this.orchestrator = orchestrator;
@@ -765,6 +865,8 @@ export class DiscordBot {
         mq: this.messageQueue,
         config: this.config,
         orchestrator,
+        sessionSyncService: this.sessionSyncService,
+        channelService: this.channelService ?? undefined,
       });
       await this.apiServer.start();
     }
@@ -775,7 +877,7 @@ export class DiscordBot {
 
   sendErrorToGeneral(
     guildId: string | undefined,
-    threadId: string | undefined,
+    channelId: string | undefined,
     source: string,
     error: any,
   ): void {
@@ -783,10 +885,10 @@ export class DiscordBot {
     const generalChannelId = getGeneralChannelId();
     if (!targetGuildId || !generalChannelId) return;
 
-    const threadInfo = threadId ? `Thread <#${threadId}>` : 'General';
+    const channelInfo = channelId ? `Channel <#${channelId}>` : 'General';
     const errMsg = (error?.message || String(error)).slice(0, 500);
     const text = `**Error** [${escapeMarkdown(source)}]\n` +
-      `Source: ${threadInfo}\n` +
+      `Source: ${channelInfo}\n` +
       `\`\`\`\n${errMsg}\n\`\`\``;
 
     this.messageQueue.send(generalChannelId, text, { embedColor: EmbedColors.RED }).catch((e: any) => {
@@ -800,6 +902,7 @@ export class DiscordBot {
       clearInterval(this.cleanupInterval);
       this.cleanupInterval = null;
     }
+    this.sessionSyncService.stop();
     this.messageQueue.stop();
     await this.messageQueue.drain(10000);
     if (this.apiServer) {

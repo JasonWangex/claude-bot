@@ -16,8 +16,8 @@ export const sendMessage: RouteHandler = async (req, res, params, deps) => {
   const guildId = requireAuth(res);
   if (!guildId) return;
 
-  const threadId = params.threadId;
-  const session = deps.stateManager.getSession(guildId, threadId);
+  const channelId = params.channelId;
+  const session = deps.stateManager.getSession(guildId, channelId);
   if (!session) {
     sendJson(res, 404, { ok: false, error: 'Task not found' });
     return;
@@ -31,7 +31,7 @@ export const sendMessage: RouteHandler = async (req, res, params, deps) => {
 
   try {
     // 1. 发送用户消息到 Discord Thread（可见）
-    const channel = await deps.client.channels.fetch(threadId);
+    const channel = await deps.client.channels.fetch(channelId);
     if (channel && channel.isTextBased() && 'send' in channel) {
       await (channel as any).send(body.text);
     }
@@ -43,18 +43,18 @@ export const sendMessage: RouteHandler = async (req, res, params, deps) => {
   // 2. 立即返回 202 Accepted
   sendJson(res, 202, {
     ok: true,
-    data: { status: 'accepted', thread_id: threadId },
+    data: { status: 'accepted', channel_id: channelId },
   });
 
   // 3. 后台执行 Claude
   (async () => {
     try {
-      logger.info(`[API] Background chat started for thread ${threadId}`);
-      await deps.messageHandler.handleBackgroundChat(guildId, threadId, body.text);
-      logger.info(`[API] Background chat completed for thread ${threadId}`);
+      logger.info(`[API] Background chat started for thread ${channelId}`);
+      await deps.messageHandler.handleBackgroundChat(guildId, channelId, body.text);
+      logger.info(`[API] Background chat completed for thread ${channelId}`);
     } catch (error: any) {
-      logger.error(`[API] Background chat failed for thread ${threadId}:`, error.message);
-      await deps.mq.sendLong(threadId, `Error: ${error.message}`, { silent: true }).catch(() => {});
+      logger.error(`[API] Background chat failed for thread ${channelId}:`, error.message);
+      await deps.mq.sendLong(channelId, `Error: ${error.message}`, { silent: true }).catch(() => {});
     }
   })();
 };

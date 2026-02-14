@@ -1,18 +1,25 @@
 {
   "verdict": "pass",
-  "summary": "Implementation correctly replaces JSONL/stderr file deletion with archival to data/sessions/<session_id>/. Both the main exit handler and cleanupOutputFiles (used by orphaned process recovery) are updated. File naming is preserved via basename(). renameSync is safe since source and destination are on the same filesystem (both under data/). Error handling is adequate with try/catch and logger warnings. The test file only tests fs primitives rather than the actual private method, which is a minor gap but acceptable.",
+  "summary": "Migration 010 correctly creates channels, claude_sessions, channel_session_links, sync_cursors tables and renames goal_tasks→tasks with nullable goal_id. Previous audit issue (SessionRepository referencing 'sessions' instead of '_deprecated_sessions') has been fixed (cb8e007). All 3 new repositories (ChannelRepository, ClaudeSessionRepository, SyncCursorRepository) are well-implemented with proper CRUD, upsert, and conversion logic. All 115 tests pass including 40 new tests across the 3 new repos. GoalTaskRepo correctly maps threadId↔channel_id at the DB boundary. Two minor warnings remain but are non-blocking.",
+  "verifyCommands": ["npx vitest run"],
   "issues": [
     {
       "severity": "warning",
-      "file": "discord/claude/executor.ts",
-      "line": 934,
-      "description": "When sessionId is empty (no session_id event received), archiveOutputFiles silently skips archival and the files remain on disk in data/processes/ forever. Previously unlinkSync would clean them up. Consider falling back to unlinkSync when sessionId is absent to avoid file accumulation."
+      "file": "discord/types/db.ts",
+      "line": 177,
+      "description": "GoalTaskRow still declares 'thread_id' but the actual tasks table column is 'channel_id' after migration 010. GoalTaskRepo works at runtime because it reads row.channel_id directly (bypassing the GoalTaskRow type), but this type mismatch could cause confusion. Consider updating GoalTaskRow or migrating callers to use TaskRow."
     },
     {
       "severity": "warning",
-      "file": "discord/claude/__tests__/executor-archive.test.ts",
-      "line": 41,
-      "description": "Test manually reimplements archive logic with renameSync rather than testing the actual ClaudeExecutor.archiveOutputFiles method. This means the test doesn't validate the real code path. Consider testing via a public method or exporting the method for testing."
+      "file": "discord/db/migrations/010_schema_restructure.ts",
+      "line": 200,
+      "description": "Migration inserts from both sessions and archived_sessions into claude_sessions without ON CONFLICT handling. If the same UUID id exists in both tables, the second INSERT will fail. Consider using INSERT OR IGNORE for the archived_sessions insertion, similar to how channels migration already does."
+    },
+    {
+      "severity": "warning",
+      "file": "discord/db/migrations/010_schema_restructure.ts",
+      "line": 238,
+      "description": "sync_cursors initial value uses ${Date.now()} in a template literal, meaning the timestamp is captured at module import time rather than migration execution time. This is a minor precision issue — the difference is typically negligible but worth noting."
     }
   ]
 }

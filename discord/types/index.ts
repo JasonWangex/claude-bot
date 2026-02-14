@@ -14,6 +14,7 @@ export type {
   IGuildRepo,
   IGoalRepo,
   IGoalMetaRepo,
+  ITaskRepo,
   IGoalTaskRepo,
   IGoalCheckpointRepo,
   IDevLogRepo,
@@ -24,7 +25,7 @@ export type {
 export interface Session {
   id: string;                // 本地 UUID
   name: string;              // 用户自定义名称
-  threadId: string;          // Discord Channel ID (Text Channel under Category)
+  channelId: string;         // Discord Channel ID (Text Channel under Category)
   guildId: string;           // Discord Guild ID
   claudeSessionId?: string;  // Claude CLI session_id (当前活跃)
   prevClaudeSessionId?: string; // 上一轮 session_id（用于 rewind）
@@ -45,13 +46,8 @@ export interface Session {
   lastMessageAt?: number;
   planMode?: boolean;        // 是否处于 plan mode 等待确认
   model?: string;            // 用户选择的 Claude 模型
-  messageHistory: Array<{    // 最近 50 条消息记录
-    role: 'user' | 'assistant';
-    text: string;
-    timestamp: number;
-  }>;
   messageCount: number;       // 消息历史条数（从 DB message_count 字段）
-  parentThreadId?: string;    // 父 Channel ID（fork 产生的子 channel）
+  parentChannelId?: string;   // 父 Channel ID（fork 产生的子 channel）
   worktreeBranch?: string;    // worktree 分支名（fork 创建的）
 }
 
@@ -223,7 +219,7 @@ export interface ProcessRegistryEntry {
   outputFile: string;
   stderrFile: string;
   guildId: string;
-  threadId: string;
+  channelId: string;
   lockKey: string;
   claudeSessionId?: string;
   cwd?: string;
@@ -233,7 +229,7 @@ export interface ProcessRegistryEntry {
 // 重连结果
 export interface ReconnectedResult {
   guildId: string;
-  threadId: string;
+  channelId: string;
   lockKey: string;
   claudeSessionId?: string;
   status: 'completed' | 'running' | 'failed';
@@ -260,7 +256,7 @@ export interface ClaudeOptions {
   forkSession?: boolean;
   model?: string;
   guildId?: string;
-  threadId?: string;
+  channelId?: string;
   images?: ImageAttachment[];
   appendSystemPrompt?: string;
 }
@@ -277,6 +273,7 @@ export interface DiscordBotConfig {
   accessToken: string;
   authorizedGuildId?: string;
   generalChannelId?: string;
+  botLogsChannelId?: string;
   projectsRoot: string;
   autoCreateProjectDir: boolean;
   topicDirNaming: 'kebab-case' | 'snake_case' | 'original';
@@ -291,41 +288,42 @@ export interface DiscordBotConfig {
 // ========== Goal Orchestrator ==========
 
 export type GoalDriveStatus = 'running' | 'paused' | 'completed' | 'failed';
-export type GoalTaskStatus = 'pending' | 'dispatched' | 'running' | 'completed' | 'failed' | 'blocked' | 'blocked_feedback' | 'paused' | 'cancelled' | 'skipped';
-export type GoalTaskType = '代码' | '手动' | '调研' | '占位';
+export type TaskStatus = 'pending' | 'dispatched' | 'running' | 'completed' | 'failed' | 'blocked' | 'blocked_feedback' | 'paused' | 'cancelled' | 'skipped';
+export type TaskType = '代码' | '手动' | '调研' | '占位';
 
 /** Feedback 文件内容结构（feedback/<taskId>.json） */
-export interface GoalTaskFeedback {
+export interface TaskFeedback {
   type: string;        // e.g. 'needs_revision' | 'question' | 'blocked'
   reason: string;      // 简短原因
   details?: string;    // 详细说明
 }
 
-export type GoalTaskComplexity = 'simple' | 'complex';
-export type GoalPipelinePhase = 'plan' | 'execute' | 'audit' | 'fix';
+export type TaskComplexity = 'simple' | 'complex';
+export type PipelinePhase = 'plan' | 'execute' | 'audit' | 'fix';
 
-export interface GoalTask {
+export interface Task {
   id: string;
+  goalId?: string | null;  // 关联 Goal（null 表示独立任务）
   description: string;
-  type: GoalTaskType;
+  type: TaskType;
   depends: string[];
   phase?: number;
 
   // 多模型流水线
-  complexity?: GoalTaskComplexity;   // 代码任务复杂度，Goal 创建时标注
-  pipelinePhase?: GoalPipelinePhase; // 当前阶段: 'plan' | 'execute' | 'audit' | 'fix'
-  auditRetries?: number;             // audit 重试计数（最多 2）
+  complexity?: TaskComplexity;   // 代码任务复杂度，Goal 创建时标注
+  pipelinePhase?: PipelinePhase; // 当前阶段: 'plan' | 'execute' | 'audit' | 'fix'
+  auditRetries?: number;         // audit 重试计数（最多 2）
 
   // 执行状态
-  status: GoalTaskStatus;
+  status: TaskStatus;
   branchName?: string;
-  threadId?: string;          // 对应的 Discord Thread ID
+  channelId?: string;         // 对应的 Discord Channel ID
   dispatchedAt?: number;
   completedAt?: number;
   error?: string;
   merged?: boolean;
   notifiedBlocked?: boolean;
-  feedback?: GoalTaskFeedback; // 来自 feedback/<taskId>.json 的反馈内容
+  feedback?: TaskFeedback;    // 来自 feedback/<taskId>.json 的反馈内容
 
   // Token/cost/time tracking（pipeline 各阶段累加）
   tokensIn?: number;
@@ -335,6 +333,20 @@ export interface GoalTask {
   costUsd?: number;
   durationMs?: number;
 }
+
+// ========== Deprecated aliases ==========
+/** @deprecated Use TaskStatus */
+export type GoalTaskStatus = TaskStatus;
+/** @deprecated Use TaskType */
+export type GoalTaskType = TaskType;
+/** @deprecated Use TaskFeedback */
+export type GoalTaskFeedback = TaskFeedback;
+/** @deprecated Use TaskComplexity */
+export type GoalTaskComplexity = TaskComplexity;
+/** @deprecated Use PipelinePhase */
+export type GoalPipelinePhase = PipelinePhase;
+/** @deprecated Use Task */
+export type GoalTask = Task;
 
 /** 待审批的 Replan 变更 */
 export interface PendingReplan {
@@ -367,14 +379,14 @@ export interface GoalDriveState {
   goalSeq: number;            // 短序号，用于子任务命名前缀（g1, g2, ...）
   goalName: string;
   goalBranch: string;
-  goalThreadId: string;       // 调度员 thread（用于通知用户）
+  goalChannelId: string;      // 调度员 channel（用于通知用户）
   baseCwd: string;
   status: GoalDriveStatus;
   createdAt: number;
   updatedAt: number;
   maxConcurrent: number;
 
-  tasks: GoalTask[];
+  tasks: Task[];
 
   /** 待用户审批的高影响 replan 变更（仅 impactLevel=high 时有值） */
   pendingReplan?: PendingReplan;
@@ -401,4 +413,39 @@ export interface ArchivedSession extends Session {
   archivedAt: number;
   archivedBy?: string;       // 归档操作者 user ID (string)
   archiveReason?: string;
+}
+
+// ================================================================
+// 新表类型（migration 010 引入）
+// ================================================================
+
+// Channel（Discord Text Channel 实体）
+export interface Channel {
+  id: string;               // Discord Channel ID
+  guildId: string;
+  name: string;
+  cwd: string;
+  worktreeBranch?: string;
+  parentChannelId?: string;
+  status: 'active' | 'archived';
+  archivedAt?: number;
+  archivedBy?: string;
+  archiveReason?: string;
+  messageCount: number;
+  createdAt: number;
+  lastMessage?: string;
+  lastMessageAt?: number;
+}
+
+// ClaudeSession（Claude Code CLI 会话实体）
+export interface ClaudeSession {
+  id: string;               // UUID
+  claudeSessionId?: string; // Claude CLI session_id
+  prevClaudeSessionId?: string;
+  channelId?: string;
+  model?: string;
+  planMode: boolean;
+  status: 'active' | 'closed';
+  createdAt: number;
+  closedAt?: number;
 }

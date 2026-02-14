@@ -3,7 +3,6 @@ import { Typography, Breadcrumb, Card, Descriptions, Spin, Space, Alert, Tabs } 
 import { BranchesOutlined, FolderOutlined, ClockCircleOutlined, RobotOutlined } from '@ant-design/icons';
 import { Link } from 'react-router';
 import { TaskTree } from '@/components/tasks/TaskTree';
-import { MessageHistory } from '@/components/tasks/MessageHistory';
 import { InteractionLog } from '@/components/tasks/InteractionLog';
 import { useTask } from '@/lib/hooks/use-tasks';
 import { formatDistanceToNow } from '@/lib/format';
@@ -11,10 +10,10 @@ import { formatDistanceToNow } from '@/lib/format';
 const { Title } = Typography;
 
 export default function TaskDetail() {
-  const { threadId } = useParams<{ threadId: string }>();
-  const { data: task, error } = useTask(threadId ?? null);
+  const { channelId } = useParams<{ channelId: string }>();
+  const { data: task, error } = useTask(channelId ?? null);
 
-  if (!threadId) return <Navigate to="/tasks" replace />;
+  if (!channelId) return <Navigate to="/tasks" replace />;
 
   if (error) {
     return <Alert message="加载失败" description={error.message} type="error" showIcon />;
@@ -64,12 +63,7 @@ export default function TaskDetail() {
           {
             key: 'interactions',
             label: '交互日志',
-            children: <InteractionLog threadId={threadId} />,
-          },
-          {
-            key: 'messages',
-            label: `消息历史 (${task.message_history.length})`,
-            children: <MessageHistory messages={task.message_history} />,
+            children: <InteractionLog channelId={channelId} />,
           },
           ...(task.children?.length ? [{
             key: 'children',

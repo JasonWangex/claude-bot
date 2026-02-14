@@ -61,9 +61,8 @@ export async function handleModelCommand(
     });
   } else {
     // Channel: 设置当前 channel 模型
-    const threadId = channelId;
-    const channelName = (interaction.channel && 'name' in interaction.channel ? interaction.channel.name : null) ?? `channel-${threadId}`;
-    const session = stateManager.getOrCreateSession(guildId, threadId, {
+    const channelName = (interaction.channel && 'name' in interaction.channel ? interaction.channel.name : null) ?? `channel-${channelId}`;
+    const session = stateManager.getOrCreateSession(guildId, channelId, {
       name: channelName,
       cwd: stateManager.getGuildDefaultCwd(guildId),
     });

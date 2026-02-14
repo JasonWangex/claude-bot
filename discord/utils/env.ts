@@ -95,3 +95,10 @@ export function getGeneralChannelId(): string | undefined {
 export function getGoalLogChannelId(): string | undefined {
   return process.env.GOAL_LOG_CHANNEL_ID || undefined;
 }
+
+/**
+ * 获取 Bot Logs Channel ID（用于全局 Bot 日志输出）
+ */
+export function getBotLogsChannelId(): string | undefined {
+  return process.env.BOT_LOGS_CHANNEL_ID || undefined;
+}

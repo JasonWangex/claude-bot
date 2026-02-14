@@ -51,7 +51,7 @@ export class ClaudeClient {
       permissionMode?: string;
       model?: string;
       guildId?: string;
-      threadId?: string;
+      channelId?: string;
       images?: import('../types/index.js').ImageAttachment[];
       sessionName?: string;
       worktreeBranch?: string;
@@ -108,7 +108,7 @@ export class ClaudeClient {
       permissionMode?: string;
       model?: string;
       guildId?: string;
-      threadId?: string;
+      channelId?: string;
       images?: import('../types/index.js').ImageAttachment[];
       sessionName?: string;
       worktreeBranch?: string;
@@ -117,9 +117,9 @@ export class ClaudeClient {
   ): Promise<ChatResult> {
     // 构造 Discord 上下文 system prompt
     let appendSystemPrompt: string | undefined;
-    if (options.threadId) {
+    if (options.channelId) {
       const lines = [
-        `Discord Thread ID: ${options.threadId}`,
+        `Discord Channel ID: ${options.channelId}`,
         `Session: ${options.sessionName || 'unknown'}`,
       ];
       if (options.worktreeBranch) lines.push(`Branch: ${options.worktreeBranch}`);
@@ -135,7 +135,7 @@ export class ClaudeClient {
       permissionMode: options.permissionMode,
       model: options.model,
       guildId: options.guildId,
-      threadId: options.threadId,
+      channelId: options.channelId,
       images: options.images,
       appendSystemPrompt,
     };
@@ -208,5 +208,9 @@ export class ClaudeClient {
 
   async verify(): Promise<boolean> {
     return this.executor.verify();
+  }
+
+  setSessionSyncCallback(cb: (sessionId: string, channelId?: string, model?: string) => void): void {
+    this.executor.onSessionSync = cb;
   }
 }

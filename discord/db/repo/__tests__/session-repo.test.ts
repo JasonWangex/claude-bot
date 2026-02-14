@@ -8,11 +8,10 @@ function makeSession(overrides: Partial<Session> = {}): Session {
   return {
     id: 'sess-001',
     name: 'Test Session',
-    threadId: 'thread-1',
+    channelId: 'thread-1',
     guildId: 'guild-1',
     cwd: '/home/test',
     createdAt: Date.now(),
-    messageHistory: [],
     messageCount: 0,
     ...overrides,
   };
@@ -42,7 +41,7 @@ describe('SessionRepository', () => {
       expect(result).not.toBeNull();
       expect(result!.id).toBe('sess-001');
       expect(result!.name).toBe('Test Session');
-      expect(result!.threadId).toBe('thread-1');
+      expect(result!.channelId).toBe('thread-1');
       expect(result!.guildId).toBe('guild-1');
       expect(result!.cwd).toBe('/home/test');
     });
@@ -60,7 +59,7 @@ describe('SessionRepository', () => {
         lastMessageAt: 1234567890,
         planMode: true,
         model: 'opus',
-        parentThreadId: 'parent-1',
+        parentChannelId: 'parent-1',
         worktreeBranch: 'feat/test',
       });
       await repo.save(session);
@@ -72,11 +71,11 @@ describe('SessionRepository', () => {
       expect(result!.lastMessageAt).toBe(1234567890);
       expect(result!.planMode).toBe(true);
       expect(result!.model).toBe('opus');
-      expect(result!.parentThreadId).toBe('parent-1');
+      expect(result!.parentChannelId).toBe('parent-1');
       expect(result!.worktreeBranch).toBe('feat/test');
     });
 
-    it('should upsert on conflict (same guild_id + thread_id)', async () => {
+    it('should upsert on conflict (same guild_id + channel_id)', async () => {
       await repo.save(makeSession({ name: 'v1' }));
       await repo.save(makeSession({ id: 'sess-001', name: 'v2', model: 'haiku' }));
 
@@ -86,45 +85,29 @@ describe('SessionRepository', () => {
     });
   });
 
-  describe('message history', () => {
-    it('should persist messageCount and return empty messageHistory (table dropped in migration 006)', async () => {
-      const session = makeSession({
-        messageHistory: [
-          { role: 'user', text: 'Hi', timestamp: Date.now() },
-          { role: 'assistant', text: 'Hello!', timestamp: Date.now() + 1 },
-        ],
-        messageCount: 2,
-      });
+  describe('message count', () => {
+    it('should persist messageCount (table dropped in migration 006)', async () => {
+      const session = makeSession({ messageCount: 2 });
       await repo.save(session);
 
       const result = await repo.get('guild-1', 'thread-1');
       expect(result!.messageCount).toBe(2);
-      // messageHistory 始终为空数组（message_history 表已废弃）
-      expect(result!.messageHistory).toHaveLength(0);
     });
 
-    it('should always return empty message history', async () => {
-      const now = Date.now();
-      await repo.save(makeSession({
-        messageHistory: [{ role: 'user', text: 'old', timestamp: now }],
-      }));
-      await repo.save(makeSession({
-        messageHistory: [
-          { role: 'user', text: 'new1', timestamp: now + 1 },
-          { role: 'assistant', text: 'new2', timestamp: now + 2 },
-        ],
-      }));
+    it('should update messageCount', async () => {
+      await repo.save(makeSession({ messageCount: 0 }));
+      await repo.save(makeSession({ messageCount: 5 }));
 
       const result = await repo.get('guild-1', 'thread-1');
-      expect(result!.messageHistory).toHaveLength(0);
+      expect(result!.messageCount).toBe(5);
     });
   });
 
   describe('getAll', () => {
     it('should return all sessions for a guild', async () => {
-      await repo.save(makeSession({ id: 's1', threadId: 't1' }));
-      await repo.save(makeSession({ id: 's2', threadId: 't2' }));
-      await repo.save(makeSession({ id: 's3', threadId: 't3', guildId: 'guild-2' }));
+      await repo.save(makeSession({ id: 's1', channelId: 't1' }));
+      await repo.save(makeSession({ id: 's2', channelId: 't2' }));
+      await repo.save(makeSession({ id: 's3', channelId: 't3', guildId: 'guild-2' }));
 
       const results = await repo.getAll('guild-1');
       expect(results).toHaveLength(2);
@@ -165,13 +148,13 @@ describe('SessionRepository', () => {
     });
   });
 
-  describe('findByParentThreadId', () => {
+  describe('findByParentChannelId', () => {
     it('should find child sessions', async () => {
-      await repo.save(makeSession({ id: 's1', threadId: 't1', parentThreadId: 'parent-1' }));
-      await repo.save(makeSession({ id: 's2', threadId: 't2', parentThreadId: 'parent-1' }));
-      await repo.save(makeSession({ id: 's3', threadId: 't3', parentThreadId: 'parent-2' }));
+      await repo.save(makeSession({ id: 's1', channelId: 't1', parentChannelId: 'parent-1' }));
+      await repo.save(makeSession({ id: 's2', channelId: 't2', parentChannelId: 'parent-1' }));
+      await repo.save(makeSession({ id: 's3', channelId: 't3', parentChannelId: 'parent-2' }));
 
-      const results = await repo.findByParentThreadId('guild-1', 'parent-1');
+      const results = await repo.findByParentChannelId('guild-1', 'parent-1');
       expect(results).toHaveLength(2);
     });
   });
@@ -229,8 +212,8 @@ describe('SessionRepository', () => {
 
   describe('getAllArchived', () => {
     it('should return all archived sessions for a guild', async () => {
-      await repo.save(makeSession({ id: 's1', threadId: 't1' }));
-      await repo.save(makeSession({ id: 's2', threadId: 't2' }));
+      await repo.save(makeSession({ id: 's1', channelId: 't1' }));
+      await repo.save(makeSession({ id: 's2', channelId: 't2' }));
       await repo.archive('guild-1', 't1');
       await repo.archive('guild-1', 't2');
 
@@ -245,16 +228,16 @@ describe('SessionRepository', () => {
     it('should return total session count', async () => {
       expect(await repo.count()).toBe(0);
 
-      await repo.save(makeSession({ id: 's1', threadId: 't1' }));
+      await repo.save(makeSession({ id: 's1', channelId: 't1' }));
       expect(await repo.count()).toBe(1);
 
-      await repo.save(makeSession({ id: 's2', threadId: 't2' }));
+      await repo.save(makeSession({ id: 's2', channelId: 't2' }));
       expect(await repo.count()).toBe(2);
     });
 
     it('should not count archived sessions', async () => {
-      await repo.save(makeSession({ id: 's1', threadId: 't1' }));
-      await repo.save(makeSession({ id: 's2', threadId: 't2' }));
+      await repo.save(makeSession({ id: 's1', channelId: 't1' }));
+      await repo.save(makeSession({ id: 's2', channelId: 't2' }));
       await repo.archive('guild-1', 't1');
 
       expect(await repo.count()).toBe(1);

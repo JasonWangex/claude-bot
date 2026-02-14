@@ -12,6 +12,7 @@ import DevLogDetail from '@/pages/DevLogDetail';
 import Ideas from '@/pages/Ideas';
 import KnowledgeBase from '@/pages/KnowledgeBase';
 import KBDetail from '@/pages/KBDetail';
+import Commands from '@/pages/Commands';
 import Login from '@/pages/Login';
 
 function RequireAuth() {
@@ -29,12 +30,13 @@ export default function App() {
             <Route path="goals" element={<Goals />} />
             <Route path="goals/:goalId" element={<GoalDetail />} />
             <Route path="tasks" element={<Tasks />} />
-            <Route path="tasks/:threadId" element={<TaskDetail />} />
+            <Route path="tasks/:channelId" element={<TaskDetail />} />
             <Route path="devlogs" element={<DevLogs />} />
             <Route path="devlogs/:devlogId" element={<DevLogDetail />} />
             <Route path="ideas" element={<Ideas />} />
             <Route path="kb" element={<KnowledgeBase />} />
             <Route path="kb/:kbId" element={<KBDetail />} />
+            <Route path="commands" element={<Commands />} />
           </Route>
         </Route>
       </Routes>

@@ -11,36 +11,40 @@ import { randomUUID } from 'crypto';
 import { readFileSync, renameSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { Session, GuildState, ArchivedSession } from '../types/index.js';
+import { Session, GuildState, ArchivedSession, Channel, ClaudeSession } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 import type { SessionRepository } from '../db/repo/session-repo.js';
 import type { GuildRepository } from '../db/repo/guild-repo.js';
+import type { ChannelRepository } from '../db/repo/channel-repo.js';
+import type { ClaudeSessionRepository } from '../db/repo/claude-session-repo.js';
 
 const MAX_HISTORY = 50;
 
 export class StateManager {
-  private sessions: Map<string, Session> = new Map();   // "guildId:threadId" → Session
+  private sessions: Map<string, Session> = new Map();   // "guildId:channelId" → Session
   private guilds: Map<string, GuildState> = new Map();   // guildId → GuildState
   private archivedSessions: Map<string, ArchivedSession> = new Map();
   private defaultWorkDir: string;
 
   /**
-   * 生成 thread 级别的固定 lockKey，用于 Claude 进程互斥
+   * 生成 channel 级别的固定 lockKey，用于 Claude 进程互斥
    */
-  static threadLockKey(guildId: string, threadId: string): string {
-    return `${guildId}:${threadId}`;
+  static channelLockKey(guildId: string, channelId: string): string {
+    return `${guildId}:${channelId}`;
   }
 
   constructor(
     defaultWorkDir: string,
     private sessionRepo?: SessionRepository,
     private guildRepo?: GuildRepository,
+    private channelRepo?: ChannelRepository,
+    private claudeSessionRepo?: ClaudeSessionRepository,
   ) {
     this.defaultWorkDir = defaultWorkDir;
   }
 
-  private threadKey(guildId: string, threadId: string): string {
-    return `${guildId}:${threadId}`;
+  private channelKey(guildId: string, channelId: string): string {
+    return `${guildId}:${channelId}`;
   }
 
   // ========== 加载 ==========
@@ -58,14 +62,14 @@ export class StateManager {
         const migratedSessions = this.sessionRepo.loadAllSessions();
         const migratedGuilds = this.guildRepo.loadAll();
         for (const s of migratedSessions) {
-          this.sessions.set(this.threadKey(s.guildId, s.threadId), s);
+          this.sessions.set(this.channelKey(s.guildId, s.channelId), s);
         }
         for (const g of migratedGuilds) {
           this.guilds.set(g.guildId, g);
         }
       } else {
         for (const s of sessions) {
-          this.sessions.set(this.threadKey(s.guildId, s.threadId), s);
+          this.sessions.set(this.channelKey(s.guildId, s.channelId), s);
         }
         for (const g of guilds) {
           this.guilds.set(g.guildId, g);
@@ -74,8 +78,17 @@ export class StateManager {
 
       const archived = this.sessionRepo.loadAllArchived();
       for (const a of archived) {
-        this.archivedSessions.set(this.threadKey(a.guildId, a.threadId), a);
+        this.archivedSessions.set(this.channelKey(a.guildId, a.channelId), a);
       }
+
+      // 如果新表存在，也加载新表数据（优先使用新表）
+      if (this.channelRepo && this.claudeSessionRepo) {
+        const channels = this.channelRepo.loadAll();
+        const claudeSessions = this.claudeSessionRepo.loadAll();
+        logger.info(`Loaded ${channels.length} channels, ${claudeSessions.length} claude sessions from new tables`);
+        // TODO: 将来可以用新表数据覆盖旧表数据，现阶段先共存
+      }
+
       logger.info(`Loaded ${this.sessions.size} session(s), ${this.guilds.size} guild(s), ${this.archivedSessions.size} archived from SQLite`);
       return;
     }
@@ -144,7 +157,7 @@ export class StateManager {
         await this.sessionRepo.save(archived as Session);
         await this.sessionRepo.archive(
           archived.guildId,
-          archived.threadId,
+          archived.channelId,
           archived.archivedBy,
           archived.archiveReason,
         );
@@ -172,11 +185,47 @@ export class StateManager {
 
   // ========== 持久化辅助 ==========
 
-  private persistSession(guildId: string, threadId: string): void {
-    if (!this.sessionRepo) return;
-    const session = this.sessions.get(this.threadKey(guildId, threadId));
-    if (session) {
+  private persistSession(guildId: string, channelId: string): void {
+    const session = this.sessions.get(this.channelKey(guildId, channelId));
+    if (!session) return;
+
+    // 写入旧表（兼容）
+    if (this.sessionRepo) {
       this.sessionRepo.save(session);
+    }
+
+    // 双写到新表
+    if (this.channelRepo && this.claudeSessionRepo) {
+      // 写入 channels 表
+      const channel: Channel = {
+        id: session.channelId,
+        guildId: session.guildId,
+        name: session.name,
+        cwd: session.cwd,
+        worktreeBranch: session.worktreeBranch,
+        parentChannelId: session.parentChannelId,
+        status: 'active',
+        messageCount: session.messageCount,
+        createdAt: session.createdAt,
+        lastMessage: session.lastMessage,
+        lastMessageAt: session.lastMessageAt,
+      };
+      this.channelRepo.save(channel);
+
+      // 写入 claude_sessions 表（如果有 claudeSessionId）
+      if (session.claudeSessionId || session.id) {
+        const claudeSession: ClaudeSession = {
+          id: session.id,
+          claudeSessionId: session.claudeSessionId,
+          prevClaudeSessionId: session.prevClaudeSessionId,
+          channelId: session.channelId,
+          model: session.model,
+          planMode: session.planMode ?? false,
+          status: 'active',
+          createdAt: session.createdAt,
+        };
+        this.claudeSessionRepo.save(claudeSession);
+      }
     }
   }
 
@@ -190,29 +239,42 @@ export class StateManager {
 
   // ========== Session CRUD ==========
 
-  getOrCreateSession(guildId: string, threadId: string, defaults: { name: string; cwd: string }): Session {
-    const key = this.threadKey(guildId, threadId);
+  getOrCreateSession(guildId: string, channelId: string, defaults: { name: string; cwd: string }): Session {
+    const key = this.channelKey(guildId, channelId);
     if (!this.sessions.has(key)) {
       const guildModel = this.getGuildDefaultModel(guildId);
       const session: Session = {
         id: randomUUID(),
         name: defaults.name,
-        threadId,
+        channelId,
         guildId,
         cwd: defaults.cwd,
         createdAt: Date.now(),
         model: guildModel,
-        messageHistory: [],
         messageCount: 0,
       };
       this.sessions.set(key, session);
-      this.persistSession(guildId, threadId);
+      this.persistSession(guildId, channelId);
+
+      // 额外：立即创建 Channel 记录到新表
+      if (this.channelRepo) {
+        const channel: Channel = {
+          id: channelId,
+          guildId,
+          name: defaults.name,
+          cwd: defaults.cwd,
+          status: 'active',
+          messageCount: 0,
+          createdAt: Date.now(),
+        };
+        this.channelRepo.save(channel);
+      }
     }
     return this.sessions.get(key)!;
   }
 
-  getSession(guildId: string, threadId: string): Session | undefined {
-    return this.sessions.get(this.threadKey(guildId, threadId));
+  getSession(guildId: string, channelId: string): Session | undefined {
+    return this.sessions.get(this.channelKey(guildId, channelId));
   }
 
   getAllSessions(guildId: string): Session[] {
@@ -226,10 +288,10 @@ export class StateManager {
   /**
    * 查找持有指定 claudeSessionId 的 session（同 guild 内）
    */
-  findSessionHolder(guildId: string, claudeSessionId: string): { threadId: string; name: string } | null {
+  findSessionHolder(guildId: string, claudeSessionId: string): { channelId: string; name: string } | null {
     for (const session of this.sessions.values()) {
       if (session.guildId === guildId && session.claudeSessionId === claudeSessionId) {
-        return { threadId: session.threadId, name: session.name };
+        return { channelId: session.channelId, name: session.name };
       }
     }
     return null;
@@ -237,56 +299,61 @@ export class StateManager {
 
   // ========== Session 操作 ==========
 
-  updateSessionMessage(guildId: string, threadId: string, text: string, role: 'user' | 'assistant'): void {
-    const session = this.getSession(guildId, threadId);
+  updateSessionMessage(guildId: string, channelId: string, text: string, role: 'user' | 'assistant'): void {
+    const session = this.getSession(guildId, channelId);
     if (!session) return;
 
-    const entry = { role, text: text.slice(0, 2000), timestamp: Date.now() };
-    session.messageHistory.push(entry);
-    if (session.messageHistory.length > MAX_HISTORY) {
-      session.messageHistory = session.messageHistory.slice(-MAX_HISTORY);
-    }
-
-    // 同步更新内存中的 messageCount
-    session.messageCount = session.messageHistory.length;
+    // 增加消息计数
+    session.messageCount++;
 
     if (role === 'assistant') {
       session.lastMessage = text.slice(0, 500);
       session.lastMessageAt = Date.now();
-      // 更新 sessions 表的 last_message 字段
-      if (this.sessionRepo) {
-        this.persistSession(guildId, threadId);
-      }
+    }
+
+    // 持久化到数据库
+    if (this.sessionRepo) {
+      this.persistSession(guildId, channelId);
     }
   }
 
-  setSessionClaudeId(guildId: string, threadId: string, claudeSessionId: string): void {
-    const session = this.getSession(guildId, threadId);
+  setSessionClaudeId(guildId: string, channelId: string, claudeSessionId: string): void {
+    const session = this.getSession(guildId, channelId);
     if (!session) return;
     if (session.claudeSessionId && session.claudeSessionId !== claudeSessionId) {
       session.prevClaudeSessionId = session.claudeSessionId;
     }
     session.claudeSessionId = claudeSessionId;
-    this.persistSession(guildId, threadId);
+    this.persistSession(guildId, channelId);
+
+    // 同步更新 claude_sessions 表
+    if (this.claudeSessionRepo) {
+      this.claudeSessionRepo.getActiveByChannel(channelId).then((activeSession) => {
+        if (activeSession) {
+          activeSession.claudeSessionId = claudeSessionId;
+          this.claudeSessionRepo!.save(activeSession);
+        }
+      });
+    }
   }
 
-  setSessionCwd(guildId: string, threadId: string, cwd: string): void {
-    const session = this.getSession(guildId, threadId);
+  setSessionCwd(guildId: string, channelId: string, cwd: string): void {
+    const session = this.getSession(guildId, channelId);
     if (!session) return;
     session.cwd = cwd;
-    this.persistSession(guildId, threadId);
+    this.persistSession(guildId, channelId);
   }
 
-  clearSessionClaudeId(guildId: string, threadId: string): void {
-    const session = this.getSession(guildId, threadId);
+  clearSessionClaudeId(guildId: string, channelId: string): void {
+    const session = this.getSession(guildId, channelId);
     if (!session) return;
     session.claudeSessionId = undefined;
     session.prevClaudeSessionId = undefined;
-    this.persistSession(guildId, threadId);
+    this.persistSession(guildId, channelId);
   }
 
-  rewindSession(guildId: string, threadId: string): { success: boolean; reason?: string; prevId?: string } {
-    const session = this.getSession(guildId, threadId);
+  rewindSession(guildId: string, channelId: string): { success: boolean; reason?: string; prevId?: string } {
+    const session = this.getSession(guildId, channelId);
     if (!session) return { success: false, reason: '会话不存在' };
     if (!session.prevClaudeSessionId) return { success: false, reason: '没有可撤销的对话轮次' };
 
@@ -294,30 +361,25 @@ export class StateManager {
     session.claudeSessionId = prevId;
     session.prevClaudeSessionId = undefined;
 
-    const history = session.messageHistory;
-    let i = history.length - 1;
-    while (i >= 0 && history[i].role === 'assistant') i--;
-    const removeFrom = i >= 0 && history[i].role === 'user' ? i : i + 1;
-    if (removeFrom < history.length) {
-      history.splice(removeFrom);
-    }
+    // 减少消息计数（回退一轮：user + assistant = 2条）
+    session.messageCount = Math.max(0, session.messageCount - 2);
 
-    this.persistSession(guildId, threadId);
+    this.persistSession(guildId, channelId);
     return { success: true, prevId };
   }
 
-  setSessionModel(guildId: string, threadId: string, model: string | undefined): void {
-    const session = this.getSession(guildId, threadId);
+  setSessionModel(guildId: string, channelId: string, model: string | undefined): void {
+    const session = this.getSession(guildId, channelId);
     if (!session) return;
     session.model = model;
-    this.persistSession(guildId, threadId);
+    this.persistSession(guildId, channelId);
   }
 
-  setSessionPlanMode(guildId: string, threadId: string, planMode: boolean): void {
-    const session = this.getSession(guildId, threadId);
+  setSessionPlanMode(guildId: string, channelId: string, planMode: boolean): void {
+    const session = this.getSession(guildId, channelId);
     if (!session) return;
     session.planMode = planMode;
-    this.persistSession(guildId, threadId);
+    this.persistSession(guildId, channelId);
   }
 
   // ========== Guild ==========
@@ -363,7 +425,7 @@ export class StateManager {
       if (now - lastActive > maxAge) {
         this.sessions.delete(key);
         if (this.sessionRepo) {
-          this.sessionRepo.delete(session.guildId, session.threadId);
+          this.sessionRepo.delete(session.guildId, session.channelId);
         }
       }
     }
@@ -375,8 +437,8 @@ export class StateManager {
 
   // ========== Thread 归档管理 ==========
 
-  archiveSession(guildId: string, threadId: string, userId?: string, reason?: string): boolean {
-    const key = this.threadKey(guildId, threadId);
+  archiveSession(guildId: string, channelId: string, userId?: string, reason?: string): boolean {
+    const key = this.channelKey(guildId, channelId);
     const session = this.sessions.get(key);
 
     if (!session) return false;
@@ -390,49 +452,65 @@ export class StateManager {
 
     this.archivedSessions.set(key, archivedSession);
     this.sessions.delete(key);
-    this.clearChildParentRefs(guildId, threadId);
+    this.clearChildParentRefs(guildId, channelId);
 
-    logger.info(`Archived session: ${session.name} (thread=${threadId}, guild=${guildId})`);
+    logger.info(`Archived session: ${session.name} (channel=${channelId}, guild=${guildId})`);
 
+    // 归档旧表
     if (this.sessionRepo) {
-      this.sessionRepo.archive(guildId, threadId, userId, reason);
+      this.sessionRepo.archive(guildId, channelId, userId, reason);
     }
+
+    // 归档新表
+    if (this.channelRepo) {
+      this.channelRepo.archive(channelId, userId, reason);
+    }
+
+    // 关闭活跃的 ClaudeSession
+    if (this.claudeSessionRepo) {
+      this.claudeSessionRepo.getActiveByChannel(channelId).then((activeSession) => {
+        if (activeSession) {
+          this.claudeSessionRepo!.close(activeSession.id);
+        }
+      });
+    }
+
     return true;
   }
 
-  deleteSession(guildId: string, threadId: string): boolean {
-    const key = this.threadKey(guildId, threadId);
+  deleteSession(guildId: string, channelId: string): boolean {
+    const key = this.channelKey(guildId, channelId);
     const existed = this.sessions.has(key);
 
     if (existed) {
       this.sessions.delete(key);
-      this.clearChildParentRefs(guildId, threadId);
+      this.clearChildParentRefs(guildId, channelId);
       if (this.sessionRepo) {
-        this.sessionRepo.delete(guildId, threadId);
+        this.sessionRepo.delete(guildId, channelId);
       }
     }
 
     return existed;
   }
 
-  private clearChildParentRefs(guildId: string, parentThreadId: string): void {
+  private clearChildParentRefs(guildId: string, parentChannelId: string): void {
     for (const session of this.sessions.values()) {
-      if (session.guildId === guildId && session.parentThreadId === parentThreadId) {
-        session.parentThreadId = undefined;
+      if (session.guildId === guildId && session.parentChannelId === parentChannelId) {
+        session.parentChannelId = undefined;
       }
     }
     // DB 层面也清除
     if (this.sessionRepo) {
-      this.sessionRepo.clearParentRefs(guildId, parentThreadId);
+      this.sessionRepo.clearParentRefs(guildId, parentChannelId);
     }
   }
 
-  getArchivedSession(guildId: string, threadId: string): ArchivedSession | undefined {
-    return this.archivedSessions.get(this.threadKey(guildId, threadId));
+  getArchivedSession(guildId: string, channelId: string): ArchivedSession | undefined {
+    return this.archivedSessions.get(this.channelKey(guildId, channelId));
   }
 
-  restoreArchivedSession(guildId: string, threadId: string): boolean {
-    const key = this.threadKey(guildId, threadId);
+  restoreArchivedSession(guildId: string, channelId: string): boolean {
+    const key = this.channelKey(guildId, channelId);
     const archived = this.archivedSessions.get(key);
 
     if (!archived) return false;
@@ -443,7 +521,7 @@ export class StateManager {
     this.archivedSessions.delete(key);
 
     if (this.sessionRepo) {
-      this.sessionRepo.restore(guildId, threadId);
+      this.sessionRepo.restore(guildId, channelId);
     }
     return true;
   }
@@ -468,47 +546,47 @@ export class StateManager {
     return paths;
   }
 
-  setSessionForkInfo(guildId: string, threadId: string, parentThreadId: string, worktreeBranch: string): void {
-    const session = this.getSession(guildId, threadId);
+  setSessionForkInfo(guildId: string, channelId: string, parentChannelId: string, worktreeBranch: string): void {
+    const session = this.getSession(guildId, channelId);
     if (!session) return;
-    session.parentThreadId = parentThreadId;
+    session.parentChannelId = parentChannelId;
     session.worktreeBranch = worktreeBranch;
-    this.persistSession(guildId, threadId);
+    this.persistSession(guildId, channelId);
   }
 
-  getRootSession(guildId: string, threadId: string): Session | undefined {
-    let session = this.getSession(guildId, threadId);
+  getRootSession(guildId: string, channelId: string): Session | undefined {
+    let session = this.getSession(guildId, channelId);
     if (!session) return undefined;
-    while (session.parentThreadId != null) {
-      const parent = this.getSession(guildId, session.parentThreadId);
+    while (session.parentChannelId != null) {
+      const parent = this.getSession(guildId, session.parentChannelId);
       if (!parent) break;
       session = parent;
     }
     return session;
   }
 
-  clearSessionParent(guildId: string, threadId: string): void {
-    const session = this.getSession(guildId, threadId);
+  clearSessionParent(guildId: string, channelId: string): void {
+    const session = this.getSession(guildId, channelId);
     if (!session) return;
-    session.parentThreadId = undefined;
-    this.persistSession(guildId, threadId);
+    session.parentChannelId = undefined;
+    this.persistSession(guildId, channelId);
   }
 
-  getChildSessions(guildId: string, parentThreadId: string): Session[] {
+  getChildSessions(guildId: string, parentChannelId: string): Session[] {
     const result: Session[] = [];
     for (const session of this.sessions.values()) {
-      if (session.guildId === guildId && session.parentThreadId === parentThreadId) {
+      if (session.guildId === guildId && session.parentChannelId === parentChannelId) {
         result.push(session);
       }
     }
     return result;
   }
 
-  setSessionName(guildId: string, threadId: string, name: string): void {
-    const session = this.getSession(guildId, threadId);
+  setSessionName(guildId: string, channelId: string, name: string): void {
+    const session = this.getSession(guildId, channelId);
     if (!session) return;
     session.name = name;
-    this.persistSession(guildId, threadId);
+    this.persistSession(guildId, channelId);
   }
 
   // ========== 按模型分槽的 Session 管理（Goal Fix 流程优化） ==========

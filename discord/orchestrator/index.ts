@@ -48,7 +48,7 @@ import {
   buildRollbackConfirmButtons,
   buildTaskFailedButtons,
 } from './goal-buttons.js';
-import type { IGoalMetaRepo, IGoalTaskRepo, IGoalCheckpointRepo } from '../types/repository.js';
+import type { IGoalMetaRepo, ITaskRepo, IGoalCheckpointRepo } from '../types/repository.js';
 
 interface OrchestratorDeps {
   stateManager: StateManager;
@@ -59,7 +59,7 @@ interface OrchestratorDeps {
   config: DiscordBotConfig;
   goalRepo: IGoalRepo;
   goalMetaRepo: IGoalMetaRepo;
-  goalTaskRepo: IGoalTaskRepo;
+  taskRepo: ITaskRepo;
   checkpointRepo: IGoalCheckpointRepo;
 }
 
@@ -67,7 +67,7 @@ interface OrchestratorDeps {
 export interface StartDriveParams {
   goalId: string;
   goalName: string;
-  goalThreadId: string;
+  goalChannelId: string;
   baseCwd: string;
   tasks: Array<{
     id: string;
@@ -126,12 +126,12 @@ export class GoalOrchestrator {
 
   /** 启动 Goal 自动推进 */
   async startDrive(params: StartDriveParams): Promise<GoalDriveState> {
-    const { goalId, goalName, goalThreadId, baseCwd: inputCwd, tasks: rawTasks, maxConcurrent = 3 } = params;
+    const { goalId, goalName, goalChannelId, baseCwd: inputCwd, tasks: rawTasks, maxConcurrent = 3 } = params;
 
     const existing = this.activeDrives.get(goalId) || await this.deps.goalRepo.get(goalId);
     if (existing && (existing.status === 'running' || existing.status === 'paused')) {
       const hint = existing.status === 'paused' ? ' Use resumeDrive to continue.' : '';
-      await this.notify(goalThreadId, `Goal "${goalName}" is already ${existing.status}.${hint}`, 'info');
+      await this.notify(goalChannelId, `Goal "${goalName}" is already ${existing.status}.${hint}`, 'info');
       return existing;
     }
 
@@ -142,7 +142,7 @@ export class GoalOrchestrator {
         logger.info(`[Orchestrator] Normalized baseCwd: ${inputCwd} → ${baseCwd}`);
       }
     } catch (err: any) {
-      await this.notify(goalThreadId, `Invalid working directory: ${inputCwd}\nError: ${err.message}`, 'error');
+      await this.notify(goalChannelId, `Invalid working directory: ${inputCwd}\nError: ${err.message}`, 'error');
       throw err;
     }
 
@@ -152,7 +152,7 @@ export class GoalOrchestrator {
     try {
       goalWorktreeDir = await createGoalBranch(baseCwd, goalBranch, this.deps.config.worktreesDir);
     } catch (err: any) {
-      await this.notify(goalThreadId, `Failed to create goal branch: ${err.message}`, 'error');
+      await this.notify(goalChannelId, `Failed to create goal branch: ${err.message}`, 'error');
       throw err;
     }
 
@@ -168,7 +168,7 @@ export class GoalOrchestrator {
       goalSeq,
       goalName,
       goalBranch,
-      goalThreadId,
+      goalChannelId,
       baseCwd,
       status: 'running',
       createdAt: Date.now(),
@@ -181,7 +181,7 @@ export class GoalOrchestrator {
     this.activeDrives.set(goalId, state);
     await this.syncGoalMetaStatus(goalId, 'Processing');
 
-    await this.notify(goalThreadId,
+    await this.notify(goalChannelId,
       `**Goal Drive started:** ${goalName}\n` +
       `Branch: \`${goalBranch}\`\n` +
       `Tasks: ${state.tasks.length}\n` +
@@ -198,7 +198,7 @@ export class GoalOrchestrator {
     if (!state || state.status !== 'running') return false;
     state.status = 'paused';
     await this.saveState(state);
-    await this.notify(state.goalThreadId, `Goal "${state.goalName}" paused`, 'warning');
+    await this.notify(state.goalChannelId, `Goal "${state.goalName}" paused`, 'warning');
     return true;
   }
 
@@ -207,7 +207,7 @@ export class GoalOrchestrator {
     if (!state || state.status !== 'paused') return false;
     state.status = 'running';
     await this.saveState(state);
-    await this.notify(state.goalThreadId, `Goal "${state.goalName}" resumed`, 'success');
+    await this.notify(state.goalChannelId, `Goal "${state.goalName}" resumed`, 'success');
     await this.reviewAndDispatch(state);
     return true;
   }
@@ -224,17 +224,17 @@ export class GoalOrchestrator {
     if (task.status !== 'pending' && task.status !== 'blocked' && task.status !== 'failed' && task.status !== 'paused') return false;
 
     // paused 任务可能有关联的进程，先清理
-    if (task.status === 'paused' && task.threadId) {
+    if (task.status === 'paused' && task.channelId) {
       const guildId = this.getGuildId();
       if (guildId) {
-        const lockKey = StateManager.threadLockKey(guildId, task.threadId);
+        const lockKey = StateManager.channelLockKey(guildId, task.channelId);
         this.deps.claudeClient.abort(lockKey);
       }
     }
 
     task.status = 'skipped';
     await this.saveState(state);
-    await this.notify(state.goalThreadId, `Skipped task: ${this.getTaskLabel(state, task.id)} - ${task.description}`, 'info');
+    await this.notify(state.goalChannelId, `Skipped task: ${this.getTaskLabel(state, task.id)} - ${task.description}`, 'info');
     if (state.status === 'running') await this.reviewAndDispatch(state);
     return true;
   }
@@ -247,7 +247,7 @@ export class GoalOrchestrator {
     task.status = 'completed';
     task.completedAt = Date.now();
     await this.saveState(state);
-    await this.notify(state.goalThreadId, `Manual task completed: ${this.getTaskLabel(state, task.id)} - ${task.description}`, 'success');
+    await this.notify(state.goalChannelId, `Manual task completed: ${this.getTaskLabel(state, task.id)} - ${task.description}`, 'success');
     if (state.status === 'running') await this.reviewAndDispatch(state, taskId);
     return true;
   }
@@ -260,10 +260,10 @@ export class GoalOrchestrator {
     if (task.status !== 'failed' && task.status !== 'blocked_feedback' && task.status !== 'paused') return false;
 
     // paused 任务可能还有运行中的进程（理论上不会，但防御性处理）
-    if (task.status === 'paused' && task.threadId) {
+    if (task.status === 'paused' && task.channelId) {
       const guildId = this.getGuildId();
       if (guildId) {
-        const lockKey = StateManager.threadLockKey(guildId, task.threadId);
+        const lockKey = StateManager.channelLockKey(guildId, task.channelId);
         this.deps.claudeClient.abort(lockKey);
       }
     }
@@ -271,7 +271,7 @@ export class GoalOrchestrator {
     task.status = 'pending';
     task.error = undefined;
     task.branchName = undefined;
-    task.threadId = undefined;
+    task.channelId = undefined;
     task.dispatchedAt = undefined;
     task.merged = false;
     task.feedback = undefined;
@@ -284,7 +284,7 @@ export class GoalOrchestrator {
     task.costUsd = undefined;
     task.durationMs = undefined;
     await this.saveState(state);
-    await this.notify(state.goalThreadId, `Retrying task: ${this.getTaskLabel(state, task.id)} - ${task.description}`, 'warning');
+    await this.notify(state.goalChannelId, `Retrying task: ${this.getTaskLabel(state, task.id)} - ${task.description}`, 'warning');
     if (state.status === 'running') await this.reviewAndDispatch(state);
     return true;
   }
@@ -299,13 +299,13 @@ export class GoalOrchestrator {
     const task = state.tasks.find(t => t.id === taskId);
     if (!task) return false;
     // refix 只对 failed 且有 threadId 的任务有效（即有代码上下文）
-    if (task.status !== 'failed' || !task.threadId) return false;
+    if (task.status !== 'failed' || !task.channelId) return false;
 
     const guildId = this.getGuildId();
     if (!guildId) return false;
 
     // 中止可能残留的进程
-    const lockKey = StateManager.threadLockKey(guildId, task.threadId);
+    const lockKey = StateManager.channelLockKey(guildId, task.channelId);
     this.deps.claudeClient.abort(lockKey);
 
     // 保留 branch/thread/dispatchedAt，只重置 fix 相关状态
@@ -315,13 +315,13 @@ export class GoalOrchestrator {
     task.auditRetries = 0;
     await this.saveState(state);
 
-    await this.notify(state.goalThreadId,
+    await this.notify(state.goalChannelId,
       `Refixing task: ${this.getTaskLabel(state, task.id)} - ${task.description}`,
       'warning',
     );
 
     // 直接触发 audit → fix 循环（不经过 reviewAndDispatch）
-    this.startRefixPipeline(goalId, taskId, guildId, task.threadId, task, state);
+    this.startRefixPipeline(goalId, taskId, guildId, task.channelId, task, state);
     return true;
   }
 
@@ -329,10 +329,11 @@ export class GoalOrchestrator {
    * refix 流水线：在已有 thread 上重新 audit → fix 循环
    */
   private startRefixPipeline(
-    goalId: string, taskId: string, guildId: string, threadId: string,
+    goalId: string, taskId: string, guildId: string, channelId: string,
     task: GoalTask, state: GoalDriveState,
   ): void {
     (async () => {
+      const usage = this.emptyUsage();
       try {
         // 初始化 usage 累积器
         const usage: ChatUsageResult = {
@@ -357,18 +358,18 @@ export class GoalOrchestrator {
         }
 
         // 先跑一次 audit，拿到最新 issues
-        const auditResult = await this.runAudit(goalId, taskId, guildId, threadId, task, state, usage, taskDetailPlan);
+        const auditResult = await this.runAudit(goalId, taskId, guildId, channelId, task, state, usage, taskDetailPlan);
         if (auditResult.verdict === 'pass') {
           await this.onTaskCompleted(goalId, taskId, usage);
           return;
         }
         // 进入标准 fix 循环
-        await this.auditFixLoop(goalId, taskId, guildId, threadId, task, state, auditResult.summary, auditResult.issues, auditResult.verifyCommands, usage, taskDetailPlan);
+        await this.auditFixLoop(goalId, taskId, guildId, channelId, task, state, auditResult.summary, auditResult.issues, auditResult.verifyCommands, usage, taskDetailPlan);
       } catch (err: any) {
         const stillRunning = await this.isTaskStillRunning(goalId, taskId);
         if (!stillRunning) return;
         try {
-          await this.onTaskFailed(goalId, taskId, err.message);
+          await this.onTaskFailed(goalId, taskId, err.message, usage);
         } catch (cbErr: any) {
           logger.error(`[Orchestrator] startRefixPipeline onTaskFailed also failed:`, cbErr.message);
         }
@@ -394,23 +395,23 @@ export class GoalOrchestrator {
   ): void {
     const goalId = state.goalId;
     const taskId = task.id;
-    const threadId = task.threadId!;
+    const channelId = task.channelId!;
 
     (async () => {
       try {
         // 使用 Sonnet 做调查（快速且够用）
         const { pipelineSonnetModel: sonnetModel } = this.deps.config;
-        this.switchSessionModel(guildId, threadId, sonnetModel, 'fix');
+        this.switchSessionModel(guildId, channelId, sonnetModel, 'fix');
         await this.updatePipelinePhase(goalId, taskId, 'fix');
 
-        await this.notify(state.goalThreadId,
+        await this.notify(state.goalChannelId,
           `[Pipeline] ${taskId}: AI 调查 blocked feedback...`,
           'pipeline',
         );
 
         const prompt = this.buildFeedbackInvestigationPrompt(task, state);
         logger.info(`[Orchestrator] Pipeline ${taskId}: feedback investigation started`);
-        await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, prompt);
+        await this.deps.messageHandler.handleBackgroundChat(guildId, channelId, prompt);
 
         // 读取调查结论
         const conclusion = await this.readInvestigationResult(state, task);
@@ -421,16 +422,16 @@ export class GoalOrchestrator {
         switch (conclusion.action) {
           case 'continue':
             // Claude 已在调查中修复了问题 → 走 audit → fix 循环验证
-            await this.notify(state.goalThreadId,
+            await this.notify(state.goalChannelId,
               `[Pipeline] ${taskId}: 调查结论 — 问题已修复，进入审计验证`,
               'info',
             );
-            this.startRefixPipeline(goalId, taskId, guildId, threadId, task, state);
+            this.startRefixPipeline(goalId, taskId, guildId, channelId, task, state);
             break;
 
           case 'retry':
             // 需要完全重试
-            await this.notify(state.goalThreadId,
+            await this.notify(state.goalChannelId,
               `[Pipeline] ${taskId}: 调查结论 — 需要完全重试\n原因: ${conclusion.reason}`,
               'warning',
             );
@@ -448,7 +449,7 @@ export class GoalOrchestrator {
 
           case 'replan':
             // 需要重新规划
-            await this.notify(state.goalThreadId,
+            await this.notify(state.goalChannelId,
               `[Pipeline] ${taskId}: 调查结论 — 需要重新规划\n原因: ${conclusion.reason}`,
               'info',
             );
@@ -483,7 +484,7 @@ export class GoalOrchestrator {
               freshTask.status = 'blocked_feedback';
               freshTask.pipelinePhase = undefined;
               await this.saveState(freshState);
-              await this.notify(freshState.goalThreadId,
+              await this.notify(freshState.goalChannelId,
                 `[Pipeline] ${taskId}: AI 调查无法自动解决\n原因: ${conclusion.reason}\n需要人工干预。`,
                 'error',
               );
@@ -504,7 +505,7 @@ export class GoalOrchestrator {
             freshTask.status = 'blocked_feedback';
             freshTask.pipelinePhase = undefined;
             await this.saveState(freshState);
-            await this.notify(freshState.goalThreadId,
+            await this.notify(freshState.goalChannelId,
               `[Pipeline] ${taskId}: AI 调查出错: ${err.message}\n已回退到 blocked_feedback，需要人工干预。`,
               'error',
             );
@@ -640,10 +641,10 @@ export class GoalOrchestrator {
     if (!task || task.status !== 'running') return false;
 
     // 中止运行中的 Claude 进程（保留队列，但任务暂停后不需要队列）
-    if (task.threadId) {
+    if (task.channelId) {
       const guildId = this.getGuildId();
       if (guildId) {
-        const lockKey = StateManager.threadLockKey(guildId, task.threadId);
+        const lockKey = StateManager.channelLockKey(guildId, task.channelId);
         this.deps.claudeClient.abort(lockKey);
       }
     }
@@ -651,7 +652,7 @@ export class GoalOrchestrator {
     task.status = 'paused';
     // 保留 branchName, threadId, dispatchedAt — 恢复时复用
     await this.saveState(state);
-    await this.notify(state.goalThreadId,
+    await this.notify(state.goalChannelId,
       `Paused task: ${this.getTaskLabel(state, task.id)} - ${task.description}\nBranch/thread preserved for resume.`,
       'warning'
     );
@@ -671,27 +672,27 @@ export class GoalOrchestrator {
     if (!guildId) return false;
 
     // 任务有保留的 thread 和 branch → 在原有 thread 中继续执行
-    if (task.threadId && task.branchName) {
+    if (task.channelId && task.branchName) {
       task.status = 'running';
       await this.saveState(state);
-      await this.notify(state.goalThreadId,
+      await this.notify(state.goalChannelId,
         `Resumed task: ${this.getTaskLabel(state, task.id)} - ${task.description}`,
         'success'
       );
 
       const taskPrompt = `[Resumed] Continue working on this task. Your previous progress has been preserved.\n\n` +
         this.buildTaskPrompt(task, state);
-      this.executeTaskInBackground(state.goalId, task.id, guildId, task.threadId, taskPrompt);
+      this.executeTaskInBackground(state.goalId, task.id, guildId, task.channelId, taskPrompt);
       return true;
     }
 
     // 没有保留上下文 → 重置为 pending，重新派发
     task.status = 'pending';
     task.branchName = undefined;
-    task.threadId = undefined;
+    task.channelId = undefined;
     task.dispatchedAt = undefined;
     await this.saveState(state);
-    await this.notify(state.goalThreadId,
+    await this.notify(state.goalChannelId,
       `Resumed task: ${this.getTaskLabel(state, task.id)} - ${task.description} (re-dispatch)`,
       'success'
     );
@@ -708,7 +709,7 @@ export class GoalOrchestrator {
         logger.error(`[Orchestrator] baseCwd does not exist for ${state.goalName}: ${state.baseCwd}`);
         state.status = 'paused';
         await this.saveState(state);
-        await this.notify(state.goalThreadId,
+        await this.notify(state.goalChannelId,
           `Goal "${state.goalName}" restore failed: working directory not found\n` +
           `Path: ${state.baseCwd}\n` +
           `Auto-paused. Check and resume manually.`,
@@ -737,7 +738,7 @@ export class GoalOrchestrator {
               logger.info(`[Orchestrator] Resetting task ${task.id} to pending for re-dispatch`);
               task.status = 'pending';
               task.branchName = undefined;
-              task.threadId = undefined;
+              task.channelId = undefined;
               task.dispatchedAt = undefined;
               task.pipelinePhase = undefined;
               task.auditRetries = 0;
@@ -801,7 +802,7 @@ export class GoalOrchestrator {
     if (pendingPlaceholders.length > 0) {
       const placeholderIds = pendingPlaceholders.map(t => t.id).join(', ');
       logger.info(`[Orchestrator] Placeholder tasks ready: ${placeholderIds} — forcing replan`);
-      await this.notify(state.goalThreadId,
+      await this.notify(state.goalChannelId,
         `**占位任务触发重规划:** ${placeholderIds}\n` +
         `占位任务的依赖已满足，需要重新规划将其替换为具体任务。`,
         'info',
@@ -836,7 +837,7 @@ export class GoalOrchestrator {
         logger.info(
           `[Orchestrator] Research task ${completedTaskId} completed without replan feedback — triggering deep review`,
         );
-        await this.notify(state.goalThreadId,
+        await this.notify(state.goalChannelId,
           `**调研任务深度审查:** ${completedTask.id} - ${completedTask.description}\n` +
           `调研任务完成但未提交 replan feedback，自动触发深度审查。`,
           'info',
@@ -864,7 +865,7 @@ export class GoalOrchestrator {
         case 'blocked':
         case 'clarify': {
           // blocked/clarify：如果有 thread 上下文，启动 AI 调查
-          if (task.threadId) {
+          if (task.channelId) {
             const guildId = this.getGuildId();
             if (guildId) {
               task.status = 'running';
@@ -911,7 +912,7 @@ export class GoalOrchestrator {
       state.status = 'completed';
       await this.saveState(state);
       await this.syncGoalMetaStatus(state.goalId, 'Completed');
-      await this.notify(state.goalThreadId,
+      await this.notify(state.goalChannelId,
         `**Goal "${state.goalName}" completed!**\n` +
         `Review branch \`${state.goalBranch}\` and merge to main.`,
         'success'
@@ -921,7 +922,7 @@ export class GoalOrchestrator {
 
     if (isGoalStuck(state)) {
       await this.syncGoalMetaStatus(state.goalId, 'Blocking');
-      await this.notify(state.goalThreadId,
+      await this.notify(state.goalChannelId,
         `Goal "${state.goalName}" is stuck\n` +
         `May have unresolved dependencies or failed tasks\n` +
         `Progress: ${getProgressSummary(state)}`,
@@ -936,7 +937,7 @@ export class GoalOrchestrator {
     for (const task of blockedTasks) {
       if (!task.notifiedBlocked) {
         task.notifiedBlocked = true;
-        await this.notify(state.goalThreadId,
+        await this.notify(state.goalChannelId,
           `Manual task pending: ${this.getTaskLabel(state, task.id)} - ${task.description}\nReply "done ${task.id}" when complete.`,
           'warning'
         );
@@ -981,7 +982,7 @@ export class GoalOrchestrator {
       // 从 goal channel 向上查找 Category（支持 Thread → Channel → Category）
       let categoryId: string | null = null;
       try {
-        let channel = await this.deps.client.channels.fetch(state.goalThreadId);
+        let channel = await this.deps.client.channels.fetch(state.goalChannelId);
         for (let i = 0; i < 3 && channel; i++) {
           if (channel.type === ChannelType.GuildCategory) {
             categoryId = channel.id;
@@ -1023,13 +1024,13 @@ export class GoalOrchestrator {
         name: channelName,
         cwd: subtaskDir,
       });
-      this.deps.stateManager.setSessionForkInfo(guildId, newThreadId, state.goalThreadId, branchName);
+      this.deps.stateManager.setSessionForkInfo(guildId, newThreadId, state.goalChannelId, branchName);
 
-      task.threadId = newThreadId;
+      task.channelId = newThreadId;
       task.status = 'running';
       await this.saveState(state);
 
-      await this.notify(state.goalThreadId,
+      await this.notify(state.goalChannelId,
         `Dispatched: ${taskLabel} - ${task.description} → \`${branchName}\``,
         'info'
       );
@@ -1040,7 +1041,7 @@ export class GoalOrchestrator {
       task.status = 'failed';
       task.error = err.message;
       await this.saveState(state);
-      await this.notify(state.goalThreadId,
+      await this.notify(state.goalChannelId,
         `Dispatch failed: ${this.getTaskLabel(state, task.id)} - ${task.description}\nError: ${err.message}`,
         'error'
       );
@@ -1070,14 +1071,14 @@ export class GoalOrchestrator {
     goalId: string,
     taskId: string,
     guildId: string,
-    threadId: string,
+    channelId: string,
     message: string
   ): void {
     (async () => {
       const usage = this.emptyUsage();
       try {
-        logger.info(`[Orchestrator] Task ${taskId} executing in channel ${threadId}`);
-        const u = await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, message);
+        logger.info(`[Orchestrator] Task ${taskId} executing in channel ${channelId}`);
+        const u = await this.deps.messageHandler.handleBackgroundChat(guildId, channelId, message);
         this.accumulateUsage(usage, u);
         logger.info(`[Orchestrator] Task ${taskId} completed`);
         await this.onTaskCompleted(goalId, taskId, usage);
@@ -1103,7 +1104,7 @@ export class GoalOrchestrator {
    */
   private switchSessionModel(
     guildId: string,
-    threadId: string,
+    channelId: string,
     model: string,
     phase?: GoalPipelinePhase
   ): void {
@@ -1113,11 +1114,11 @@ export class GoalOrchestrator {
 
     // Fix 阶段：复用 execute 阶段的 sonnet session
     if (phase === 'fix' && modelSlot === 'sonnet') {
-      const existingSessionId = this.deps.stateManager.getModelSessionId(guildId, threadId, 'sonnet');
+      const existingSessionId = this.deps.stateManager.getModelSessionId(guildId, channelId, 'sonnet');
       if (existingSessionId) {
         // 恢复到已有的 sonnet session
-        this.deps.stateManager.setSessionClaudeId(guildId, threadId, existingSessionId);
-        this.deps.stateManager.setSessionModel(guildId, threadId, model);
+        this.deps.stateManager.setSessionClaudeId(guildId, channelId, existingSessionId);
+        this.deps.stateManager.setSessionModel(guildId, channelId, model);
         logger.info(`[Orchestrator] Reusing Sonnet session for fix: ${existingSessionId.slice(0, 8)}`);
         return;
       }
@@ -1125,8 +1126,8 @@ export class GoalOrchestrator {
     }
 
     // 其他阶段：清除并创建新 session
-    this.deps.stateManager.clearSessionClaudeId(guildId, threadId);
-    this.deps.stateManager.setSessionModel(guildId, threadId, model);
+    this.deps.stateManager.clearSessionClaudeId(guildId, channelId);
+    this.deps.stateManager.setSessionModel(guildId, channelId, model);
   }
 
   private async updatePipelinePhase(goalId: string, taskId: string, phase: GoalPipelinePhase): Promise<void> {
@@ -1176,7 +1177,7 @@ export class GoalOrchestrator {
     goalId: string,
     taskId: string,
     guildId: string,
-    threadId: string,
+    channelId: string,
     task: GoalTask,
     state: GoalDriveState,
   ): void {
@@ -1196,12 +1197,12 @@ export class GoalOrchestrator {
         }
 
         if (task.type === '调研') {
-          await this.pipelineResearch(goalId, taskId, guildId, threadId, task, state, usage, taskDetailPlan);
+          await this.pipelineResearch(goalId, taskId, guildId, channelId, task, state, usage, taskDetailPlan);
         } else if (task.type === '代码' && task.complexity === 'complex') {
-          await this.pipelineComplexCode(goalId, taskId, guildId, threadId, task, state, usage, taskDetailPlan);
+          await this.pipelineComplexCode(goalId, taskId, guildId, channelId, task, state, usage, taskDetailPlan);
         } else {
           // 默认路径：代码(simple/无标注) 和其他类型
-          await this.pipelineSimpleCode(goalId, taskId, guildId, threadId, task, state, usage, taskDetailPlan);
+          await this.pipelineSimpleCode(goalId, taskId, guildId, channelId, task, state, usage, taskDetailPlan);
         }
       } catch (err: any) {
         logger.error(`[Orchestrator] Pipeline ${taskId} failed:`, err.message);
@@ -1228,24 +1229,24 @@ export class GoalOrchestrator {
     goalId: string,
     taskId: string,
     guildId: string,
-    threadId: string,
+    channelId: string,
     task: GoalTask,
     state: GoalDriveState,
     usage: ChatUsageResult,
     taskDetailPlan?: TaskDetailPlan,
   ): Promise<void> {
     const opusModel = this.deps.config.pipelineOpusModel;
-    this.switchSessionModel(guildId, threadId, opusModel, 'execute');
+    this.switchSessionModel(guildId, channelId, opusModel, 'execute');
     await this.updatePipelinePhase(goalId, taskId, 'execute');
 
-    await this.notify(state.goalThreadId,
+    await this.notify(state.goalChannelId,
       `[Pipeline] ${taskId}: 调研路径 → Opus 执行`,
       'pipeline',
     );
 
     const taskPrompt = this.buildTaskPrompt(task, state, taskDetailPlan);
     logger.info(`[Orchestrator] Pipeline ${taskId}: research → Opus execute`);
-    const u = await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, taskPrompt);
+    const u = await this.deps.messageHandler.handleBackgroundChat(guildId, channelId, taskPrompt);
     this.accumulateUsage(usage, u);
 
     if (!await this.isTaskStillRunning(goalId, taskId)) {
@@ -1262,7 +1263,7 @@ export class GoalOrchestrator {
     goalId: string,
     taskId: string,
     guildId: string,
-    threadId: string,
+    channelId: string,
     task: GoalTask,
     state: GoalDriveState,
     usage: ChatUsageResult,
@@ -1271,17 +1272,17 @@ export class GoalOrchestrator {
     const { pipelineSonnetModel: sonnetModel } = this.deps.config;
 
     // Phase 1: Sonnet 执行
-    this.switchSessionModel(guildId, threadId, sonnetModel, 'execute');
+    this.switchSessionModel(guildId, channelId, sonnetModel, 'execute');
     await this.updatePipelinePhase(goalId, taskId, 'execute');
 
-    await this.notify(state.goalThreadId,
+    await this.notify(state.goalChannelId,
       `[Pipeline] ${taskId}: 简单代码 → Sonnet 执行`,
       'pipeline',
     );
 
     const taskPrompt = this.buildTaskPrompt(task, state, taskDetailPlan);
     logger.info(`[Orchestrator] Pipeline ${taskId}: simple code → Sonnet execute`);
-    const execUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, taskPrompt);
+    const execUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, channelId, taskPrompt);
     this.accumulateUsage(usage, execUsage);
 
     // 检查任务是否仍在 running（可能被 skip/cancel/retry）
@@ -1299,7 +1300,7 @@ export class GoalOrchestrator {
     }
 
     // Phase 2: Opus audit
-    const auditResult = await this.runAudit(goalId, taskId, guildId, threadId, task, state, usage, taskDetailPlan);
+    const auditResult = await this.runAudit(goalId, taskId, guildId, channelId, task, state, usage, taskDetailPlan);
 
     if (auditResult.verdict === 'pass') {
       await this.onTaskCompleted(goalId, taskId, usage);
@@ -1307,7 +1308,7 @@ export class GoalOrchestrator {
     }
 
     // Audit 失败 → Sonnet 修复（最多 2 次）
-    await this.auditFixLoop(goalId, taskId, guildId, threadId, task, state, auditResult.summary, auditResult.issues, auditResult.verifyCommands, usage, taskDetailPlan);
+    await this.auditFixLoop(goalId, taskId, guildId, channelId, task, state, auditResult.summary, auditResult.issues, auditResult.verifyCommands, usage, taskDetailPlan);
   }
 
   /**
@@ -1317,7 +1318,7 @@ export class GoalOrchestrator {
     goalId: string,
     taskId: string,
     guildId: string,
-    threadId: string,
+    channelId: string,
     task: GoalTask,
     state: GoalDriveState,
     usage: ChatUsageResult,
@@ -1326,17 +1327,17 @@ export class GoalOrchestrator {
     const { pipelineOpusModel: opusModel, pipelineSonnetModel: sonnetModel } = this.deps.config;
 
     // Phase 1: Opus plan
-    this.switchSessionModel(guildId, threadId, opusModel, 'plan');
+    this.switchSessionModel(guildId, channelId, opusModel, 'plan');
     await this.updatePipelinePhase(goalId, taskId, 'plan');
 
-    await this.notify(state.goalThreadId,
+    await this.notify(state.goalChannelId,
       `[Pipeline] ${taskId}: 复杂代码 → Opus 规划`,
       'pipeline',
     );
 
     const planPrompt = this.buildPlanPrompt(task, state, taskDetailPlan);
     logger.info(`[Orchestrator] Pipeline ${taskId}: complex code → Opus plan`);
-    const planUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, planPrompt);
+    const planUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, channelId, planPrompt);
     this.accumulateUsage(usage, planUsage);
 
     if (!await this.isTaskStillRunning(goalId, taskId)) {
@@ -1348,17 +1349,17 @@ export class GoalOrchestrator {
     const planExists = await this.checkPlanFileExists(state, task);
     if (!planExists) {
       logger.warn(`[Orchestrator] Pipeline ${taskId}: .task-plan.md not found after plan phase, Sonnet will execute without plan`);
-      await this.notify(state.goalThreadId,
+      await this.notify(state.goalChannelId,
         `[Pipeline] ${taskId}: Opus 未写入 .task-plan.md，Sonnet 将自行理解任务执行`,
         'warning',
       );
     }
 
     // Phase 2: Sonnet 执行（读 plan）
-    this.switchSessionModel(guildId, threadId, sonnetModel, 'execute');
+    this.switchSessionModel(guildId, channelId, sonnetModel, 'execute');
     await this.updatePipelinePhase(goalId, taskId, 'execute');
 
-    await this.notify(state.goalThreadId,
+    await this.notify(state.goalChannelId,
       `[Pipeline] ${taskId}: 复杂代码 → Sonnet 执行${planExists ? '（按 plan）' : '（无 plan fallback）'}`,
       'pipeline',
     );
@@ -1368,7 +1369,7 @@ export class GoalOrchestrator {
       ? this.buildExecuteWithPlanPrompt(task, state, taskDetailPlan)
       : this.buildTaskPrompt(task, state, taskDetailPlan);
     logger.info(`[Orchestrator] Pipeline ${taskId}: complex code → Sonnet execute with plan`);
-    const execUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, executePrompt);
+    const execUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, channelId, executePrompt);
     this.accumulateUsage(usage, execUsage);
 
     if (!await this.isTaskStillRunning(goalId, taskId)) {
@@ -1385,7 +1386,7 @@ export class GoalOrchestrator {
     }
 
     // Phase 3: Opus audit
-    const auditResult = await this.runAudit(goalId, taskId, guildId, threadId, task, state, usage, taskDetailPlan);
+    const auditResult = await this.runAudit(goalId, taskId, guildId, channelId, task, state, usage, taskDetailPlan);
 
     if (auditResult.verdict === 'pass') {
       await this.onTaskCompleted(goalId, taskId, usage);
@@ -1393,7 +1394,7 @@ export class GoalOrchestrator {
     }
 
     // Audit 失败 → Sonnet 修复
-    await this.auditFixLoop(goalId, taskId, guildId, threadId, task, state, auditResult.summary, auditResult.issues, auditResult.verifyCommands, usage, taskDetailPlan);
+    await this.auditFixLoop(goalId, taskId, guildId, channelId, task, state, auditResult.summary, auditResult.issues, auditResult.verifyCommands, usage, taskDetailPlan);
   }
 
   /**
@@ -1403,7 +1404,7 @@ export class GoalOrchestrator {
     goalId: string,
     taskId: string,
     guildId: string,
-    threadId: string,
+    channelId: string,
     task: GoalTask,
     state: GoalDriveState,
     auditSummary: string | undefined,
@@ -1425,22 +1426,22 @@ export class GoalOrchestrator {
       await this.updateAuditRetries(goalId, taskId, retry);
 
       // Sonnet fix
-      this.switchSessionModel(guildId, threadId, sonnetModel, 'fix');
+      this.switchSessionModel(guildId, channelId, sonnetModel, 'fix');
       await this.updatePipelinePhase(goalId, taskId, 'fix');
 
-      await this.notify(state.goalThreadId,
+      await this.notify(state.goalChannelId,
         `[Pipeline] ${taskId}: Audit 失败 → Sonnet 修复 (${retry}/${maxRetries})`,
         'pipeline',
       );
 
       const fixPrompt = this.buildFixPrompt(task, state, auditSummary, issues, verifyCommands, taskDetailPlan);
       logger.info(`[Orchestrator] Pipeline ${taskId}: Sonnet fix attempt ${retry}`);
-      const fixUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, fixPrompt);
+      const fixUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, channelId, fixPrompt);
       this.accumulateUsage(usage, fixUsage);
 
       // Self-review（在同一 Sonnet session 中自查修复质量）
       const selfReviewResult = await this.runSelfReview(
-        goalId, taskId, guildId, threadId, task, state, issues, verifyCommands, usage
+        goalId, taskId, guildId, channelId, task, state, issues, verifyCommands, usage
       );
 
       if (selfReviewResult.hasRemainingIssues) {
@@ -1458,12 +1459,12 @@ export class GoalOrchestrator {
       }
 
       // Self-review 通过 → Opus re-audit
-      await this.notify(state.goalThreadId,
+      await this.notify(state.goalChannelId,
         `[Pipeline] ${taskId}: Self-review 通过 → Opus 二次审查`,
         'pipeline',
       );
 
-      const reAudit = await this.runAudit(goalId, taskId, guildId, threadId, task, state, usage, taskDetailPlan);
+      const reAudit = await this.runAudit(goalId, taskId, guildId, channelId, task, state, usage, taskDetailPlan);
       if (reAudit.verdict === 'pass') {
         await this.onTaskCompleted(goalId, taskId, usage);
         return;
@@ -1486,25 +1487,25 @@ export class GoalOrchestrator {
     goalId: string,
     taskId: string,
     guildId: string,
-    threadId: string,
+    channelId: string,
     task: GoalTask,
     state: GoalDriveState,
     originalIssues: string[],
     verifyCommands: string[],
     usage: ChatUsageResult,
   ): Promise<{ hasRemainingIssues: boolean; remainingIssues: string[] }> {
-    await this.notify(state.goalThreadId, `[Pipeline] ${taskId}: Sonnet 自查中...`, 'pipeline');
+    await this.notify(state.goalChannelId, `[Pipeline] ${taskId}: Sonnet 自查中...`, 'pipeline');
 
     const selfReviewPrompt = this.buildSelfReviewPrompt(task, state, originalIssues, verifyCommands);
-    const reviewUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, selfReviewPrompt);
+    const reviewUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, channelId, selfReviewPrompt);
     this.accumulateUsage(usage, reviewUsage);
 
     const result = await this.readSelfReviewResult(state, task);
 
     if (!result.hasRemainingIssues) {
-      await this.notify(state.goalThreadId, `[Pipeline] ${taskId}: Self-review 通过 ✓`, 'success');
+      await this.notify(state.goalChannelId, `[Pipeline] ${taskId}: Self-review 通过 ✓`, 'success');
     } else {
-      await this.notify(state.goalThreadId,
+      await this.notify(state.goalChannelId,
         `[Pipeline] ${taskId}: Self-review 发现 ${result.remainingIssues.length} 个遗留问题`,
         'warning',
       );
@@ -1611,7 +1612,7 @@ export class GoalOrchestrator {
     goalId: string,
     taskId: string,
     guildId: string,
-    threadId: string,
+    channelId: string,
     task: GoalTask,
     state: GoalDriveState,
     usage: ChatUsageResult,
@@ -1619,29 +1620,29 @@ export class GoalOrchestrator {
   ): Promise<{ verdict: 'pass' | 'fail'; summary?: string; issues: string[]; verifyCommands: string[] }> {
     const { pipelineOpusModel: opusModel } = this.deps.config;
 
-    this.switchSessionModel(guildId, threadId, opusModel, 'audit');
+    this.switchSessionModel(guildId, channelId, opusModel, 'audit');
     await this.updatePipelinePhase(goalId, taskId, 'audit');
 
-    await this.notify(state.goalThreadId,
+    await this.notify(state.goalChannelId,
       `[Pipeline] ${taskId}: Opus 审查中...`,
       'pipeline',
     );
 
     const auditPrompt = this.buildAuditPrompt(task, state, taskDetailPlan);
     logger.info(`[Orchestrator] Pipeline ${taskId}: Opus audit`);
-    const auditUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, threadId, auditPrompt);
+    const auditUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, channelId, auditPrompt);
     this.accumulateUsage(usage, auditUsage);
 
     // 读取 audit 结果文件
     const result = await this.readAuditResult(state, task);
 
     if (result.verdict === 'pass') {
-      await this.notify(state.goalThreadId,
+      await this.notify(state.goalChannelId,
         `[Pipeline] ${taskId}: Audit 通过 ✓`,
         'success',
       );
     } else {
-      await this.notify(state.goalThreadId,
+      await this.notify(state.goalChannelId,
         `[Pipeline] ${taskId}: Audit 未通过 — ${result.issues.length} 个问题`,
         'warning',
       );
@@ -2075,7 +2076,7 @@ export class GoalOrchestrator {
           task.completedAt = Date.now();
           await this.saveState(state);
 
-          await this.notify(state.goalThreadId,
+          await this.notify(state.goalChannelId,
             `**Replan feedback:** ${this.getTaskLabel(state, task.id)} - ${task.description}\n` +
             `Reason: ${feedback.reason}`,
             'info'
@@ -2096,7 +2097,7 @@ export class GoalOrchestrator {
         // 非 replan 类型 → 标记为 blocked_feedback 等待人工处理
         task.status = 'blocked_feedback';
         await this.saveState(state);
-        await this.notify(state.goalThreadId,
+        await this.notify(state.goalChannelId,
           `**Feedback received:** ${this.getTaskLabel(state, task.id)} - ${task.description}\n` +
           `Type: ${feedback.type}\n` +
           `Reason: ${feedback.reason}` +
@@ -2113,7 +2114,7 @@ export class GoalOrchestrator {
       await this.saveState(state);
 
       const costInfo = usage ? ` ($${usage.total_cost_usd.toFixed(4)}, ${Math.round(usage.duration_ms / 1000)}s)` : '';
-      await this.notify(state.goalThreadId, `Completed: ${this.getTaskLabel(state, task.id)} - ${task.description}${costInfo}`, 'success');
+      await this.notify(state.goalChannelId, `Completed: ${this.getTaskLabel(state, task.id)} - ${task.description}${costInfo}`, 'success');
       if (task.branchName) await this.mergeAndCleanup(state, task);
       const refreshed = await this.getState(goalId);
       if (refreshed && refreshed.status === 'running') await this.reviewAndDispatch(refreshed, taskId);
@@ -2142,14 +2143,14 @@ export class GoalOrchestrator {
       await this.saveState(state);
 
       const costInfo = usage ? ` ($${usage.total_cost_usd.toFixed(4)})` : '';
-      const hasContext = !!task.threadId;
+      const hasContext = !!task.channelId;
       const hint = hasContext
         ? `Reply "retry ${task.id}" to restart, or "refix ${task.id}" to fix in-place.`
         : `Reply "retry ${task.id}" to retry.`;
       const buttons = hasContext
         ? buildTaskFailedButtons(goalId, task.id)
         : undefined;
-      await this.notify(state.goalThreadId,
+      await this.notify(state.goalChannelId,
         `Failed: ${this.getTaskLabel(state, task.id)} - ${task.description}${costInfo}\nError: ${error}\n\n${hint}`,
         'error',
         buttons ? { components: buttons } : undefined,
@@ -2190,14 +2191,14 @@ export class GoalOrchestrator {
 
       const result = await replanTasks(ctx);
       if (!result) {
-        await this.notify(state.goalThreadId,
+        await this.notify(state.goalChannelId,
           `⚠️ Replan 调用失败 — LLM 未返回有效结果，当前计划保持不变`,
           'warning',
         );
         return;
       }
       if (result.changes.length === 0) {
-        await this.notify(state.goalThreadId,
+        await this.notify(state.goalChannelId,
           `Replan: 无需变更 — ${result.reasoning}`,
           'info',
         );
@@ -2206,7 +2207,7 @@ export class GoalOrchestrator {
 
       // 4. 分级自治处理
       const handleResult = await handleReplanByImpact(state, result, {
-        goalTaskRepo: this.deps.goalTaskRepo,
+        taskRepo: this.deps.taskRepo,
         goalMetaRepo: this.deps.goalMetaRepo,
         checkpointRepo: this.deps.checkpointRepo,
         notify: (threadId, message, type, options) => this.notify(threadId, message, type, options),
@@ -2225,7 +2226,7 @@ export class GoalOrchestrator {
       }
     } catch (err: any) {
       logger.error(`[Orchestrator] triggerReplan failed: ${err.message}`);
-      await this.notify(state.goalThreadId,
+      await this.notify(state.goalChannelId,
         `Replan 失败: ${err.message}`,
         'error',
       );
@@ -2241,7 +2242,7 @@ export class GoalOrchestrator {
     if (!state) return false;
 
     if (!state.pendingReplan) {
-      await this.notify(state.goalThreadId, '没有待审批的计划变更', 'info');
+      await this.notify(state.goalChannelId, '没有待审批的计划变更', 'info');
       return false;
     }
 
@@ -2249,7 +2250,7 @@ export class GoalOrchestrator {
 
     // 应用变更
     const applyResult = await applyChanges(state, pending.changes as ReplanChange[], {
-      goalTaskRepo: this.deps.goalTaskRepo,
+      taskRepo: this.deps.taskRepo,
       goalMetaRepo: this.deps.goalMetaRepo,
     });
 
@@ -2257,7 +2258,7 @@ export class GoalOrchestrator {
     delete state.pendingReplan;
     await this.saveState(state);
 
-    await this.notify(state.goalThreadId,
+    await this.notify(state.goalChannelId,
       `✅ **计划变更已批准并执行**\n` +
       `已应用 ${applyResult.applied.length} 项变更` +
       (applyResult.rejected.length > 0
@@ -2316,7 +2317,7 @@ export class GoalOrchestrator {
 
     // 应用修改后的变更
     const applyResult = await applyChanges(state, modifiedChanges, {
-      goalTaskRepo: this.deps.goalTaskRepo,
+      taskRepo: this.deps.taskRepo,
       goalMetaRepo: this.deps.goalMetaRepo,
     });
 
@@ -2324,7 +2325,7 @@ export class GoalOrchestrator {
     delete state.pendingReplan;
     await this.saveState(state);
 
-    await this.notify(state.goalThreadId,
+    await this.notify(state.goalChannelId,
       `✅ **修改后的计划已批准并执行**\n` +
       `已应用 ${applyResult.applied.length} 项变更` +
       (applyResult.rejected.length > 0
@@ -2357,7 +2358,7 @@ export class GoalOrchestrator {
 
     const pending = state.pendingReplan;
     if (!pending) {
-      await this.notify(state.goalThreadId, '没有待审批的计划变更', 'info');
+      await this.notify(state.goalChannelId, '没有待审批的计划变更', 'info');
       return false;
     }
 
@@ -2365,7 +2366,7 @@ export class GoalOrchestrator {
     delete state.pendingReplan;
     await this.saveState(state);
 
-    await this.notify(state.goalThreadId,
+    await this.notify(state.goalChannelId,
       `🚫 **计划变更已拒绝**\n快照 ID: \`${pending.checkpointId}\``,
       'info',
     );
@@ -2400,7 +2401,7 @@ export class GoalOrchestrator {
       }
 
       if (state.pendingRollback) {
-        await this.notify(state.goalThreadId,
+        await this.notify(state.goalChannelId,
           `已有待确认的回滚操作（检查点: \`${state.pendingRollback.checkpointId}\`）\n` +
           `请先 \`confirm rollback\` 或 \`cancel rollback\``,
           'warning',
@@ -2411,15 +2412,15 @@ export class GoalOrchestrator {
       // 1. 加载检查点
       const checkpoint = await this.deps.checkpointRepo.get(checkpointId);
       if (!checkpoint) {
-        await this.notify(state.goalThreadId, `检查点 \`${checkpointId}\` 不存在`, 'error');
+        await this.notify(state.goalChannelId, `检查点 \`${checkpointId}\` 不存在`, 'error');
         return null;
       }
       if (checkpoint.goalId !== goalId) {
-        await this.notify(state.goalThreadId, `检查点 \`${checkpointId}\` 不属于此 Goal`, 'error');
+        await this.notify(state.goalChannelId, `检查点 \`${checkpointId}\` 不属于此 Goal`, 'error');
         return null;
       }
       if (!checkpoint.tasksSnapshot) {
-        await this.notify(state.goalThreadId, `检查点 \`${checkpointId}\` 没有任务快照`, 'error');
+        await this.notify(state.goalChannelId, `检查点 \`${checkpointId}\` 没有任务快照`, 'error');
         return null;
       }
 
@@ -2471,8 +2472,8 @@ export class GoalOrchestrator {
 
         if (task.status === 'running') {
           // 中止 Claude 进程
-          if (task.threadId && guildId) {
-            const lockKey = StateManager.threadLockKey(guildId, task.threadId);
+          if (task.channelId && guildId) {
+            const lockKey = StateManager.channelLockKey(guildId, task.channelId);
             this.deps.claudeClient.abort(lockKey);
           }
           task.status = 'paused';
@@ -2526,7 +2527,7 @@ export class GoalOrchestrator {
         `⏪ **回滚评估：检查点 \`${checkpointId}\`**\n\n` +
         costSummary;
 
-      await this.notify(state.goalThreadId, confirmMessage, 'warning', {
+      await this.notify(state.goalChannelId, confirmMessage, 'warning', {
         components: buildRollbackConfirmButtons(goalId),
       });
 
@@ -2550,7 +2551,7 @@ export class GoalOrchestrator {
 
       const pending = state.pendingRollback;
       if (!pending) {
-        await this.notify(state.goalThreadId, '没有待确认的回滚操作', 'info');
+        await this.notify(state.goalChannelId, '没有待确认的回滚操作', 'info');
         return false;
       }
 
@@ -2559,7 +2560,7 @@ export class GoalOrchestrator {
       // 1. 恢复检查点的任务快照
       const snapshotTasks = await this.deps.checkpointRepo.restoreCheckpoint(pending.checkpointId);
       if (!snapshotTasks) {
-        await this.notify(state.goalThreadId,
+        await this.notify(state.goalChannelId,
           `回滚失败：检查点 \`${pending.checkpointId}\` 快照数据不可用`,
           'error',
         );
@@ -2577,14 +2578,14 @@ export class GoalOrchestrator {
 
         // 任务在快照中不存在（replan 新增的）→ 需要清理
         if (!snapshotTask) {
-          if (task.branchName || task.threadId) {
+          if (task.branchName || task.channelId) {
             tasksToCleanup.push(task);
           }
           continue;
         }
 
         // 任务在快照中是 pending 但现在有 branch/thread → 需要清理
-        if (snapshotTask.status === 'pending' && (task.branchName || task.threadId)) {
+        if (snapshotTask.status === 'pending' && (task.branchName || task.channelId)) {
           tasksToCleanup.push(task);
         }
       }
@@ -2594,8 +2595,8 @@ export class GoalOrchestrator {
 
       for (const task of tasksToCleanup) {
         // 停止进程
-        if (task.threadId && guildId) {
-          const lockKey = StateManager.threadLockKey(guildId, task.threadId);
+        if (task.channelId && guildId) {
+          const lockKey = StateManager.channelLockKey(guildId, task.channelId);
           this.deps.claudeClient.abort(lockKey);
         }
 
@@ -2618,12 +2619,12 @@ export class GoalOrchestrator {
         }
 
         // 删除 Discord channel
-        if (task.threadId) {
+        if (task.channelId) {
           if (guildId) {
-            this.deps.stateManager.archiveSession(guildId, task.threadId, undefined, 'rollback');
+            this.deps.stateManager.archiveSession(guildId, task.channelId, undefined, 'rollback');
           }
           try {
-            const channel = await this.deps.client.channels.fetch(task.threadId);
+            const channel = await this.deps.client.channels.fetch(task.channelId);
             if (channel && 'delete' in channel) {
               await (channel as any).delete('Rolled back').catch(() => {});
             }
@@ -2642,7 +2643,7 @@ export class GoalOrchestrator {
             logger.info(`[Orchestrator] rollback: reset ${state.goalBranch} to ${checkpoint.gitRef}`);
           } catch (err: any) {
             logger.warn(`[Orchestrator] rollback: git reset failed: ${err.message}`);
-            await this.notify(state.goalThreadId,
+            await this.notify(state.goalChannelId,
               `Git reset 失败: ${err.message}\n任务计划已恢复，但 git 历史可能需要手动处理`,
               'warning',
             );
@@ -2660,7 +2661,7 @@ export class GoalOrchestrator {
       }
 
       // 持久化
-      await this.deps.goalTaskRepo.saveAll(state.goalId, snapshotTasks);
+      await this.deps.taskRepo.saveAll(snapshotTasks, state.goalId);
       await this.saveState(state);
 
       // 更新 Goal body
@@ -2674,7 +2675,7 @@ export class GoalOrchestrator {
       }
 
       const cleanedCount = tasksToCleanup.length;
-      await this.notify(state.goalThreadId,
+      await this.notify(state.goalChannelId,
         `✅ **回滚完成**\n` +
         `已恢复到检查点 \`${pending.checkpointId}\`\n` +
         `清理了 ${cleanedCount} 个受影响任务的资源\n` +
@@ -2701,7 +2702,7 @@ export class GoalOrchestrator {
 
       const pending = state.pendingRollback;
       if (!pending) {
-        await this.notify(state.goalThreadId, '没有待确认的回滚操作', 'info');
+        await this.notify(state.goalChannelId, '没有待确认的回滚操作', 'info');
         return false;
       }
 
@@ -2718,7 +2719,7 @@ export class GoalOrchestrator {
           // 重新设为 pending 让调度器重新分发
           task.status = 'pending';
           task.branchName = undefined;
-          task.threadId = undefined;
+          task.channelId = undefined;
           task.dispatchedAt = undefined;
         }
       }
@@ -2726,7 +2727,7 @@ export class GoalOrchestrator {
       delete state.pendingRollback;
       await this.saveState(state);
 
-      await this.notify(state.goalThreadId,
+      await this.notify(state.goalChannelId,
         `🚫 **回滚已取消**\n已暂停的任务将重新派发（之前的执行进度无法恢复）`,
         'info',
       );
@@ -2866,7 +2867,7 @@ export class GoalOrchestrator {
       );
       const goalWorktreeDir = this.findWorktreeDir(stdout, state.goalBranch);
       if (!goalWorktreeDir) {
-        await this.notify(state.goalThreadId, `Cannot find goal worktree, skipping merge: ${branchName}`, 'warning');
+        await this.notify(state.goalChannelId, `Cannot find goal worktree, skipping merge: ${branchName}`, 'warning');
         return;
       }
 
@@ -2883,19 +2884,19 @@ export class GoalOrchestrator {
       if (result.success) {
         task.merged = true;
         await this.saveState(state);
-        await this.notify(state.goalThreadId, `Merged: \`${branchName}\` → \`${state.goalBranch}\``, 'success');
+        await this.notify(state.goalChannelId, `Merged: \`${branchName}\` → \`${state.goalBranch}\``, 'success');
 
         if (subtaskDir) {
           await cleanupSubtask(state.baseCwd, subtaskDir, branchName);
         }
 
         // Delete subtask channel
-        if (task.threadId) {
+        if (task.channelId) {
           const guildId = this.getGuildId();
           if (guildId) {
-            this.deps.stateManager.archiveSession(guildId, task.threadId, undefined, 'merged');
+            this.deps.stateManager.archiveSession(guildId, task.channelId, undefined, 'merged');
             try {
-              const channel = await this.deps.client.channels.fetch(task.threadId);
+              const channel = await this.deps.client.channels.fetch(task.channelId);
               if (channel && 'delete' in channel) {
                 await (channel as any).delete('Task merged and cleaned up').catch(() => {});
               }
@@ -2904,7 +2905,7 @@ export class GoalOrchestrator {
         }
       } else if (result.conflict) {
         // 尝试 AI 自动解决冲突
-        await this.notify(state.goalThreadId,
+        await this.notify(state.goalChannelId,
           `Merge conflict: \`${branchName}\` → \`${state.goalBranch}\`, trying AI resolution...`,
           'warning'
         );
@@ -2919,7 +2920,7 @@ export class GoalOrchestrator {
         if (resolution.resolved) {
           task.merged = true;
           await this.saveState(state);
-          await this.notify(state.goalThreadId,
+          await this.notify(state.goalChannelId,
             `AI resolved conflict and merged: \`${branchName}\` → \`${state.goalBranch}\``,
             'success'
           );
@@ -2928,12 +2929,12 @@ export class GoalOrchestrator {
             await cleanupSubtask(state.baseCwd, subtaskDir, branchName);
           }
 
-          if (task.threadId) {
+          if (task.channelId) {
             const guildId = this.getGuildId();
             if (guildId) {
-              this.deps.stateManager.archiveSession(guildId, task.threadId, undefined, 'merged');
+              this.deps.stateManager.archiveSession(guildId, task.channelId, undefined, 'merged');
               try {
-                const channel = await this.deps.client.channels.fetch(task.threadId);
+                const channel = await this.deps.client.channels.fetch(task.channelId);
                 if (channel && 'delete' in channel) {
                   await (channel as any).delete('Task merged and cleaned up').catch(() => {});
                 }
@@ -2942,7 +2943,7 @@ export class GoalOrchestrator {
           }
         } else {
           // AI 无法解决，fallback 到人工干预
-          await this.notify(state.goalThreadId,
+          await this.notify(state.goalChannelId,
             `AI could not resolve conflict: \`${branchName}\` → \`${state.goalBranch}\`\n` +
             `Reason: ${resolution.error}\n` +
             `Manual resolution needed. Reply "done ${task.id}" when resolved.`,  // keep task.id for command matching
@@ -2953,7 +2954,7 @@ export class GoalOrchestrator {
           await this.saveState(state);
         }
       } else {
-        await this.notify(state.goalThreadId, `Merge failed: ${branchName}\nError: ${result.error}`, 'error');
+        await this.notify(state.goalChannelId, `Merge failed: ${branchName}\nError: ${result.error}`, 'error');
       }
     } catch (err: any) {
       logger.error(`[Orchestrator] mergeAndCleanup error: ${err.message}`);
