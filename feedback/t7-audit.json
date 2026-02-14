@@ -1,13 +1,25 @@
 {
   "verdict": "pass",
-  "summary": "实现完整且正确。migration 005 DROP TABLE 已创建并注册到 allMigrations；SessionRepository 中 4 个 message_history prepared statements (getHistory, insertMessage, deleteHistory, trimHistory) 和 addMessageAndTrim() 方法已移除；rowToSession() 不再接受 history 参数，始终返回空 messageHistory 数组；save() 简化为单条 upsert（不再需要 transaction）；archive/restore 流程已适配（message_history_json 保持 null）；state.ts 中 updateSessionMessage() 改为直接 persistSession()；MessageHistoryRow 类型定义已移除；测试已更新验证新行为。TypeScript 编译通过，session-repo 19 个测试全部通过。",
-  "verifyCommands": ["npx tsc --noEmit", "npx vitest run"],
+  "summary": "CommandMeta 结构、GET /api/commands 端点、Web 端 Commands 页面均已正确实现。后端从 allCommands 数组提取 Discord.js 命令元数据，映射 option 类型并按类别分组；前端用 SWR hook 获取数据，Ant Design 卡片布局按分类展示，参数可折叠查看。后端 TypeScript 类型检查通过（无 commands 相关错误），Web build 失败和 2 个测试失败均为预存在问题（GoalStatus 类型不匹配、缺失 migration 008），非本任务引入。注意：代码修改尚未提交（仅 working tree 中）。",
+  "verifyCommands": ["npx tsc --noEmit 2>&1 | grep -i commands", "npx vitest run", "cd web && npm run build"],
   "issues": [
     {
       "severity": "warning",
-      "file": "discord/api/routes/__tests__/tasks-interactions.test.ts",
-      "line": 65,
-      "description": "预存在的测试失败（非本分支引入）：InteractionLogRepository 测试中 role 排序断言失败（expected 'user' got 'assistant'）。此问题存在于 goal 分支，应在其他任务中修复。"
+      "file": "discord/api/routes/commands.ts",
+      "line": 15,
+      "description": "COMMAND_CATEGORIES 硬编码命令分类映射。新增命令时需要手动更新此映射，否则会默认归类为 'general'。建议考虑在命令注册时声明 category，但当前实现可接受。"
+    },
+    {
+      "severity": "warning",
+      "file": "web/src/pages/Commands.tsx",
+      "line": 8,
+      "description": "使用了 Collapse.Panel（Ant Design v5+ 已标记为 deprecated，推荐使用 items 属性）。当前 antd v6 仍支持但可能在未来版本移除。"
+    },
+    {
+      "severity": "warning",
+      "file": ".",
+      "line": 0,
+      "description": "代码变更仅存在于 working tree，尚未 git commit。investigate 阶段的 commit 仅包含 feedback/t7-investigate.json，实际代码修改需要提交。"
     }
   ]
 }

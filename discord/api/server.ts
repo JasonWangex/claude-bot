@@ -26,6 +26,7 @@ import { listDevLogs, getDevLog, createDevLog } from './routes/devlogs.js';
 import { listIdeas, createIdea, getIdea, updateIdea, deleteIdea } from './routes/ideas.js';
 import { listKnowledgeBase, createKnowledgeBase, getKnowledgeBaseEntry, updateKnowledgeBase, deleteKnowledgeBase } from './routes/knowledge-base.js';
 import { syncSessions } from './routes/sync.js';
+import { getCommands } from './routes/commands.js';
 
 function defineRoutes(): Route[] {
   const r = (method: string, path: string, handler: Route['handler']): Route => {
@@ -41,6 +42,9 @@ function defineRoutes(): Route[] {
     // 系统
     r('GET',  '/api/health', getHealth),
     r('GET',  '/api/status', getStatus),
+
+    // 命令
+    r('GET',  '/api/commands', getCommands),
 
     // 模型
     r('GET',  '/api/models', getModels),
