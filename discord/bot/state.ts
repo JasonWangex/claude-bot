@@ -20,11 +20,20 @@ import type { ClaudeSessionRepository } from '../db/repo/claude-session-repo.js'
 
 const MAX_HISTORY = 50;
 
+// Session 状态追踪（用于 hooks 事件处理）
+interface SessionTracking {
+  waitingMessageId?: string;      // 等待消息 ID（用于删除）
+  waitingTimer?: NodeJS.Timeout;  // 等待消息定时器（用于取消）
+}
+
 export class StateManager {
   private sessions: Map<string, Session> = new Map();   // "guildId:channelId" → Session
   private guilds: Map<string, GuildState> = new Map();   // guildId → GuildState
   private archivedSessions: Map<string, ArchivedSession> = new Map();
   private defaultWorkDir: string;
+
+  // Session 状态追踪（hooks 事件处理）
+  private sessionTracking: Map<string, SessionTracking> = new Map();  // channelId → SessionTracking
 
   /**
    * 生成 channel 级别的固定 lockKey，用于 Claude 进程互斥
@@ -642,5 +651,63 @@ export class StateManager {
     if (!session || !session.sessionIds) return;
     session.sessionIds[model] = undefined;
     this.persistSession(guildId, threadId);
+  }
+
+  // ========== Session 状态追踪（hooks 事件处理）==========
+
+  /**
+   * 设置等待消息 ID
+   */
+  setWaitingMessageId(channelId: string, msgId: string): void {
+    const tracking = this.sessionTracking.get(channelId) || {};
+    tracking.waitingMessageId = msgId;
+    this.sessionTracking.set(channelId, tracking);
+  }
+
+  /**
+   * 获取等待消息 ID
+   */
+  getWaitingMessageId(channelId: string): string | undefined {
+    return this.sessionTracking.get(channelId)?.waitingMessageId;
+  }
+
+  /**
+   * 设置等待消息定时器
+   */
+  setWaitingTimer(channelId: string, timer: NodeJS.Timeout): void {
+    const tracking = this.sessionTracking.get(channelId) || {};
+    // 清除旧的定时器（明确检查 !== undefined）
+    if (tracking.waitingTimer !== undefined) {
+      clearTimeout(tracking.waitingTimer);
+    }
+    tracking.waitingTimer = timer;
+    this.sessionTracking.set(channelId, tracking);
+  }
+
+  /**
+   * 取消等待消息（清除定时器和消息ID）
+   */
+  cancelWaitingMessage(channelId: string): void {
+    const tracking = this.sessionTracking.get(channelId);
+    if (!tracking) return;
+
+    // 明确检查 !== undefined 防止泄漏
+    if (tracking.waitingTimer !== undefined) {
+      clearTimeout(tracking.waitingTimer);
+      tracking.waitingTimer = undefined;
+    }
+    tracking.waitingMessageId = undefined;
+    this.sessionTracking.set(channelId, tracking);
+  }
+
+  /**
+   * 清除 channel 的所有追踪状态
+   */
+  clearSessionTracking(channelId: string): void {
+    const tracking = this.sessionTracking.get(channelId);
+    if (tracking?.waitingTimer !== undefined) {
+      clearTimeout(tracking.waitingTimer);
+    }
+    this.sessionTracking.delete(channelId);
   }
 }

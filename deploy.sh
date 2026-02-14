@@ -20,6 +20,32 @@ install_cron() {
   fi
 }
 
+install_hooks() {
+  local hook_dir="$HOME/.claude/hooks"
+  local hook_src="$PROJECT_DIR/hooks"
+
+  mkdir -p "$hook_dir"
+
+  if [ -d "$hook_src" ]; then
+    for f in "$hook_src"/*.sh; do
+      [ -f "$f" ] || continue
+      local name
+      name="$(basename "$f")"
+      cp "$f" "$hook_dir/$name"
+      chmod +x "$hook_dir/$name"
+      echo "  $name: installed"
+    done
+  fi
+
+  # 更新 Claude settings.json 中的 hooks 配置
+  local settings_file="$HOME/.claude/settings.json"
+  if [ -f "$settings_file" ]; then
+    echo "  Claude settings.json: hooks already configured (manual merge required)"
+  else
+    echo "  Claude settings.json: not found, skipping hooks configuration"
+  fi
+}
+
 stamp_deploy_time() {
   local ts
   ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -63,6 +89,9 @@ do_deploy() {
 
   echo "==> Installing cron jobs..."
   install_cron
+
+  echo "==> Installing Claude hooks..."
+  install_hooks
 
   echo "==> Reloading systemd..."
   systemctl --user daemon-reload

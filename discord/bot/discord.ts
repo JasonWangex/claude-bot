@@ -324,6 +324,12 @@ export class DiscordBot {
     }
 
     const customId = interaction.customId;
+    const channelId = interaction.channelId;
+
+    // 用户交互时取消待发的等待消息
+    if (channelId) {
+      this.stateManager.cancelWaitingMessage(channelId);
+    }
 
     // Stop button: stop:<lockKey>
     if (customId.startsWith('stop:')) {

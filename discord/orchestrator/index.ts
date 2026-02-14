@@ -1953,7 +1953,7 @@ export class GoalOrchestrator {
     });
   }
 
-  private async onTaskFailed(goalId: string, taskId: string, error: string, usage?: ChatUsageResult): Promise<void> {
+  async onTaskFailed(goalId: string, taskId: string, error: string, usage?: ChatUsageResult): Promise<void> {
     await this.withStateLock(goalId, async () => {
       const state = await this.getState(goalId);
       if (!state) return;
@@ -2926,5 +2926,286 @@ export class GoalOrchestrator {
 
   private getGuildId(): string | null {
     return getAuthorizedGuildId() ?? null;
+  }
+
+  /**
+   * 检查 Goal task 完成准备状态（Stop hook 触发）
+   * 向 Claude 发送 3 个检查问题，根据回答自动推进 pipeline
+   */
+  async checkTaskReadiness(goalId: string, taskId: string, channelId: string): Promise<void> {
+    await this.withStateLock(goalId, async () => {
+      const state = await this.getState(goalId);
+      if (!state) return;
+
+      const task = state.tasks.find(t => t.id === taskId);
+      if (!task || task.status !== 'running') {
+        logger.debug(`[Orchestrator] checkTaskReadiness: task ${taskId} not in running state, skip`);
+        return;
+      }
+
+      logger.info(`[Orchestrator] Auto-checking task readiness: ${this.getTaskLabel(state, taskId)}`);
+
+      // 构建检查 prompt
+      const phase = task.pipelinePhase || 'execute';
+      const checkPrompt = this.buildReadinessCheckPrompt(task, state, phase);
+
+      if (!checkPrompt) {
+        logger.warn(`[Orchestrator] Prompt not found for phase ${phase}, skip auto-check`);
+        return;
+      }
+
+      // 向 Claude 发送检查问题（在当前 session 中）
+      const guildId = this.getGuildId();
+      if (!guildId) {
+        logger.warn(`[Orchestrator] No authorized guild, skip auto-check`);
+        return;
+      }
+
+      try {
+        const usage = await this.deps.messageHandler.handleBackgroundChat(
+          guildId,
+          channelId,
+          checkPrompt
+        );
+
+        // 读取 Claude 的回答（从 transcript 或最后一条消息）
+        const response = await this.readTaskCheckResponse(channelId, state, task);
+
+        if (!response) {
+          logger.warn(`[Orchestrator] Failed to parse check response, skip auto-advance`);
+          return;
+        }
+
+        await this.handleTaskCheckResponse(goalId, taskId, response, state, usage);
+      } catch (err: any) {
+        logger.error(`[Orchestrator] checkTaskReadiness failed:`, err.message);
+
+        // 标记任务失败（避免任务永久卡在 running 状态）
+        await this.onTaskFailed(
+          goalId,
+          taskId,
+          `Auto-check failed: ${err.message}`
+        );
+      }
+    });
+  }
+
+  /**
+   * 构建任务完成检查 prompt
+   */
+  private buildReadinessCheckPrompt(
+    task: GoalTask,
+    state: GoalDriveState,
+    phase: string
+  ): string | null {
+    const ps = this.deps.promptService;
+    const promptKey = `orchestrator.task_readiness_check.${phase}`;
+
+    return ps.tryRender(promptKey, {
+      TASK_DESCRIPTION: task.description,
+      TASK_ID: task.id,
+      TASK_LABEL: this.getTaskLabel(state, task.id),
+      PIPELINE_PHASE: phase,
+    });
+  }
+
+  /**
+   * 读取任务检查回答（从 channel 的最后一条 Claude 消息）
+   */
+  private async readTaskCheckResponse(
+    channelId: string,
+    state: GoalDriveState,
+    task: GoalTask
+  ): Promise<{ completed: boolean; audited: boolean; committed: boolean } | null> {
+    try {
+      // 方法1: 尝试从 feedback 文件读取（如果 Claude 写入了结构化反馈）
+      const feedbackPath = join(state.baseCwd, 'feedback', `${task.id}-readiness.json`);
+      try {
+        const feedbackContent = await readFile(feedbackPath, 'utf-8');
+        const feedback = JSON.parse(feedbackContent);
+        if (feedback.completed !== undefined && feedback.audited !== undefined && feedback.committed !== undefined) {
+          logger.info(`[Orchestrator] Read readiness check from feedback file`);
+          return feedback;
+        }
+      } catch {
+        // Feedback 文件不存在，继续尝试其他方法
+      }
+
+      // 方法2: 从 Discord channel 读取最后一条 Claude 消息
+      const channel = await this.deps.client.channels.fetch(channelId);
+      if (!channel || !('messages' in channel)) return null;
+
+      const messages = await channel.messages.fetch({ limit: 5 });
+      const botMessages = messages.filter(m => m.author.id === this.deps.client.user?.id);
+      if (botMessages.size === 0) return null;
+
+      const lastBotMessage = botMessages.first();
+      if (!lastBotMessage) return null;
+
+      // 解析回答
+      return this.parseCheckResponse(lastBotMessage.content);
+    } catch (err: any) {
+      logger.error(`[Orchestrator] Failed to read check response:`, err.message);
+      return null;
+    }
+  }
+
+  /**
+   * 解析检查回答文本
+   */
+  private parseCheckResponse(text: string): {
+    completed: boolean;
+    audited: boolean;
+    committed: boolean;
+  } | null {
+    // 尝试提取代码块中的答案
+    const codeBlockMatch = text.match(/```(?:\w+)?\s*\n([\s\S]*?)\n```/);
+    let lines: string[];
+
+    if (codeBlockMatch) {
+      lines = codeBlockMatch[1].split('\n');
+    } else {
+      lines = text.split('\n');
+    }
+
+    // 提取 yes/no 答案
+    const answers = lines
+      .map(l => {
+        const match = l.match(/\d+\.\s*(yes|no)/i);
+        return match ? match[1].toLowerCase() === 'yes' : null;
+      })
+      .filter(a => a !== null) as boolean[];
+
+    if (answers.length !== 3) {
+      logger.debug(`[Orchestrator] Expected 3 answers, got ${answers.length}`);
+      return null;
+    }
+
+    return {
+      completed: answers[0],
+      audited: answers[1],
+      committed: answers[2],
+    };
+  }
+
+  /**
+   * 处理任务检查回答
+   */
+  private async handleTaskCheckResponse(
+    goalId: string,
+    taskId: string,
+    response: { completed: boolean; audited: boolean; committed: boolean },
+    state: GoalDriveState,
+    usage?: ChatUsageResult
+  ): Promise<void> {
+    const task = state.tasks.find(t => t.id === taskId);
+    if (!task) return;
+
+    const { completed, audited, committed } = response;
+
+    // 全部通过 → 自动推进到下一阶段
+    if (completed && audited && committed) {
+      const currentPhase = task.pipelinePhase || 'execute';
+
+      logger.info(`[Orchestrator] Task ${taskId} passed auto-check, advancing from ${currentPhase}`);
+
+      if (currentPhase === 'execute') {
+        // Execute 阶段完成 → 推进到 audit
+        task.pipelinePhase = 'audit';
+        task.status = 'dispatched';
+        await this.saveState(state);
+
+        await this.notify(
+          state.goalChannelId,
+          `✅ **任务自检通过，推进到 Audit 阶段:** ${this.getTaskLabel(state, taskId)} - ${task.description}`,
+          'pipeline'
+        );
+
+        // 启动 audit 流程（如果是多模型流水线）
+        if (task.complexity === 'complex') {
+          // Complex task → 启动 Opus audit
+          const guildId = this.getGuildId();
+          if (guildId && task.channelId) {
+            await this.startAuditPipeline(goalId, taskId, guildId, task.channelId, usage);
+          }
+        } else {
+          // Simple task → 直接完成
+          await this.onTaskCompleted(goalId, taskId, usage);
+        }
+      } else if (currentPhase === 'audit') {
+        // Audit 阶段完成 → 标记为 completed
+        await this.onTaskCompleted(goalId, taskId, usage);
+      } else if (currentPhase === 'fix') {
+        // Fix 阶段完成 → 推进到 re-audit
+        await this.notify(
+          state.goalChannelId,
+          `✅ **修复完成，准备重新审查:** ${this.getTaskLabel(state, taskId)}`,
+          'pipeline'
+        );
+        // Re-audit 逻辑已在 auditFixLoop 中处理
+      }
+    } else {
+      // 有未通过项 → Claude 应该已经在回答中说明了原因，继续等待它完成
+      logger.info(`[Orchestrator] Task ${taskId} auto-check failed, waiting for completion`);
+
+      // 记录未通过的检查项到 task metadata（用于调试）
+      const issues: string[] = [];
+      if (!completed) issues.push('任务未完成');
+      if (!audited) issues.push('审查未通过');
+      if (!committed) issues.push('未提交代码');
+
+      task.metadata = {
+        ...task.metadata,
+        lastCheckFailed: Date.now(),
+        lastCheckIssues: issues,
+      };
+      await this.saveState(state);
+
+      // 不发送通知，让 Claude 自己继续工作
+    }
+  }
+
+  /**
+   * 启动 Audit pipeline（从 execute 阶段推进时调用）
+   */
+  private async startAuditPipeline(
+    goalId: string,
+    taskId: string,
+    guildId: string,
+    channelId: string,
+    prevUsage?: ChatUsageResult
+  ): Promise<void> {
+    const state = await this.getState(goalId);
+    if (!state) return;
+
+    const task = state.tasks.find(t => t.id === taskId);
+    if (!task) return;
+
+    // 切换到 Opus model 进行 audit
+    const { pipelineOpusModel: opusModel } = this.deps.config;
+    this.switchSessionModel(guildId, channelId, opusModel, 'audit');
+    task.pipelinePhase = 'audit';
+    task.status = 'running';
+    await this.saveState(state);
+
+    await this.notify(
+      state.goalChannelId,
+      `[Pipeline] ${taskId}: 进入 Opus Audit 阶段`,
+      'pipeline'
+    );
+
+    // 启动完整的 pipeline 流程（包含 audit）
+    const usage: ChatUsageResult = prevUsage || {
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_read_input_tokens: 0,
+      cache_creation_input_tokens: 0,
+      total_cost_usd: 0,
+      duration_ms: 0,
+    };
+
+    // TODO: 实现 audit pipeline 逻辑
+    // Audit pipeline 应该切换到 Opus model 并发送 audit prompt
+    logger.warn(`[Orchestrator] startAuditPipeline: audit pipeline not fully implemented yet`);
   }
 }

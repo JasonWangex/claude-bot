@@ -29,6 +29,8 @@ import { syncSessions } from './routes/sync.js';
 import { getCommands } from './routes/commands.js';
 import { getSessionConversation } from './routes/sessions.js';
 import { listPrompts, getPrompt, updatePrompt, refreshPrompts } from './routes/prompts.js';
+import { getRunningTasks, getActiveProcesses, killZombieTasks } from './routes/debug.js';
+import { handleSessionEvent } from './routes/hooks.js';
 
 function defineRoutes(): Route[] {
   const r = (method: string, path: string, handler: Route['handler']): Route => {
@@ -120,6 +122,14 @@ function defineRoutes(): Route[] {
     r('POST',   '/api/prompts/refresh', refreshPrompts),
     r('GET',    '/api/prompts/:key',    getPrompt),
     r('PATCH',  '/api/prompts/:key',    updatePrompt),
+
+    // Debug endpoints
+    r('GET',  '/api/debug/running-tasks',      getRunningTasks),
+    r('GET',  '/api/debug/active-processes',   getActiveProcesses),
+    r('POST', '/api/debug/kill-zombie-tasks',  killZombieTasks),
+
+    // Internal hooks (localhost only, no auth required)
+    r('POST', '/api/internal/hooks/session-event', handleSessionEvent),
   ];
 }
 

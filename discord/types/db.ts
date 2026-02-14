@@ -357,11 +357,14 @@ export interface ClaudeSessionRow {
   channel_id: string | null;
   model: string | null;
   plan_mode: number;             // 0/1
-  status: 'active' | 'closed';
+  status: 'active' | 'waiting' | 'idle' | 'closed';  // 扩展状态支持
   created_at: number;
   closed_at: number | null;
   purpose: 'channel' | 'plan' | 'temp' | 'replan' | null;  // 会话用途
   parent_session_id: string | null;  // 父会话 ID
+  last_activity_at: number | null;   // 最后活动时间
+  last_usage_json: string | null;    // 最后一次 token/cost 数据（JSON）
+  last_stop_at: number | null;       // 最后一次 Stop 事件时间（幂等窗口）
 }
 
 // ================================================================

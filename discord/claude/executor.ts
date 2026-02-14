@@ -597,6 +597,13 @@ export class ClaudeExecutor {
       args.push('--append-system-prompt', options.appendSystemPrompt);
     }
 
+    // 添加 hook URL（如果启用）
+    if (process.env.CLAUDE_HOOK_ENABLED === 'true') {
+      const apiPort = process.env.API_PORT || '3456';
+      const hookUrl = `http://localhost:${apiPort}/api/internal/hooks/session-event`;
+      args.push('--hook-url', hookUrl);
+    }
+
     return args;
   }
 

@@ -81,6 +81,9 @@ export class MessageHandler {
     let text = message.content;
     if (!text) return;
 
+    // 用户交互时取消待发的等待消息
+    this.stateManager.cancelWaitingMessage(channelId);
+
     // // 前缀 → Claude skill 命令
     if (text.startsWith('//')) {
       text = text.slice(1);

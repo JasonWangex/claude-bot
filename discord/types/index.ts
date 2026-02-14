@@ -332,6 +332,9 @@ export interface Task {
   cacheWriteIn?: number;
   costUsd?: number;
   durationMs?: number;
+
+  // 元数据（用于存储扩展信息）
+  metadata?: Record<string, any>;
 }
 
 // ========== Deprecated aliases ==========
@@ -445,9 +448,12 @@ export interface ClaudeSession {
   channelId?: string;
   model?: string;
   planMode: boolean;
-  status: 'active' | 'closed';
+  status: 'active' | 'waiting' | 'idle' | 'closed';  // 扩展状态支持
   createdAt: number;
   closedAt?: number;
   purpose?: 'channel' | 'plan' | 'temp' | 'replan';  // 会话用途
   parentSessionId?: string;  // 父会话 ID（plan/replan session 使用）
+  lastActivityAt?: number;   // 最后活动时间（用于超时监控）
+  lastUsageJson?: string;    // 最后一次 token/cost 数据（JSON string）
+  lastStopAt?: number;       // 最后一次 Stop 事件时间（幂等窗口）
 }

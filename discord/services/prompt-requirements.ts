@@ -32,6 +32,10 @@ export const PROMPT_REQUIREMENTS: PromptRequirement[] = [
   { key: 'orchestrator.replan',                 variables: ['GOAL_NAME', 'GOAL_BODY', 'COMPLETION_CRITERIA', 'CURRENT_TASKS', 'TRIGGER_TASK_ID', 'FEEDBACK_TYPE', 'FEEDBACK_REASON', 'FEEDBACK_DETAILS', 'COMPLETED_DIFF_STATS', 'IMMUTABLE_COMPLETED', 'IMMUTABLE_RUNNING'] },
   { key: 'orchestrator.conflict_resolver',      variables: ['SUBTASK_BRANCH', 'TASK_DESCRIPTION', 'CONFLICT_FILES'] },
 
+  // Task readiness check (自动检查任务完成状态)
+  { key: 'orchestrator.task_readiness_check.execute', variables: ['TASK_DESCRIPTION', 'TASK_ID', 'TASK_LABEL', 'PIPELINE_PHASE'], optional: true },
+  { key: 'orchestrator.task_readiness_check.audit',   variables: ['TASK_DESCRIPTION', 'TASK_ID', 'TASK_LABEL', 'PIPELINE_PHASE'], optional: true },
+
   // ================================================================
   // Orchestrator 层 — Section 子模板（可选）
   // ================================================================

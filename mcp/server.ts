@@ -48,10 +48,31 @@ async function handlePost(req: IncomingMessage, res: ServerResponse) {
   const sessionId = req.headers['mcp-session-id'] as string | undefined;
   const body = await readBody(req);
 
+  // 调试日志
+  console.log('[MCP] POST request:', {
+    sessionId: sessionId?.slice(0, 8),
+    hasSession: sessionId ? transports.has(sessionId) : false,
+    isInitialize: isInitializeRequest(body),
+    method: (body as any)?.method,
+    activeSessions: transports.size,
+  });
+
   // 复用已有 session
   if (sessionId && transports.has(sessionId)) {
     const transport = transports.get(sessionId)!;
     await transport.handleRequest(req, res, body);
+    return;
+  }
+
+  // Session ID 无效或过期 → 返回特定错误码，触发客户端重新初始化
+  if (sessionId && !transports.has(sessionId)) {
+    console.log('[MCP] Session not found, returning -32001 to trigger reinitialize');
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({
+      jsonrpc: '2.0',
+      error: { code: -32001, message: 'Session not found or expired. Please reinitialize.' },
+      id: (body as any)?.id || null,
+    }));
     return;
   }
 
