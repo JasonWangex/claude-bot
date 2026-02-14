@@ -1,196 +1,88 @@
 /**
- * 全局 Logger — 多 transport 架构（Console + Discord）
+ * 全局 Logger — 多 Transport 架构（Console + Discord）
  */
 
-import type { Client, TextChannel } from 'discord.js';
+import { ConsoleTransport } from './transports/console-transport.js';
 
-/**
- * Log levels
- */
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
-/**
- * Transport interface
- */
-export interface LogTransport {
-  log(level: LogLevel, message: string, ...args: any[]): void | Promise<void>;
+export interface LogEntry {
+  level: LogLevel;
+  message: string;
+  timestamp: Date;
+  args: any[];
 }
 
 /**
- * Console Transport
+ * Logger Transport 接口
  */
-export class ConsoleTransport implements LogTransport {
-  private prefix: string;
-
-  constructor(prefix: string = 'DC') {
-    this.prefix = prefix;
-  }
-
-  log(level: LogLevel, message: string, ...args: any[]): void {
-    const timestamp = new Date().toISOString();
-    const tag = `[${this.prefix}-${level.toUpperCase()}]`;
-    const fullMessage = `${tag} ${timestamp} ${message}`;
-
-    switch (level) {
-      case 'debug':
-        if (process.env.DEBUG) {
-          console.log(fullMessage, ...args);
-        }
-        break;
-      case 'info':
-        console.log(fullMessage, ...args);
-        break;
-      case 'warn':
-        console.warn(fullMessage, ...args);
-        break;
-      case 'error':
-        console.error(fullMessage, ...args);
-        break;
-    }
-  }
+export interface LoggerTransport {
+  log(entry: LogEntry): void;
 }
 
 /**
- * Discord Transport
- * 发送日志到指定 Discord Channel
- */
-export class DiscordTransport implements LogTransport {
-  private client: Client | null = null;
-  private channelId: string | null = null;
-  private minLevel: LogLevel;
-
-  constructor(minLevel: LogLevel = 'warn') {
-    this.minLevel = minLevel;
-  }
-
-  /**
-   * 初始化 Discord client 和 channel
-   */
-  init(client: Client, channelId: string): void {
-    this.client = client;
-    this.channelId = channelId;
-  }
-
-  /**
-   * 检查日志级别是否应该输出
-   */
-  private shouldLog(level: LogLevel): boolean {
-    const levels: LogLevel[] = ['debug', 'info', 'warn', 'error'];
-    const currentIndex = levels.indexOf(level);
-    const minIndex = levels.indexOf(this.minLevel);
-    return currentIndex >= minIndex;
-  }
-
-  async log(level: LogLevel, message: string, ...args: any[]): Promise<void> {
-    if (!this.client || !this.channelId) return;
-    if (!this.shouldLog(level)) return;
-
-    try {
-      const channel = await this.client.channels.fetch(this.channelId);
-      if (!channel || !channel.isTextBased()) return;
-
-      const timestamp = new Date().toISOString();
-      const emoji = this.getLevelEmoji(level);
-      const formattedArgs = args.length > 0 ? `\n\`\`\`\n${JSON.stringify(args, null, 2)}\n\`\`\`` : '';
-      const content = `${emoji} **[${level.toUpperCase()}]** ${timestamp}\n${message}${formattedArgs}`;
-
-      await (channel as TextChannel).send({ content: content.slice(0, 2000) });
-    } catch (err) {
-      // 避免递归错误，只在控制台输出
-      console.error('[DiscordTransport] Failed to send log:', err);
-    }
-  }
-
-  private getLevelEmoji(level: LogLevel): string {
-    switch (level) {
-      case 'debug': return '🔍';
-      case 'info': return 'ℹ️';
-      case 'warn': return '⚠️';
-      case 'error': return '❌';
-      default: return '📝';
-    }
-  }
-}
-
-/**
- * Logger class with multiple transports
+ * Logger 类
  */
 export class Logger {
-  private transports: LogTransport[] = [];
+  private transports: LoggerTransport[] = [];
 
-  addTransport(transport: LogTransport): void {
+  addTransport(transport: LoggerTransport): void {
     this.transports.push(transport);
   }
 
-  clearTransports(): void {
-    this.transports = [];
-  }
+  private log(level: LogLevel, message: string, ...args: any[]): void {
+    const entry: LogEntry = {
+      level,
+      message,
+      timestamp: new Date(),
+      args,
+    };
 
-  getTransports(): LogTransport[] {
-    return [...this.transports];
-  }
-
-  private async logToAll(level: LogLevel, message: string, ...args: any[]): Promise<void> {
-    const promises = this.transports.map(t => {
+    for (const transport of this.transports) {
       try {
-        const result = t.log(level, message, ...args);
-        return result instanceof Promise ? result : Promise.resolve();
-      } catch (err) {
-        console.error(`[Logger] Transport error:`, err);
-        return Promise.resolve();
+        transport.log(entry);
+      } catch (error) {
+        console.error(`[Logger] Transport error:`, error);
       }
-    });
-    await Promise.allSettled(promises);
+    }
   }
 
   debug(message: string, ...args: any[]): void {
-    this.logToAll('debug', message, ...args).catch(() => {});
+    this.log('debug', message, ...args);
   }
 
   info(message: string, ...args: any[]): void {
-    this.logToAll('info', message, ...args).catch(() => {});
+    this.log('info', message, ...args);
   }
 
   warn(message: string, ...args: any[]): void {
-    this.logToAll('warn', message, ...args).catch(() => {});
+    this.log('warn', message, ...args);
   }
 
   error(message: string, ...args: any[]): void {
-    this.logToAll('error', message, ...args).catch(() => {});
+    this.log('error', message, ...args);
   }
 }
 
 /**
- * 全局默认 logger 实例（仅 Console）
- * 在 Bot 启动后会通过 createLogger 初始化带 Discord transport 的 logger
+ * createLogger 工厂方法
  */
-export const logger = createLogger();
+export interface CreateLoggerOptions {
+  transports?: LoggerTransport[];
+}
 
-/**
- * 工厂方法：创建 Logger 实例
- * @param options.prefix - Console transport 前缀，默认 'DC'
- * @param options.discordClient - Discord client 实例（可选）
- * @param options.discordChannelId - Discord channel ID（可选）
- * @param options.discordMinLevel - Discord transport 最低日志级别，默认 'warn'
- */
-export function createLogger(options?: {
-  prefix?: string;
-  discordClient?: Client;
-  discordChannelId?: string;
-  discordMinLevel?: LogLevel;
-}): Logger {
+export function createLogger(options?: CreateLoggerOptions): Logger {
   const logger = new Logger();
 
-  // 始终添加 Console transport
-  const consoleTransport = new ConsoleTransport(options?.prefix || 'DC');
-  logger.addTransport(consoleTransport);
-
-  // 如果提供了 Discord 配置，添加 Discord transport
-  if (options?.discordClient && options?.discordChannelId) {
-    const discordTransport = new DiscordTransport(options.discordMinLevel || 'warn');
-    discordTransport.init(options.discordClient, options.discordChannelId);
-    logger.addTransport(discordTransport);
+  if (options?.transports) {
+    for (const transport of options.transports) {
+      logger.addTransport(transport);
+    }
   }
 
   return logger;
 }
+
+// 全局默认 logger 实例（向后兼容）
+// 默认只包含 Console Transport，Discord Transport 需要在 Bot 初始化后配置
+export const logger = createLogger({ transports: [new ConsoleTransport(!!process.env.DEBUG)] });

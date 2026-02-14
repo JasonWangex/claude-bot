@@ -1,22 +1,25 @@
 {
-  "verdict": "pass",
-  "summary": "全局 Logger 重构实现正确：多 transport 架构（Console + Discord）、createLogger 工厂方法、Bot Logs channel 配置均已完成。TS 编译错误全部为预存问题（与 g8t6 无关），115 个测试全部通过。Logger 对外 API（debug/info/warn/error）向后兼容，所有现有导入无需修改。",
-  "verifyCommands": [
-    "npx tsc --noEmit",
-    "npx vitest run"
-  ],
+  "verdict": "fail",
+  "summary": "Logger 多 Transport 架构实现正确（Logger 类 + createLogger 工厂 + ConsoleTransport + DiscordTransport），API 向后兼容，测试 8/8 通过，TSC 在包含所有本地改动时无新增错误。但核心实现文件全部未提交（unstaged/untracked），已提交的 discord.ts 引用了未提交代码，导致仅用已提交代码 TSC 编译失败。需要 git add + commit 所有实现文件。",
+  "verifyCommands": ["npx tsc --noEmit", "npx vitest run discord/utils/__tests__/logger.test.ts"],
   "issues": [
+    {
+      "severity": "error",
+      "file": "discord/utils/logger.ts",
+      "line": 1,
+      "description": "核心实现文件全部未提交（unstaged/untracked），需要 git add + commit：(1) discord/utils/logger.ts — Logger 类 + createLogger 工厂方法（modified, unstaged）；(2) discord/utils/transports/ — console-transport.ts、discord-transport.ts、index.ts（untracked）；(3) discord/types/index.ts — botLogsChannelId 字段（modified, unstaged）；(4) discord/utils/config.ts — botLogsChannelId 配置读取（modified, unstaged）；(5) discord/utils/env.ts — getBotLogsChannelId 函数（modified, unstaged）；(6) discord/utils/__tests__/logger.test.ts（untracked）。已提交的 discord/bot/discord.ts 导入了 DiscordTransport 并使用 config.botLogsChannelId 和 logger.addTransport()，而这些导出均来自未提交文件，导致仅用已提交代码 TSC 报 3 个编译错误（TS2339 x2 + TS2339）。"
+    },
+    {
+      "severity": "warning",
+      "file": "discord/utils/transports/discord-transport.ts",
+      "line": 65,
+      "description": "潜在循环日志风险：MessageQueue（message-queue.ts:25）内部使用全局 logger，DiscordTransport.log() 调用 MessageQueue.send()。若 send() 失败，messageQueue 内的 catch 块调用 logger.error() → 再次触发 DiscordTransport.log() → 再次调用 send()。当前因异步 Promise 链不会造成栈溢出，但可能导致重复的失败日志消息。建议在 DiscordTransport 中加入防重入标志，或让 messageQueue 的错误处理使用 console.error 而非 logger。"
+    },
     {
       "severity": "warning",
       "file": "discord/utils/env.ts",
       "line": 102,
-      "description": "getBotLogsChannelId() 函数已定义但未在任何地方引用。实际使用的是 config.botLogsChannelId（通过 loadDiscordConfig 读取环境变量）。建议移除此死代码或在需要时直接读取 env 的场景中使用它。"
-    },
-    {
-      "severity": "warning",
-      "file": "discord/utils/logger.ts",
-      "line": 89,
-      "description": "DiscordTransport.log() 每次调用都 await client.channels.fetch(channelId)，频繁日志时可能产生不必要的 API 调用。建议缓存 channel 引用。当前 minLevel 默认 warn，实际影响较小。"
+      "description": "getBotLogsChannelId() 函数未被任何代码引用。config.ts 直接读取 process.env.BOT_LOGS_CHANNEL_ID，未使用该辅助函数。建议移除此死代码或在 config.ts 中改用它以保持与 getGeneralChannelId() 等函数的一致性。"
     }
   ]
 }

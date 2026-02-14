@@ -15,7 +15,8 @@ import { MessageHandler } from './handlers.js';
 import { ClaudeClient } from '../claude/client.js';
 import { DiscordBotConfig } from '../types/index.js';
 import { checkAuth } from './auth.js';
-import { logger, DiscordTransport } from '../utils/logger.js';
+import { logger } from '../utils/logger.js';
+import { DiscordTransport } from '../utils/transports/discord-transport.js';
 import { ApiServer } from '../api/server.js';
 import { GoalOrchestrator } from '../orchestrator/index.js';
 import { parseGoalButtonId, GOAL_MODAL_PREFIX, buildApproveWithModsModal } from '../orchestrator/goal-buttons.js';
@@ -93,6 +94,9 @@ export class DiscordBot {
       this.sessionSyncService.syncSession(sessionId, channelId, model);
     });
 
+    // 配置全局 logger transports
+    this.setupLogger();
+
     this.registerHandlers();
 
     // 定期清理
@@ -100,6 +104,19 @@ export class DiscordBot {
       this.stateManager.cleanup();
       this.interactionRegistry.cleanup();
     }, 60 * 60 * 1000);
+  }
+
+  private setupLogger(): void {
+    // 如果配置了 Bot Logs Channel，添加 Discord Transport
+    // 注意：ConsoleTransport 已在 logger.ts 全局初始化时添加，此处不需要重复添加
+    if (this.config.botLogsChannelId) {
+      const discordTransport = new DiscordTransport({
+        messageQueue: this.messageQueue,
+        channelId: this.config.botLogsChannelId,
+        minLevel: 'info', // 只记录 info 及以上级别的日志到 Discord
+      });
+      logger.addTransport(discordTransport);
+    }
   }
 
   private getCommandDeps(): CommandDeps {
@@ -118,14 +135,6 @@ export class DiscordBot {
     // Bot ready
     this.client.once(Events.ClientReady, (readyClient) => {
       logger.info(`Discord Bot logged in as ${readyClient.user.tag}`);
-
-      // 添加 Discord transport 到全局 logger
-      if (this.config.botLogsChannelId) {
-        const discordTransport = new DiscordTransport('warn');
-        discordTransport.init(this.client, this.config.botLogsChannelId);
-        logger.addTransport(discordTransport);
-        logger.info('Global logger initialized with Discord transport');
-      }
     });
 
     // Slash Command 路由
