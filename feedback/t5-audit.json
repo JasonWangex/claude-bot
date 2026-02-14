@@ -1,43 +1,31 @@
 {
-  "verdict": "fail",
-  "summary": "核心功能（移除 messageHistory 内存缓存、新增 session-reader 工具、新增流式 API 端点）实现正确。但 API 类型定义和前端代码未同步更新：discord/api/types.ts 和 web/src/lib/types.ts 的 TaskDetail 接口仍包含已废弃的 message_history 字段，web/src/pages/TaskDetail.tsx 仍在访问 task.message_history — 后端已不再返回该字段，前端会因 undefined 访问而崩溃。此外 sessions.ts 路由中使用 require('path') 动态加载，在 ESM 模块中应使用已有的 import。",
-  "verifyCommands": ["npm test"],
+  "verdict": "pass",
+  "summary": "实现完整且正确。成功移除了 messageHistory 内存缓存（Session 类型、StateManager、SessionRepository、API 类型、前端类型与组件全部同步更新）；新增 session-reader.ts 流式 JSONL 解析工具和 GET /api/sessions/:id/conversation 流式端点。测试全部通过（9 files, 115 tests）。残留 MessageHistory.tsx 组件文件未删除，但已无任何引用，属于 warning 级别。",
+  "verifyCommands": ["npm install && npx vitest run"],
   "issues": [
     {
-      "severity": "error",
-      "file": "discord/api/types.ts",
-      "line": 81,
-      "description": "TaskDetail 接口仍定义 message_history 字段（lines 81-85），但后端 getTask/updateTask 路由已不再返回此字段。类型定义与运行时数据不一致，需要移除该字段。"
-    },
-    {
-      "severity": "error",
-      "file": "web/src/lib/types.ts",
-      "line": 104,
-      "description": "前端 TaskDetail 类型仍定义 message_history 字段（lines 104-108），与后端响应不匹配。需要移除。"
-    },
-    {
-      "severity": "error",
-      "file": "web/src/pages/TaskDetail.tsx",
-      "line": 71,
-      "description": "前端代码仍在访问 task.message_history.length 和 task.message_history（lines 71-72）。后端已不再返回该字段，运行时 task.message_history 为 undefined，调用 .length 会抛出 TypeError 导致页面崩溃。需要移除该 Tab 或替换为新的 /api/sessions/:id/conversation 流式端点。"
+      "severity": "warning",
+      "file": "web/src/components/tasks/MessageHistory.tsx",
+      "line": 1,
+      "description": "MessageHistory 组件文件仍然存在，但已无任何引用（import 已从 TaskDetail.tsx 移除）。属于死代码，建议删除。"
     },
     {
       "severity": "warning",
       "file": "discord/api/routes/sessions.ts",
       "line": 58,
-      "description": "在 ESM 模块中使用 require('path') 动态加载，而 path 模块应通过顶部 import 引入。当前代码可能在严格 ESM 环境中失败。"
+      "description": "在 ESM 模块中使用 require('path') 动态加载，而项目其他文件统一使用 import 语句。当前代码可在 Node.js 运行，但不符合项目风格。建议改为顶部 import { join } from 'path'。"
     },
     {
       "severity": "warning",
       "file": "discord/utils/session-reader.ts",
       "line": 157,
-      "description": "readSessionEventsSync() 中使用 require('fs') 动态加载 readFileSync，但文件顶部已 import { readdirSync, statSync, createReadStream } from 'fs'。应直接在顶部 import 中追加 readFileSync。"
+      "description": "readSessionEventsSync() 中使用 require('fs') 动态加载 readFileSync，但文件顶部已 import { readdirSync, statSync, createReadStream } from 'fs'。建议在顶部 import 中追加 readFileSync。"
     },
     {
       "severity": "warning",
       "file": "discord/utils/session-reader.ts",
       "line": 86,
-      "description": "findSessionJsonlFile() 通过 entry.includes(claudeSessionId) 匹配文件名。Claude CLI 的 .jsonl 文件名格式为 '{sessionId}.jsonl'，使用 includes 而非精确匹配（如 entry === claudeSessionId + '.jsonl'）可能导致部分匹配误命中。"
+      "description": "findSessionJsonlFile() 使用 entry.includes(claudeSessionId) 匹配文件名，存在部分匹配误命中风险。建议改为精确匹配：entry === claudeSessionId + '.jsonl'。"
     }
   ]
 }
