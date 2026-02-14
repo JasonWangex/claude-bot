@@ -28,6 +28,8 @@ import { GuildRepository } from '../db/repo/guild-repo.js';
 import { getAuthorizedGuildId, getGeneralChannelId } from '../utils/env.js';
 import { escapeMarkdown } from './message-utils.js';
 import { registerSlashCommands, routeCommand } from './commands/index.js';
+import { SessionSyncService } from '../sync/session-sync-service.js';
+import { join } from 'path';
 import { MODEL_OPTIONS, getModelLabel } from './commands/task.js';
 import type { CommandDeps } from './commands/types.js';
 
@@ -42,6 +44,7 @@ export class DiscordBot {
   private apiServer: ApiServer | null = null;
   private orchestrator: GoalOrchestrator | null = null;
   private cleanupInterval: NodeJS.Timeout | null = null;
+  private sessionSyncService: SessionSyncService;
 
   constructor(config: DiscordBotConfig) {
     this.config = config;
@@ -69,6 +72,15 @@ export class DiscordBot {
     this.messageQueue = new MessageQueue(this.client);
     this.messageHandler = new MessageHandler(this.stateManager, this.claudeClient, this.interactionRegistry, this.messageQueue);
     this.messageHandler.setErrorReporter((guildId, threadId, source, error) => this.sendErrorToGeneral(guildId, threadId, source, error));
+
+    // 初始化 SessionSyncService
+    const claudeProjectsDir = join(process.env.HOME || '/tmp', '.claude', 'projects');
+    this.sessionSyncService = new SessionSyncService(db, claudeProjectsDir);
+
+    // 注入 executor 回调
+    this.claudeClient.setSessionSyncCallback((sessionId, channelId, model) => {
+      this.sessionSyncService.syncSession(sessionId, channelId, model);
+    });
 
     this.registerHandlers();
 
@@ -728,6 +740,9 @@ export class DiscordBot {
     // 启动消息队列
     this.messageQueue.start();
 
+    // 启动 Session 同步服务
+    this.sessionSyncService.start();
+
     const guildId = this.config.authorizedGuildId;
     await registerSlashCommands(this.config.discordToken, this.config.applicationId, guildId);
 
@@ -765,6 +780,7 @@ export class DiscordBot {
         mq: this.messageQueue,
         config: this.config,
         orchestrator,
+        sessionSyncService: this.sessionSyncService,
       });
       await this.apiServer.start();
     }
@@ -800,6 +816,7 @@ export class DiscordBot {
       clearInterval(this.cleanupInterval);
       this.cleanupInterval = null;
     }
+    this.sessionSyncService.stop();
     this.messageQueue.stop();
     await this.messageQueue.drain(10000);
     if (this.apiServer) {

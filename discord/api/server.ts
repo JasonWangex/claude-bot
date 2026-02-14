@@ -25,6 +25,7 @@ import { qdev } from './routes/qdev.js';
 import { listDevLogs, getDevLog, createDevLog } from './routes/devlogs.js';
 import { listIdeas, createIdea, getIdea, updateIdea, deleteIdea } from './routes/ideas.js';
 import { listKnowledgeBase, createKnowledgeBase, getKnowledgeBaseEntry, updateKnowledgeBase, deleteKnowledgeBase } from './routes/knowledge-base.js';
+import { syncSessions } from './routes/sync.js';
 
 function defineRoutes(): Route[] {
   const r = (method: string, path: string, handler: Route['handler']): Route => {
@@ -102,6 +103,9 @@ function defineRoutes(): Route[] {
     r('GET',    '/api/kb/:id', getKnowledgeBaseEntry),
     r('PATCH',  '/api/kb/:id', updateKnowledgeBase),
     r('DELETE', '/api/kb/:id', deleteKnowledgeBase),
+
+    // Sync
+    r('POST', '/api/sync/sessions', syncSessions),
   ];
 }
 

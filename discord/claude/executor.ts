@@ -53,6 +53,9 @@ export class ClaudeExecutor {
   private processDir: string;
   private registryFile: string;
 
+  // Session sync callback (injected by bot)
+  onSessionSync?: (sessionId: string, channelId?: string, model?: string) => void;
+
   constructor(claudeCliPath: string = 'claude', commandTimeout: number = 300000, stallTimeout: number = 60000) {
     this.claudeCliPath = claudeCliPath;
     this.commandTimeout = commandTimeout;
@@ -453,6 +456,18 @@ export class ClaudeExecutor {
         // 解析 JSONL 写入 interaction_log
         if (archivedJsonlPath && lastSessionId) {
           this.processInteractionLog(archivedJsonlPath, lastSessionId);
+        }
+
+        // 同步到 claude_sessions 表
+        if (lastSessionId && this.onSessionSync) {
+          const model = resultEvent?.modelUsage
+            ? Object.keys(resultEvent.modelUsage)[0]
+            : undefined;
+          try {
+            this.onSessionSync(lastSessionId, active?.threadId, model);
+          } catch (e: any) {
+            logger.warn(`Session sync failed: ${e.message}`);
+          }
         }
 
         if (flags.aborted) {
@@ -1000,6 +1015,19 @@ export class ClaudeExecutor {
     // 解析 JSONL 写入 interaction_log
     if (archivedJsonlPath && sessionId) {
       this.processInteractionLog(archivedJsonlPath, sessionId);
+    }
+
+    // 同步到 claude_sessions 表（重连场景）
+    if (sessionId && this.onSessionSync) {
+      const parseResult = this.parseOutputFile(entry.outputFile);
+      const model = parseResult.resultEvent?.modelUsage
+        ? Object.keys(parseResult.resultEvent.modelUsage)[0]
+        : undefined;
+      try {
+        this.onSessionSync(sessionId, entry.threadId, model);
+      } catch (e: any) {
+        logger.warn(`Session sync failed (reconnect): ${e.message}`);
+      }
     }
   }
 

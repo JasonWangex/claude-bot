@@ -209,4 +209,8 @@ export class ClaudeClient {
   async verify(): Promise<boolean> {
     return this.executor.verify();
   }
+
+  setSessionSyncCallback(cb: (sessionId: string, channelId?: string, model?: string) => void): void {
+    this.executor.onSessionSync = cb;
+  }
 }
