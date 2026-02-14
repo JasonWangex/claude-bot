@@ -1,18 +1,79 @@
 {
-  "verdict": "pass",
-  "summary": "Migration 004 正确创建 interaction_log 表，包含所有需求字段，类型定义与 SQL schema 完全匹配，索引和唯一约束合理，migration 注册到 allMigrations 数组，版本号连续。tokens 拆分为 input/output 是合理的增强。",
+  "verdict": "fail",
+  "summary": "sessionToParams() 输出 channel_id / parent_channel_id，但 SQL 预编译语句仍使用 @thread_id / @parent_thread_id，导致 14 个测试失败（Missing named parameter 'thread_id'）。此外，多个 API 路由文件中残留 threadId 未定义变量引用（变量已重命名为 channelId 但部分使用点未更新），将导致运行时 undefined 错误。ForkTaskResult.threadName 已重命名为 channelName，但调用方仍引用旧属性名。SessionRow 类型已改为 channel_id，但 rowToSession() 仍读取 row.thread_id。",
+  "verifyCommands": ["npx vitest run", "./node_modules/.bin/tsc --noEmit"],
   "issues": [
     {
-      "severity": "warning",
-      "file": "discord/db/migrations/004_add_interaction_log.ts",
-      "line": 22,
-      "description": "UNIQUE(session_id, turn_index, role) 约束假设每个 turn 中同一 role 只出现一次。如果 assistant 在同一 turn 中产生多条记录（如多个 tool_use），需要在插入层做合并或调整约束。当前作为 migration 是合理的，但上层写入逻辑需注意。"
+      "severity": "error",
+      "file": "discord/db/repo/session-repo.ts",
+      "line": 55,
+      "description": "sessionToParams() 返回 { channel_id, parent_channel_id }，但 SQL（行 111-118）使用 @thread_id / @parent_thread_id 命名参数。键名不匹配导致 better-sqlite3 抛出 'Missing named parameter thread_id'。需要将 sessionToParams 的键名改回 thread_id/parent_thread_id（因为 _deprecated_sessions 表列名没变），或修改 SQL 使用 @channel_id/@parent_channel_id。"
+    },
+    {
+      "severity": "error",
+      "file": "discord/db/repo/session-repo.ts",
+      "line": 19,
+      "description": "rowToSession() 读取 row.thread_id 和 row.parent_thread_id，但 SessionRow 类型已将这些字段重命名为 channel_id 和 parent_channel_id。TS 编译报错：Property 'thread_id' does not exist on type 'SessionRow'。要么恢复 SessionRow 中的旧字段名（因为实际 DB 列名仍是 thread_id），要么同步修改 rowToSession。"
+    },
+    {
+      "severity": "error",
+      "file": "discord/api/routes/messages.ts",
+      "line": 34,
+      "description": "变量 threadId 已重命名为 channelId（行 19），但行 34, 46, 52, 54, 56, 57 仍引用 threadId。threadId 未声明，运行时为 ReferenceError。"
+    },
+    {
+      "severity": "error",
+      "file": "discord/api/routes/qdev.ts",
+      "line": 45,
+      "description": "变量 threadId 已重命名为 channelId（行 26），但行 45, 68 仍引用 threadId。threadId 未声明，运行时为 ReferenceError。"
+    },
+    {
+      "severity": "error",
+      "file": "discord/api/routes/qdev.ts",
+      "line": 92,
+      "description": "ForkTaskResult.threadName 已重命名为 channelName，但此处仍引用 forkResult.threadName。TS 编译报错且运行时为 undefined。"
+    },
+    {
+      "severity": "error",
+      "file": "discord/api/routes/tasks.ts",
+      "line": 224,
+      "description": "变量 threadId 已重命名为 channelId（行 202），但行 224, 306, 314, 336, 379, 408, 436, 449 仍引用 threadId。threadId 未声明，运行时为 ReferenceError。updateTask、deleteTask、archiveTask、forkTask、getTaskInteractions 全部受影响。"
+    },
+    {
+      "severity": "error",
+      "file": "discord/api/routes/tasks.ts",
+      "line": 405,
+      "description": "ForkTaskResult.threadName 已重命名为 channelName，但此处仍引用 result.threadName。TS 编译报错且运行时为 undefined。"
+    },
+    {
+      "severity": "error",
+      "file": "discord/db/repo/__tests__/session-repo.test.ts",
+      "line": 174,
+      "description": "测试调用 repo.findByParentThreadId()，但该方法已重命名为 findByParentChannelId()。TS 编译报错。"
     },
     {
       "severity": "warning",
-      "file": "discord/types/db.ts",
-      "line": 299,
-      "description": "role 类型限定为 'user' | 'assistant'，如果后续需要支持 'system' 角色则需扩展。当前需求范围内没问题。"
+      "file": "discord/db/repo/session-repo.ts",
+      "line": 5,
+      "description": "注释仍写 '复合键: (guild_id, thread_id)'，应更新为 (guild_id, channel_id) 以保持文档一致性。"
+    },
+    {
+      "severity": "warning",
+      "file": "discord/api/routes/tasks.ts",
+      "line": 6,
+      "description": "路由注释仍使用 :threadId 参数名（如行 6-10），实际路由已改为 :channelId。建议更新注释。"
+    },
+    {
+      "severity": "warning",
+      "file": "discord/api/routes/qdev.ts",
+      "line": 2,
+      "description": "路由注释仍写 POST /api/tasks/:threadId/qdev，实际路由参数已改为 :channelId。"
+    },
+    {
+      "severity": "warning",
+      "file": "discord/api/routes/messages.ts",
+      "line": 2,
+      "description": "路由注释仍写 POST /api/tasks/:threadId/message，实际路由参数已改为 :channelId。"
     }
   ]
 }
