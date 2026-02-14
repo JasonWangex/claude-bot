@@ -266,6 +266,7 @@ export interface DiscordBotConfig {
   accessToken: string;
   authorizedGuildId?: string;
   generalChannelId?: string;
+  botLogsChannelId?: string;
   projectsRoot: string;
   autoCreateProjectDir: boolean;
   topicDirNaming: 'kebab-case' | 'snake_case' | 'original';

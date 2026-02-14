@@ -14,7 +14,7 @@ import { MessageHandler } from './handlers.js';
 import { ClaudeClient } from '../claude/client.js';
 import { DiscordBotConfig } from '../types/index.js';
 import { checkAuth } from './auth.js';
-import { logger } from '../utils/logger.js';
+import { logger, DiscordTransport } from '../utils/logger.js';
 import { ApiServer } from '../api/server.js';
 import { GoalOrchestrator } from '../orchestrator/index.js';
 import { parseGoalButtonId, GOAL_MODAL_PREFIX, buildApproveWithModsModal } from '../orchestrator/goal-buttons.js';
@@ -106,6 +106,14 @@ export class DiscordBot {
     // Bot ready
     this.client.once(Events.ClientReady, (readyClient) => {
       logger.info(`Discord Bot logged in as ${readyClient.user.tag}`);
+
+      // 添加 Discord transport 到全局 logger
+      if (this.config.botLogsChannelId) {
+        const discordTransport = new DiscordTransport('warn');
+        discordTransport.init(this.client, this.config.botLogsChannelId);
+        logger.addTransport(discordTransport);
+        logger.info('Global logger initialized with Discord transport');
+      }
     });
 
     // Slash Command 路由
