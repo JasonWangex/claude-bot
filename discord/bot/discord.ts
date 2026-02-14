@@ -15,6 +15,7 @@ import { ClaudeClient } from '../claude/client.js';
 import { DiscordBotConfig } from '../types/index.js';
 import { checkAuth } from './auth.js';
 import { logger } from '../utils/logger.js';
+import { DiscordTransport } from '../utils/transports/discord-transport.js';
 import { ApiServer } from '../api/server.js';
 import { GoalOrchestrator } from '../orchestrator/index.js';
 import { parseGoalButtonId, GOAL_MODAL_PREFIX, buildApproveWithModsModal } from '../orchestrator/goal-buttons.js';
@@ -70,6 +71,9 @@ export class DiscordBot {
     this.messageHandler = new MessageHandler(this.stateManager, this.claudeClient, this.interactionRegistry, this.messageQueue);
     this.messageHandler.setErrorReporter((guildId, threadId, source, error) => this.sendErrorToGeneral(guildId, threadId, source, error));
 
+    // 配置全局 logger transports
+    this.setupLogger();
+
     this.registerHandlers();
 
     // 定期清理
@@ -77,6 +81,19 @@ export class DiscordBot {
       this.stateManager.cleanup();
       this.interactionRegistry.cleanup();
     }, 60 * 60 * 1000);
+  }
+
+  private setupLogger(): void {
+    // 如果配置了 Bot Logs Channel，添加 Discord Transport
+    // 注意：ConsoleTransport 已在 logger.ts 全局初始化时添加，此处不需要重复添加
+    if (this.config.botLogsChannelId) {
+      const discordTransport = new DiscordTransport({
+        messageQueue: this.messageQueue,
+        channelId: this.config.botLogsChannelId,
+        minLevel: 'info', // 只记录 info 及以上级别的日志到 Discord
+      });
+      logger.addTransport(discordTransport);
+    }
   }
 
   private getCommandDeps(): CommandDeps {
