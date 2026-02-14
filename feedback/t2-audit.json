@@ -1,127 +1,157 @@
 {
   "verdict": "fail",
-  "summary": "TypeScript 编译失败（104 个错误，涉及 13 个文件）。threadId→channelId 重命名极度不完整：函数参数已重命名为 channelId 但函数体内大量引用仍使用旧名 threadId（变量未声明→ReferenceError）；部分位置做了相反的错误（参数名 threadId 但内部使用 channelId）；类型接口已更新但实现代码未同步。新增的 channel-service.ts 本身代码质量良好，但整体集成因重命名不完整而无法编译。测试通过（115 tests），因为测试覆盖范围不包含出错的文件。",
+  "summary": "Build fails with 28 TS errors, 14 tests fail. Core issue: threadId→channelId rename was mechanically incomplete — function parameters/types were renamed but many references in function bodies still use the old name (or vice versa), causing undefined variable errors. Additionally, SessionRow type fields were renamed (thread_id→channel_id) but the actual DB columns are still thread_id, causing SQL parameter mismatches at runtime. New channel-service.ts itself is well-implemented.",
   "verifyCommands": ["npx tsc --noEmit", "npx vitest run"],
   "issues": [
     {
       "severity": "error",
-      "file": "discord/bot/handlers.ts",
-      "line": 91,
-      "description": "handleText() 参数已重命名为 channelId（行 78），但行 91 仍引用 threadId（`thread-${threadId}`）。threadId 未声明，运行时 ReferenceError。同一问题贯穿整个文件：行 121, 127, 134, 140, 152, 179, 184, 209, 223, 255, 256, 276, 287, 291, 322, 333, 337, 342, 348, 367, 375, 436, 470, 498, 509, 516, 523, 537, 564, 569, 600, 606, 613, 625, 631, 641, 661 共 37 处引用 threadId 变量但均未声明。"
+      "file": "discord/api/routes/messages.ts",
+      "line": 35,
+      "description": "Variable renamed to channelId (line 20) but lines 35, 47, 53-56 still reference undeclared threadId. Will crash at runtime."
     },
     {
       "severity": "error",
-      "file": "discord/bot/handlers.ts",
-      "line": 683,
-      "description": "handleBackgroundChat() 参数名仍为 threadId（行 680），但行 683 使用 channelId 调用 stateManager.getSession()。channelId 未声明。同样行 699, 701, 720 也引用 channelId。方向相反但同样的 undefined 变量问题。"
+      "file": "discord/api/routes/qdev.ts",
+      "line": 101,
+      "description": "parentChannelId fallback uses threadId (line 101: `rootSession?.channelId ?? threadId`), but threadId was renamed to channelId on line 26."
     },
     {
       "severity": "error",
-      "file": "discord/bot/handlers.ts",
-      "line": 107,
-      "description": "handleText() 和 handlePhoto() 返回类型应为 Promise<void>，但实际返回 this.sendChatInternal() 的 Promise<ChatUsageResult>。TypeScript 报 TS2322: Type 'ChatUsageResult' is not assignable to type 'void'。影响行 107, 137, 156, 186。"
-    },
-    {
-      "severity": "error",
-      "file": "discord/orchestrator/index.ts",
-      "line": 337,
-      "description": "startRefixPipeline() 参数已重命名为 channelId（行 331），但行 337, 343, 405 仍引用 threadId。此外 runAudit() 和 auditFixLoop() 调用参数数量不匹配（Expected 7/9 arguments, but got 6/8），因为重命名导致参数传递错误。"
-    },
-    {
-      "severity": "error",
-      "file": "discord/orchestrator/index.ts",
-      "line": 1057,
-      "description": "executeTaskInBackground() 参数名仍为 threadId（行 1050），但行 1057 使用 channelId 调用 handleBackgroundChat()。channelId 未声明。"
-    },
-    {
-      "severity": "error",
-      "file": "discord/orchestrator/index.ts",
-      "line": 1176,
-      "description": "pipelineResearch() 参数名仍为 threadId（行 1170），但行 1176, 1186 使用 channelId 调用 switchSessionModel/handleBackgroundChat。channelId 未声明。同一模式影响 pipelineSimpleCode（行 1211, 1221）、pipelineComplexCode（行 1265, 1275, 1294, 1307）、auditFixLoop（行 1361, 1371）共约 20 处。"
-    },
-    {
-      "severity": "error",
-      "file": "discord/bot/commands/dev.ts",
-      "line": 107,
-      "description": "多处引用 threadId 变量但未声明（行 107, 195, 206, 221, 231, 276）。参数已重命名为 channelId 但函数体未更新。"
-    },
-    {
-      "severity": "error",
-      "file": "discord/bot/commands/goal.ts",
-      "line": 84,
-      "description": "多处引用 threadId 变量但未声明（行 84, 122, 132, 157, 178）。参数已重命名为 channelId 但函数体未更新。"
-    },
-    {
-      "severity": "error",
-      "file": "discord/bot/commands/session.ts",
-      "line": 235,
-      "description": "行 235, 257 引用 threadId 变量但未声明。参数已重命名为 channelId 但函数体未更新。"
-    },
-    {
-      "severity": "error",
-      "file": "discord/bot/commands/task.ts",
-      "line": 335,
-      "description": "行 335 引用 threadId 变量但未声明。"
+      "file": "discord/api/routes/tasks.ts",
+      "line": 295,
+      "description": "deleteTask(): line 295 `client.channels.fetch(threadId)` and line 302 response includes `threadId` — but variable was renamed to channelId on line 273. archiveTask() has same issue at line 322."
     },
     {
       "severity": "error",
       "file": "discord/bot/commands/model.ts",
       "line": 64,
-      "description": "行 64: `const channelId = channelId` — 变量使用自身初始化，导致 TS7022 (implicit any) 和 TS2448 (used before declaration)。行 65 仍引用 threadId。"
+      "description": "`const channelId = channelId` — self-assignment (variable used before declaration). Also line 65 references undeclared threadId in fallback name."
+    },
+    {
+      "severity": "error",
+      "file": "discord/bot/commands/dev.ts",
+      "line": 107,
+      "description": "parentChannelId fallback uses threadId (line 107: `rootSession?.channelId ?? threadId`). Multiple other threadId references at lines 276 (messageQueue.sendLong)."
+    },
+    {
+      "severity": "error",
+      "file": "discord/bot/commands/goal.ts",
+      "line": 157,
+      "description": "messageQueue.sendLong(threadId, ...) at line 157 — threadId undefined. parentChannelId fallback at line 178 uses threadId."
+    },
+    {
+      "severity": "error",
+      "file": "discord/bot/commands/session.ts",
+      "line": 235,
+      "description": "handleAttach(): threadName fallback uses threadId (line 235). holder.channelId === threadId comparison (line 247) — threadId is undefined."
+    },
+    {
+      "severity": "error",
+      "file": "discord/bot/commands/task.ts",
+      "line": 335,
+      "description": "channelName fallback uses threadId (line 335: `channel-${threadId}`) — threadId undefined."
     },
     {
       "severity": "error",
       "file": "discord/bot/discord.ts",
       "line": 203,
-      "description": "channelCreate/channelDelete 事件回调中引用 channel.guild，但 TypeScript 推断类型为 DMChannel | NonThreadGuildBasedChannel，DMChannel 没有 guild 属性。需要类型守卫。行 203, 215 均受影响。"
+      "description": "ChannelUpdate event: newChannel type is DMChannel|NonThreadGuildBasedChannel; DMChannel has no guild property. Need type guard (check type !== ChannelType.DM first). Lines 203, 215."
     },
     {
       "severity": "error",
       "file": "discord/bot/discord.ts",
       "line": 548,
-      "description": "行 548, 625, 665 引用 threadId 变量但未声明。"
-    },
-    {
-      "severity": "error",
-      "file": "discord/bot/interaction-registry.ts",
-      "line": 115,
-      "description": "findWaitingCustomText() 比较 entry.channelId === threadId，但 threadId 未声明（参数已改为 channelId）。应改为 entry.channelId === channelId。"
-    },
-    {
-      "severity": "error",
-      "file": "discord/claude/client.ts",
-      "line": 120,
-      "description": "options 类型中没有 channelId 属性（行 120, 122 引用 options.channelId），同时行 138 将 threadId 设为 options.channelId 但 ClaudeOptions 类型没有 threadId 属性（已改为 channelId）。需要同步 chat() 的 options 参数类型定义。"
-    },
-    {
-      "severity": "error",
-      "file": "discord/claude/executor.ts",
-      "line": 793,
-      "description": "detachAll() 中构造 ProcessRegistryEntry 时使用 { threadId: active.channelId }（行 793），但 ProcessRegistryEntry 类型已改为 channelId。active 对象也没有 channelId 属性。reconnectAll() 中同样的问题：行 856, 875, 897 使用 { threadId: entry.channelId } 但 ReconnectedResult 类型已改为 channelId。"
-    },
-    {
-      "severity": "error",
-      "file": "discord/db/repo/goal-repo.ts",
-      "line": 229,
-      "description": "引用 goal.drive_thread_id，但 GoalRow 类型已将该字段重命名为 drive_channel_id（db.ts 行 137）。"
-    },
-    {
-      "severity": "error",
-      "file": "discord/db/repo/goal-repo.ts",
-      "line": 248,
-      "description": "映射任务时使用 threadId: t.thread_id，但 GoalTaskRow 类型已将该字段重命名为 channel_id（db.ts 行 177）。GoalTask 接口也已改为 channelId（index.ts 行 311）。"
-    },
-    {
-      "severity": "error",
-      "file": "discord/orchestrator/__tests__/rollback.test.ts",
-      "line": 19,
-      "description": "GoalDriveState 的 goalSeq 字段类型为 number（必须），但测试中使用了 goalSeq?: number | undefined 导致类型不兼容。"
+      "description": "handleGoalDrivePrompt: line 548 messageQueue.sendLong(threadId,...) — threadId is undefined (renamed to channelId at 512). Same at lines 625, 665."
     },
     {
       "severity": "error",
       "file": "discord/bot/discord.ts",
       "line": 788,
-      "description": "No overload matches this call — 可能是 discord.js 事件监听器类型不匹配。"
+      "description": "guilds.fetch(guildId) — guildId is potentially undefined here (from getAuthorizedGuildId). Type error: string | undefined not assignable to string | FetchGuildOptions."
+    },
+    {
+      "severity": "error",
+      "file": "discord/bot/handlers.ts",
+      "line": 91,
+      "description": "Massive incomplete rename: parameter renamed to channelId but ~40 references in function body still use threadId (lines 91, 121, 127, 134, 140, 152, 179, 184, 209, 255, 276, 322, 337, 342, 348, 436, 498, 516, 600, 606, 613, 625, 641, 661, etc.)."
+    },
+    {
+      "severity": "error",
+      "file": "discord/bot/handlers.ts",
+      "line": 470,
+      "description": "sendChatInternal passes `channelId` property to claudeClient.chat() options, but the ClaudeExecutor options type doesn't have channelId field (TS2353)."
+    },
+    {
+      "severity": "error",
+      "file": "discord/bot/handlers.ts",
+      "line": 680,
+      "description": "sendChatByIds/handleBackgroundChat: parameter name is still threadId but body references channelId (line 683). Reverse of the usual bug."
+    },
+    {
+      "severity": "error",
+      "file": "discord/bot/interaction-registry.ts",
+      "line": 115,
+      "description": "findWaitingCustomText: compares entry.channelId but PendingEntry type doesn't have channelId property (has threadId)."
+    },
+    {
+      "severity": "error",
+      "file": "discord/claude/executor.ts",
+      "line": 793,
+      "description": "detachAll: constructs registry entry with `channelId: active.channelId` but ActiveProcess type has threadId, not channelId. Lines 856, 875, 897 in reconnectAll have same issue."
+    },
+    {
+      "severity": "error",
+      "file": "discord/db/repo/session-repo.ts",
+      "line": 55,
+      "description": "sessionToParams() outputs key `channel_id` but SQL upsert statement uses @thread_id parameter binding. Runtime error: 'Missing named parameter thread_id'. Same issue with parent_channel_id vs @parent_thread_id. Also affects restore() at lines 260, 270."
+    },
+    {
+      "severity": "error",
+      "file": "discord/db/repo/goal-repo.ts",
+      "line": 229,
+      "description": "rowsToGoalDriveState: references goal.drive_thread_id but GoalRow type renamed field to drive_channel_id. Similarly line 248: t.thread_id but GoalTaskRow renamed to channel_id."
+    },
+    {
+      "severity": "error",
+      "file": "discord/types/db.ts",
+      "line": 37,
+      "description": "SessionRow.thread_id renamed to channel_id, but actual DB column is still thread_id. GoalRow.drive_thread_id→drive_channel_id and GoalTaskRow.thread_id→channel_id have same issue. Type should match DB column names, not logical names."
+    },
+    {
+      "severity": "error",
+      "file": "discord/orchestrator/index.ts",
+      "line": 337,
+      "description": "startRefixPipeline: parameter is channelId but body calls runAudit/auditFixLoop with threadId (undefined). Lines 337, 343, 405."
+    },
+    {
+      "severity": "error",
+      "file": "discord/orchestrator/index.ts",
+      "line": 1057,
+      "description": "executeTaskInBackground: parameter is threadId but body uses channelId (undefined) at line 1057. Reverse direction bug."
+    },
+    {
+      "severity": "error",
+      "file": "discord/orchestrator/index.ts",
+      "line": 1176,
+      "description": "pipelineResearch/pipelineSimpleCode/pipelineComplexCode/auditFixLoop/runAudit: parameter is threadId but body uses channelId (undefined). Affects ~20 call sites across lines 1176-1413."
+    },
+    {
+      "severity": "error",
+      "file": "discord/orchestrator/__tests__/rollback.test.ts",
+      "line": 19,
+      "description": "makeState(): goalSeq is optional (number | undefined) but GoalDriveState requires number. Type mismatch."
+    },
+    {
+      "severity": "warning",
+      "file": "discord/bot/commands/dev.ts",
+      "line": 276,
+      "description": "messageQueue.sendLong(threadId, ...) in commit error handler — even after fix, should this be channelId? Ensure error messages go to the correct channel."
+    },
+    {
+      "severity": "warning",
+      "file": "discord/services/channel-service.ts",
+      "line": 114,
+      "description": "syncFromDiscord uses hardcoded default cwd '/default' for channels without existing records. Consider using the guild's default working directory instead."
     }
   ]
 }
