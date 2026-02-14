@@ -101,11 +101,6 @@ export interface TaskSummary {
 export interface TaskDetail extends TaskSummary {
   claude_session_id: string | null;
   plan_mode: boolean;
-  message_history: Array<{
-    role: 'user' | 'assistant';
-    text: string;
-    timestamp: number;
-  }>;
 }
 
 // 交互日志

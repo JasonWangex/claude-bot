@@ -189,7 +189,6 @@ export const getTask: RouteHandler = async (_req, res, params, deps) => {
       ...sessionToSummary(session, childSummaries),
       claude_session_id: session.claudeSessionId || null,
       plan_mode: !!session.planMode,
-      message_history: session.messageHistory,
     },
   });
 };
@@ -260,7 +259,6 @@ export const updateTask: RouteHandler = async (req, res, params, deps) => {
       ...sessionToSummary(updated, childSummaries),
       claude_session_id: updated.claudeSessionId || null,
       plan_mode: !!updated.planMode,
-      message_history: updated.messageHistory,
     },
   });
 };

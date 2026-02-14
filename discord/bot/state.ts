@@ -251,7 +251,6 @@ export class StateManager {
         cwd: defaults.cwd,
         createdAt: Date.now(),
         model: guildModel,
-        messageHistory: [],
         messageCount: 0,
       };
       this.sessions.set(key, session);
@@ -304,22 +303,17 @@ export class StateManager {
     const session = this.getSession(guildId, channelId);
     if (!session) return;
 
-    const entry = { role, text: text.slice(0, 2000), timestamp: Date.now() };
-    session.messageHistory.push(entry);
-    if (session.messageHistory.length > MAX_HISTORY) {
-      session.messageHistory = session.messageHistory.slice(-MAX_HISTORY);
-    }
-
-    // 同步更新内存中的 messageCount
-    session.messageCount = session.messageHistory.length;
+    // 增加消息计数
+    session.messageCount++;
 
     if (role === 'assistant') {
       session.lastMessage = text.slice(0, 500);
       session.lastMessageAt = Date.now();
-      // 更新 sessions 表的 last_message 字段
-      if (this.sessionRepo) {
-        this.persistSession(guildId, channelId);
-      }
+    }
+
+    // 持久化到数据库
+    if (this.sessionRepo) {
+      this.persistSession(guildId, channelId);
     }
   }
 
@@ -367,13 +361,8 @@ export class StateManager {
     session.claudeSessionId = prevId;
     session.prevClaudeSessionId = undefined;
 
-    const history = session.messageHistory;
-    let i = history.length - 1;
-    while (i >= 0 && history[i].role === 'assistant') i--;
-    const removeFrom = i >= 0 && history[i].role === 'user' ? i : i + 1;
-    if (removeFrom < history.length) {
-      history.splice(removeFrom);
-    }
+    // 减少消息计数（回退一轮：user + assistant = 2条）
+    session.messageCount = Math.max(0, session.messageCount - 2);
 
     this.persistSession(guildId, channelId);
     return { success: true, prevId };

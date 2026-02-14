@@ -12,7 +12,6 @@ function makeSession(overrides: Partial<Session> = {}): Session {
     guildId: 'guild-1',
     cwd: '/home/test',
     createdAt: Date.now(),
-    messageHistory: [],
     messageCount: 0,
     ...overrides,
   };
@@ -86,37 +85,21 @@ describe('SessionRepository', () => {
     });
   });
 
-  describe('message history', () => {
-    it('should persist messageCount and return empty messageHistory (table dropped in migration 006)', async () => {
-      const session = makeSession({
-        messageHistory: [
-          { role: 'user', text: 'Hi', timestamp: Date.now() },
-          { role: 'assistant', text: 'Hello!', timestamp: Date.now() + 1 },
-        ],
-        messageCount: 2,
-      });
+  describe('message count', () => {
+    it('should persist messageCount (table dropped in migration 006)', async () => {
+      const session = makeSession({ messageCount: 2 });
       await repo.save(session);
 
       const result = await repo.get('guild-1', 'thread-1');
       expect(result!.messageCount).toBe(2);
-      // messageHistory 始终为空数组（message_history 表已废弃）
-      expect(result!.messageHistory).toHaveLength(0);
     });
 
-    it('should always return empty message history', async () => {
-      const now = Date.now();
-      await repo.save(makeSession({
-        messageHistory: [{ role: 'user', text: 'old', timestamp: now }],
-      }));
-      await repo.save(makeSession({
-        messageHistory: [
-          { role: 'user', text: 'new1', timestamp: now + 1 },
-          { role: 'assistant', text: 'new2', timestamp: now + 2 },
-        ],
-      }));
+    it('should update messageCount', async () => {
+      await repo.save(makeSession({ messageCount: 0 }));
+      await repo.save(makeSession({ messageCount: 5 }));
 
       const result = await repo.get('guild-1', 'thread-1');
-      expect(result!.messageHistory).toHaveLength(0);
+      expect(result!.messageCount).toBe(5);
     });
   });
 
