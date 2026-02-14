@@ -133,4 +133,3 @@ export { ChannelRepository, ClaudeSessionRepository, SyncCursorRepository } from
 export { InteractionLogRepository } from './interaction-log-repo.js';
 export { KnowledgeBaseRepository } from './knowledge-base-repo.js';
 export { PromptConfigRepository } from './prompt-config-repo.js';
-export { PromptConfigRepository } from './prompt-config-repo.js';
