@@ -1,13 +1,13 @@
 {
   "verdict": "fail",
-  "summary": "Logger 多 Transport 架构设计合理，ConsoleTransport / DiscordTransport / createLogger 工厂方法实现正确，测试全部通过（8/8），TypeScript 编译无新错误。但 setupLogger() 中重复添加 ConsoleTransport 导致所有日志会输出到控制台两次。",
+  "summary": "代码质量良好：Logger 多 Transport 架构设计合理，ConsoleTransport / DiscordTransport / createLogger 工厂方法实现正确，测试全部通过（8/8）。但核心实现文件（logger.ts 重构、transports 目录、config.ts、types/index.ts、env.ts、测试文件）均未提交，仅 discord.ts 的修改已提交。已提交的 discord.ts 引用了未提交文件中的导出（DiscordTransport、botLogsChannelId、logger.addTransport），导致仅用已提交代码时 TypeScript 编译失败。",
   "verifyCommands": ["npx tsc --noEmit", "npx vitest run discord/utils/__tests__/logger.test.ts"],
   "issues": [
     {
       "severity": "error",
-      "file": "discord/bot/discord.ts",
-      "line": 88,
-      "description": "重复 ConsoleTransport：全局 logger 实例在 logger.ts:88 初始化时已添加了 ConsoleTransport，但 setupLogger() 又调用 logger.addTransport(new ConsoleTransport(...))，导致每条日志输出到控制台两次。修复方案：setupLogger() 中移除 ConsoleTransport 的添加，只添加 DiscordTransport。"
+      "file": "discord/utils/logger.ts",
+      "line": 1,
+      "description": "核心实现未提交：logger.ts 的重构（从简单对象改为 Logger 类 + createLogger 工厂方法）、transports/ 目录（console-transport.ts、discord-transport.ts、index.ts）、types/index.ts（botLogsChannelId 字段）、config.ts（botLogsChannelId 读取）、env.ts（getBotLogsChannelId）、__tests__/logger.test.ts 均为 unstaged 状态。已提交的 discord.ts 依赖这些文件的导出，导致仅用已提交代码无法通过 TypeScript 编译。需要 git add 并 commit 所有相关文件。"
     },
     {
       "severity": "warning",
@@ -19,7 +19,7 @@
       "severity": "warning",
       "file": "discord/utils/env.ts",
       "line": 98,
-      "description": "getBotLogsChannelId() 函数未被任何代码引用（config.ts 直接读取 process.env.BOT_LOGS_CHANNEL_ID）。可考虑移除或在 config.ts 中使用它。"
+      "description": "getBotLogsChannelId() 函数未被任何代码引用（config.ts 直接读取 process.env.BOT_LOGS_CHANNEL_ID）。可考虑移除或在 config.ts 中使用它以保持一致性。"
     }
   ]
 }
