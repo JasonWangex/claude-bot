@@ -178,6 +178,7 @@ export class ChannelService {
       planMode: false,
       status: 'active',
       createdAt: Date.now(),
+      purpose: 'channel',  // 明确标记为 channel 用途
     };
 
     await this.claudeSessionRepo.save(newSession);

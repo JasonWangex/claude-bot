@@ -97,6 +97,11 @@ export class DiscordBot {
       this.sessionSyncService.syncSession(sessionId, channelId, model);
     });
 
+    // 注入 session close 回调（进程中止/杀死时触发）
+    this.claudeClient.setSessionCloseCallback((sessionId) => {
+      this.sessionSyncService.closeSession(sessionId);
+    });
+
     // 配置全局 logger transports
     this.setupLogger();
 

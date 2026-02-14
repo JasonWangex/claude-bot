@@ -223,6 +223,7 @@ export class StateManager {
           planMode: session.planMode ?? false,
           status: 'active',
           createdAt: session.createdAt,
+          purpose: 'channel',  // 默认为 channel 用途
         };
         this.claudeSessionRepo.save(claudeSession);
       }

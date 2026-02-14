@@ -448,4 +448,6 @@ export interface ClaudeSession {
   status: 'active' | 'closed';
   createdAt: number;
   closedAt?: number;
+  purpose?: 'channel' | 'plan' | 'temp' | 'replan';  // 会话用途
+  parentSessionId?: string;  // 父会话 ID（plan/replan session 使用）
 }

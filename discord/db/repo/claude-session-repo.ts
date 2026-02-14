@@ -23,6 +23,8 @@ function rowToClaudeSession(row: ClaudeSessionRow): ClaudeSession {
     status: row.status,
     createdAt: row.created_at,
     closedAt: row.closed_at ?? undefined,
+    purpose: row.purpose ?? undefined,
+    parentSessionId: row.parent_session_id ?? undefined,
   };
 }
 
@@ -37,6 +39,8 @@ function claudeSessionToParams(session: ClaudeSession): Record<string, unknown> 
     status: session.status,
     created_at: session.createdAt,
     closed_at: session.closedAt ?? null,
+    purpose: session.purpose ?? null,
+    parent_session_id: session.parentSessionId ?? null,
   };
 }
 
@@ -80,10 +84,12 @@ export class ClaudeSessionRepository implements IClaudeSessionRepo {
       upsert: this.db.prepare(`
         INSERT INTO claude_sessions (
           id, claude_session_id, prev_claude_session_id,
-          channel_id, model, plan_mode, status, created_at, closed_at
+          channel_id, model, plan_mode, status, created_at, closed_at,
+          purpose, parent_session_id
         ) VALUES (
           @id, @claude_session_id, @prev_claude_session_id,
-          @channel_id, @model, @plan_mode, @status, @created_at, @closed_at
+          @channel_id, @model, @plan_mode, @status, @created_at, @closed_at,
+          @purpose, @parent_session_id
         )
         ON CONFLICT(id) DO UPDATE SET
           claude_session_id = @claude_session_id,
@@ -92,7 +98,9 @@ export class ClaudeSessionRepository implements IClaudeSessionRepo {
           model = @model,
           plan_mode = @plan_mode,
           status = @status,
-          closed_at = @closed_at
+          closed_at = @closed_at,
+          purpose = @purpose,
+          parent_session_id = @parent_session_id
       `),
 
       close: this.db.prepare(`

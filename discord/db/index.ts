@@ -23,6 +23,7 @@ import migration008 from './migrations/008_add_knowledge_base.js';
 import migration009 from './migrations/009_add_usage_columns.js';
 import migration010 from './migrations/010_schema_restructure.js';
 import migration011 from './migrations/011_add_prompt_configs.js';
+import migration012 from './migrations/012_add_session_purpose.js';
 
 const allMigrations: Migration[] = [
   migration001,
@@ -35,6 +36,7 @@ const allMigrations: Migration[] = [
   migration009,
   migration010,
   migration011,
+  migration012,
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

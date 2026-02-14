@@ -54,6 +54,9 @@ export class ClaudeExecutor {
   // Session sync callback (injected by bot)
   onSessionSync?: (sessionId: string, channelId?: string, model?: string) => void;
 
+  // Session close callback (injected by bot) - called when session is interrupted/killed
+  onSessionClose?: (sessionId: string) => void;
+
   constructor(claudeCliPath: string = 'claude', commandTimeout: number = 300000, stallTimeout: number = 60000) {
     this.claudeCliPath = claudeCliPath;
     this.commandTimeout = commandTimeout;
@@ -326,7 +329,21 @@ export class ClaudeExecutor {
               continue;
             }
 
-            if (event.session_id) lastSessionId = event.session_id;
+            if (event.session_id) {
+              lastSessionId = event.session_id;
+              // 首次收到 session_id 时立即同步（而非等待进程结束）
+              if (lastSessionId !== active?.claudeSessionId) {
+                updateSessionId();
+                // 立即调用 onSessionSync 记录 session 创建
+                if (this.onSessionSync) {
+                  try {
+                    this.onSessionSync(lastSessionId, active?.channelId, undefined);
+                  } catch (e: any) {
+                    logger.warn(`Session sync failed: ${e.message}`);
+                  }
+                }
+              }
+            }
 
             // 追踪压缩状态：压缩期间暂停 stall 检测和 command timeout
             // status 事件格式: {type:"system", subtype:"status", status:"compacting"|null}
@@ -464,14 +481,38 @@ export class ClaudeExecutor {
         }
 
         if (flags.aborted) {
+          // 进程被用户终止，调用 onSessionClose 回调
+          if (lastSessionId && this.onSessionClose) {
+            try {
+              this.onSessionClose(lastSessionId);
+            } catch (e: any) {
+              logger.warn(`Session close callback failed: ${e.message}`);
+            }
+          }
           reject(new ClaudeExecutionError(
             '任务已被用户停止',
             ClaudeErrorType.ABORTED
           ));
         } else if (flags.killed) {
+          // 进程超时被杀，调用 onSessionClose 回调
+          if (lastSessionId && this.onSessionClose) {
+            try {
+              this.onSessionClose(lastSessionId);
+            } catch (e: any) {
+              logger.warn(`Session close callback failed: ${e.message}`);
+            }
+          }
           const reason = `超时 (${this.commandTimeout / 1000}s)`;
           reject(new ClaudeExecutionError(reason, ClaudeErrorType.PROCESS_KILLED));
         } else if (signal) {
+          // 进程被信号终止，调用 onSessionClose 回调
+          if (lastSessionId && this.onSessionClose) {
+            try {
+              this.onSessionClose(lastSessionId);
+            } catch (e: any) {
+              logger.warn(`Session close callback failed: ${e.message}`);
+            }
+          }
           reject(new ClaudeExecutionError(
             `进程被信号终止: ${signal}`,
             ClaudeErrorType.PROCESS_KILLED

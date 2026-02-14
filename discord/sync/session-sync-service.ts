@@ -65,6 +65,7 @@ export class SessionSyncService {
           planMode: false,
           status: 'active',
           createdAt: Date.now(),
+          purpose: channelId ? 'channel' : 'temp',  // 有 channel 为 channel，否则为临时
         };
         await this.claudeSessionRepo.save(newSession);
         logger.info(`Claude session created: ${claudeSessionId.slice(0, 8)}... (channel: ${channelId || 'none'})`);
@@ -89,6 +90,25 @@ export class SessionSyncService {
       }
     } catch (e: any) {
       logger.error(`Failed to sync session ${claudeSessionId}: ${e.message}`);
+    }
+  }
+
+  /** 关闭会话（进程被中止/杀死时调用） */
+  async closeSession(claudeSessionId: string): Promise<void> {
+    try {
+      const existing = await this.claudeSessionRepo.findByClaudeSessionId(claudeSessionId);
+      if (!existing) {
+        logger.warn(`Cannot close session ${claudeSessionId}: not found`);
+        return;
+      }
+
+      // 调用 repository 的 close 方法
+      const closed = await this.claudeSessionRepo.close(existing.id);
+      if (closed) {
+        logger.info(`Claude session closed: ${claudeSessionId.slice(0, 8)}...`);
+      }
+    } catch (e: any) {
+      logger.error(`Failed to close session ${claudeSessionId}: ${e.message}`);
     }
   }
 
@@ -197,6 +217,7 @@ export class SessionSyncService {
           planMode: false,
           status: 'active',
           createdAt: metadata.timestamp ? new Date(metadata.timestamp).getTime() : Date.now(),
+          purpose: channelId ? 'channel' : 'temp',  // 有 channel 为 channel，否则为临时
         };
         this.claudeSessionRepo.save(newSession);
         return 'created';

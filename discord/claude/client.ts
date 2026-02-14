@@ -213,4 +213,8 @@ export class ClaudeClient {
   setSessionSyncCallback(cb: (sessionId: string, channelId?: string, model?: string) => void): void {
     this.executor.onSessionSync = cb;
   }
+
+  setSessionCloseCallback(cb: (sessionId: string) => void): void {
+    this.executor.onSessionClose = cb;
+  }
 }

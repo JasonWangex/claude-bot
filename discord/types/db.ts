@@ -360,6 +360,8 @@ export interface ClaudeSessionRow {
   status: 'active' | 'closed';
   created_at: number;
   closed_at: number | null;
+  purpose: 'channel' | 'plan' | 'temp' | 'replan' | null;  // 会话用途
+  parent_session_id: string | null;  // 父会话 ID
 }
 
 // ================================================================
