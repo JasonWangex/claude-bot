@@ -1917,7 +1917,7 @@ export class GoalOrchestrator {
 
       // 4. 分级自治处理
       const handleResult = await handleReplanByImpact(state, result, {
-        goalTaskRepo: this.deps.taskRepo,
+        taskRepo: this.deps.taskRepo,
         goalMetaRepo: this.deps.goalMetaRepo,
         checkpointRepo: this.deps.checkpointRepo,
         notify: (threadId, message, type, options) => this.notify(threadId, message, type, options),
@@ -1960,7 +1960,7 @@ export class GoalOrchestrator {
 
     // 应用变更
     const applyResult = await applyChanges(state, pending.changes as ReplanChange[], {
-      goalTaskRepo: this.deps.taskRepo,
+      taskRepo: this.deps.taskRepo,
       goalMetaRepo: this.deps.goalMetaRepo,
     });
 
@@ -2027,7 +2027,7 @@ export class GoalOrchestrator {
 
     // 应用修改后的变更
     const applyResult = await applyChanges(state, modifiedChanges, {
-      goalTaskRepo: this.deps.taskRepo,
+      taskRepo: this.deps.taskRepo,
       goalMetaRepo: this.deps.goalMetaRepo,
     });
 

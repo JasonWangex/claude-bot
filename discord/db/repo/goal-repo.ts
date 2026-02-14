@@ -8,7 +8,7 @@
 
 import type Database from 'better-sqlite3';
 import type { IGoalRepo } from '../../types/repository.js';
-import type { GoalDriveState, GoalDriveStatus } from '../../types/index.js';
+import type { GoalDriveState, GoalDriveStatus, TaskStatus } from '../../types/index.js';
 import type { GoalRow, TaskRow, TaskDepRow } from '../../types/db.js';
 
 export class GoalRepo implements IGoalRepo {
@@ -244,7 +244,7 @@ function rowsToGoalDriveState(
       complexity: t.complexity ?? undefined,
       pipelinePhase: (t.pipeline_phase as GoalDriveState['tasks'][number]['pipelinePhase']) ?? undefined,
       auditRetries: t.audit_retries ?? 0,
-      status: t.status,
+      status: t.status as TaskStatus,
       branchName: t.branch_name ?? undefined,
       threadId: t.channel_id ?? undefined,
       dispatchedAt: t.dispatched_at ?? undefined,

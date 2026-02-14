@@ -286,7 +286,7 @@ function rowToTask(
     complexity: row.complexity ?? undefined,
     pipelinePhase: validatePipelinePhase(row.pipeline_phase),
     auditRetries: row.audit_retries ?? 0,
-    status: row.status,
+    status: row.status as TaskStatus,
     branchName: row.branch_name ?? undefined,
     threadId: row.channel_id ?? undefined,  // channel_id → threadId 映射（保持运行时接口兼容）
     dispatchedAt: row.dispatched_at ?? undefined,
