@@ -1,25 +1,25 @@
 {
-  "verdict": "fail",
-  "summary": "Migration 010 correctly creates channels, claude_sessions, channel_session_links, sync_cursors tables and renames goal_tasks to tasks with nullable goal_id. New repositories (ChannelRepository, ClaudeSessionRepository, SyncCursorRepository) and their tests are well-written and pass. However, session-repo.test.ts (19 tests) fails because the migration renames the sessions table to _deprecated_sessions, breaking the existing SessionRepository which still queries the sessions table. The GoalTaskRow type also has a column name mismatch (thread_id vs channel_id).",
-  "verifyCommands": ["npm test"],
+  "verdict": "pass",
+  "summary": "Migration 010 correctly creates channels, claude_sessions, channel_session_links, sync_cursors tables and renames goal_tasks→tasks with nullable goal_id. Previous audit issue (SessionRepository referencing 'sessions' instead of '_deprecated_sessions') has been fixed (cb8e007). All 3 new repositories (ChannelRepository, ClaudeSessionRepository, SyncCursorRepository) are well-implemented with proper CRUD, upsert, and conversion logic. All 115 tests pass including 40 new tests across the 3 new repos. GoalTaskRepo correctly maps threadId↔channel_id at the DB boundary. Two minor warnings remain but are non-blocking.",
+  "verifyCommands": ["npx vitest run"],
   "issues": [
-    {
-      "severity": "error",
-      "file": "discord/db/repo/session-repo.ts",
-      "line": 100,
-      "description": "SessionRepository queries 'SELECT * FROM sessions' but migration 010 renames sessions to _deprecated_sessions. This causes all 19 session-repo tests to fail with 'SqliteError: no such table: sessions'. The SessionRepository must either be updated to query _deprecated_sessions, or (better) the session-repo.test.ts should be adapted since SessionRepository is being replaced by ChannelRepository + ClaudeSessionRepository. At minimum, the deprecated table reference needs to match."
-    },
     {
       "severity": "warning",
       "file": "discord/types/db.ts",
       "line": 177,
-      "description": "GoalTaskRow still has 'thread_id: string | null' but the actual tasks table (after migration 010) uses 'channel_id'. The GoalTaskRepo code accesses 'row.channel_id' (line 284 of goal-task-repo.ts), which works at runtime but doesn't match the TypeScript type. Should update GoalTaskRow.thread_id to channel_id, or use the new TaskRow type."
+      "description": "GoalTaskRow still declares 'thread_id' but the actual tasks table column is 'channel_id' after migration 010. GoalTaskRepo works at runtime because it reads row.channel_id directly (bypassing the GoalTaskRow type), but this type mismatch could cause confusion. Consider updating GoalTaskRow or migrating callers to use TaskRow."
     },
     {
       "severity": "warning",
       "file": "discord/db/migrations/010_schema_restructure.ts",
       "line": 200,
-      "description": "Migration inserts from both sessions and archived_sessions into claude_sessions without ON CONFLICT handling. If the same id exists in both tables (unlikely but possible), the second INSERT will fail with a PRIMARY KEY conflict. Consider using INSERT OR IGNORE."
+      "description": "Migration inserts from both sessions and archived_sessions into claude_sessions without ON CONFLICT handling. If the same UUID id exists in both tables, the second INSERT will fail. Consider using INSERT OR IGNORE for the archived_sessions insertion, similar to how channels migration already does."
+    },
+    {
+      "severity": "warning",
+      "file": "discord/db/migrations/010_schema_restructure.ts",
+      "line": 238,
+      "description": "sync_cursors initial value uses ${Date.now()} in a template literal, meaning the timestamp is captured at module import time rather than migration execution time. This is a minor precision issue — the difference is typically negligible but worth noting."
     }
   ]
 }
