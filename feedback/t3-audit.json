@@ -1,25 +1,13 @@
 {
   "verdict": "pass",
-  "summary": "Claude Session 同步服务实现完整，三条数据通路（executor 回调、定时扫描、全量同步 API）均已实现。TypeScript 无新增类型错误，全部 115 个测试通过。JSONL 元数据提取使用前 8KB 读取策略高效。有一个 warning 级别的 bug（reconnect 路径中 parseOutputFile 读取已被归档的原文件路径导致 model 始终为 undefined），以及一个性能 warning（定时扫描时 loadAll channels 可能影响效率）。",
-  "verifyCommands": ["npx tsc --noEmit", "npx vitest run"],
+  "summary": "Migration 005 正确替换了被删除的 005_add_interaction_log.ts，填补了 migration 版本号的空缺（004→006）。使用 DROP TABLE IF EXISTS 确保新建数据库无副作用，已有数据库中孤立表不影响功能。db/index.ts 和 test-helpers.ts 均正确注册了 migration005（以及补齐了 migration011）。TypeScript 编译错误和 session-repo 测试失败均为 pre-existing 问题，不属于本任务引入。",
+  "verifyCommands": ["npx tsc --noEmit", "npm test"],
   "issues": [
     {
       "severity": "warning",
-      "file": "discord/claude/executor.ts",
-      "line": 1022,
-      "description": "cleanupOutputFiles 中 this.parseOutputFile(entry.outputFile) 读取的是原始文件路径，但 archiveOutputFiles (line 1013) 已经用 renameSync 将文件移走到归档目录。parseOutputFile 会因文件不存在返回 { resultEvent: null, sessionId: '' }，导致 reconnect 路径下 model 始终为 undefined。应改为解析 archivedJsonlPath 或在归档前先 parseOutputFile。"
-    },
-    {
-      "severity": "warning",
-      "file": "discord/sync/session-sync-service.ts",
-      "line": 185,
-      "description": "processJsonlFileSync 中每次处理一个 JSONL 文件都调用 this.channelRepo.loadAll() 加载全部 channel 记录再 find 匹配。在全量同步扫描大量文件时，会产生大量重复查询。可考虑在 syncAll/scanForChanges 开始时缓存一次 channels 列表，传入 processJsonlFileSync。"
-    },
-    {
-      "severity": "warning",
-      "file": "discord/sync/session-sync-service.ts",
-      "line": 178,
-      "description": "processJsonlFileSync 绕过 ClaudeSessionRepository.findByClaudeSessionId()，直接用 this.db.prepare() 执行 raw SQL 查询。虽然注释解释了原因（better-sqlite3 同步特性），但这破坏了数据访问层封装。如果 claude_sessions 表 schema 变更，需要同步更新两处。建议使用 repo 的方法（即使它返回 Promise，同步 resolve 后直接用即可）。"
+      "file": "discord/db/migrations/005_drop_interaction_log.ts",
+      "line": 10,
+      "description": "计划中指定使用 version 12 作为新 migration，但实现使用 version 5 替换原有 migration。对于已跑过旧 005 migration 的生产数据库，interaction_log 表将作为孤立表永久留存（因 user_version >= 5 不会重跑）。功能上无影响，但如需彻底清理可在未来添加高版本号 migration 来 DROP。"
     }
   ]
 }
