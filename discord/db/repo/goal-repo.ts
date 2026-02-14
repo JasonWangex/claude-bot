@@ -65,10 +65,10 @@ export class GoalRepo implements IGoalRepo {
       findByDriveStatus: this.db.prepare(`SELECT * FROM goals WHERE drive_status = ?`),
 
       getTasksByGoal: this.db.prepare(
-        `SELECT * FROM goal_tasks WHERE goal_id = ? ORDER BY phase ASC, id ASC`,
+        `SELECT * FROM tasks WHERE goal_id = ? ORDER BY phase ASC, id ASC`,
       ),
 
-      getDepsByGoal: this.db.prepare(`SELECT * FROM goal_task_deps WHERE goal_id = ?`),
+      getDepsByGoal: this.db.prepare(`SELECT * FROM task_deps WHERE goal_id = ?`),
     };
   }
 
@@ -97,19 +97,19 @@ export class GoalRepo implements IGoalRepo {
       this.stmts.upsertGoal.run(goalDriveStateToGoalRow(state));
 
       // 2. Replace tasks: delete all then re-insert
-      this.db.prepare(`DELETE FROM goal_tasks WHERE goal_id = ?`).run(state.goalId);
+      this.db.prepare(`DELETE FROM tasks WHERE goal_id = ?`).run(state.goalId);
 
       if (state.tasks.length > 0) {
         const insertTask = this.db.prepare(`
-          INSERT INTO goal_tasks (
+          INSERT INTO tasks (
             id, goal_id, description, type, phase, status,
-            branch_name, thread_id, dispatched_at, completed_at,
+            branch_name, channel_id, dispatched_at, completed_at,
             error, merged, notified_blocked, feedback_json,
             complexity, pipeline_phase, audit_retries,
             tokens_in, tokens_out, cache_read_in, cache_write_in, cost_usd, duration_ms
           ) VALUES (
             @id, @goal_id, @description, @type, @phase, @status,
-            @branch_name, @thread_id, @dispatched_at, @completed_at,
+            @branch_name, @channel_id, @dispatched_at, @completed_at,
             @error, @merged, @notified_blocked, @feedback_json,
             @complexity, @pipeline_phase, @audit_retries,
             @tokens_in, @tokens_out, @cache_read_in, @cache_write_in, @cost_usd, @duration_ms
@@ -117,8 +117,8 @@ export class GoalRepo implements IGoalRepo {
         `);
 
         const insertDep = this.db.prepare(`
-          INSERT INTO goal_task_deps (goal_id, task_id, depends_on_task_id)
-          VALUES (?, ?, ?)
+          INSERT INTO task_deps (task_id, depends_on_task_id, goal_id)
+          VALUES (@task_id, @depends_on_task_id, @goal_id)
         `);
 
         for (const task of state.tasks) {
@@ -149,7 +149,11 @@ export class GoalRepo implements IGoalRepo {
           });
 
           for (const dep of task.depends) {
-            insertDep.run(state.goalId, task.id, dep);
+            insertDep.run({
+              task_id: task.id,
+              depends_on_task_id: dep,
+              goal_id: state.goalId,
+            });
           }
         }
       }
@@ -159,7 +163,7 @@ export class GoalRepo implements IGoalRepo {
   }
 
   async delete(goalId: string): Promise<boolean> {
-    // CASCADE 会自动删除 goal_tasks 和 goal_task_deps
+    // CASCADE 会自动删除 tasks 和 task_deps
     const result = this.stmts.deleteGoal.run(goalId);
     return result.changes > 0;
   }
@@ -188,7 +192,7 @@ function goalDriveStateToGoalRow(state: GoalDriveState): Record<string, unknown>
     name: state.goalName,
     drive_status: state.status,
     drive_branch: state.goalBranch,
-    drive_channel_id: state.goalChannelId,
+    drive_thread_id: state.goalChannelId,
     drive_base_cwd: state.baseCwd,
     drive_max_concurrent: state.maxConcurrent,
     drive_created_at: state.createdAt,
@@ -226,7 +230,7 @@ function rowsToGoalDriveState(
     goalSeq: goal.seq ?? 0,
     goalName: goal.name,
     goalBranch: goal.drive_branch ?? '',
-    goalChannelId: goal.drive_channel_id ?? '',
+    goalChannelId: goal.drive_thread_id ?? '',
     baseCwd: goal.drive_base_cwd ?? '',
     status: (goal.drive_status as GoalDriveStatus) ?? 'running',
     createdAt: goal.drive_created_at ?? 0,

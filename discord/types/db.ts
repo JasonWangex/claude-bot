@@ -134,7 +134,7 @@ export interface GoalRow {
   /** Goal 的 git 分支名 */
   drive_branch: string | null;
   /** 调度员 Discord Thread ID */
-  drive_channel_id: string | null;
+  drive_thread_id: string | null;
   /** Drive 的基础工作目录 */
   drive_base_cwd: string | null;
   /** 最大并发子任务数 */
