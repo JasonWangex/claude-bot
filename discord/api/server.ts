@@ -28,6 +28,7 @@ import { listKnowledgeBase, createKnowledgeBase, getKnowledgeBaseEntry, updateKn
 import { syncSessions } from './routes/sync.js';
 import { getCommands } from './routes/commands.js';
 import { getSessionConversation } from './routes/sessions.js';
+import { listPrompts, getPrompt, updatePrompt, refreshPrompts } from './routes/prompts.js';
 
 function defineRoutes(): Route[] {
   const r = (method: string, path: string, handler: Route['handler']): Route => {
@@ -114,6 +115,12 @@ function defineRoutes(): Route[] {
 
     // Sessions
     r('GET', '/api/sessions/:id/conversation', getSessionConversation),
+
+    // Prompt Config
+    r('GET',    '/api/prompts',         listPrompts),
+    r('POST',   '/api/prompts/refresh', refreshPrompts),
+    r('GET',    '/api/prompts/:key',    getPrompt),
+    r('PATCH',  '/api/prompts/:key',    updatePrompt),
   ];
 }
 

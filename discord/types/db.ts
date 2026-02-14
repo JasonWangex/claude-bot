@@ -455,6 +455,33 @@ export interface TaskDepRow {
 }
 
 // ================================================================
+// prompt_configs 表
+// ================================================================
+
+export interface PromptConfigRow {
+  /** 唯一标识，如 'skill.goal', 'orchestrator.task' */
+  key: string;
+  /** 分类 */
+  category: 'skill' | 'orchestrator';
+  /** 人类可读名称 */
+  name: string;
+  /** 用途说明 */
+  description: string | null;
+  /** 模板内容（支持 {{VAR}} 变量） */
+  template: string;
+  /** JSON string[]: 声明的变量列表 */
+  variables: string;
+  /** 父模板 key（section 组合用） */
+  parent_key: string | null;
+  /** section 排序 */
+  sort_order: number;
+  /** 创建时间 (Unix ms) */
+  created_at: number;
+  /** 更新时间 (Unix ms) */
+  updated_at: number;
+}
+
+// ================================================================
 // 运行时类型转换辅助
 // ================================================================
 

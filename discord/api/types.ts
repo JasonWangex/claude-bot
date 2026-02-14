@@ -13,6 +13,7 @@ import type { GoalOrchestrator } from '../orchestrator/index.js';
 import type { GoalStatus, GoalType } from '../types/db.js';
 import type { SessionSyncService } from '../sync/session-sync-service.js';
 import type { ChannelService } from '../services/channel-service.js';
+import type { PromptConfigService } from '../services/prompt-config-service.js';
 
 // ========== 通用 ==========
 
@@ -34,6 +35,7 @@ export interface ApiDeps {
   orchestrator?: GoalOrchestrator;
   sessionSyncService?: SessionSyncService;
   channelService?: ChannelService;
+  promptService: PromptConfigService;
 }
 
 // ========== 路由 ==========

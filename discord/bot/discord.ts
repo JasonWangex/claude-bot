@@ -38,6 +38,7 @@ import { SessionSyncService } from '../sync/session-sync-service.js';
 import { join } from 'path';
 import { MODEL_OPTIONS, getModelLabel } from './commands/task.js';
 import type { CommandDeps } from './commands/types.js';
+import type { PromptConfigService } from '../services/prompt-config-service.js';
 
 export class DiscordBot {
   private client: Client;
@@ -47,14 +48,16 @@ export class DiscordBot {
   private messageHandler: MessageHandler;
   private claudeClient: ClaudeClient;
   private config: DiscordBotConfig;
+  private promptService: PromptConfigService;
   private apiServer: ApiServer | null = null;
   private orchestrator: GoalOrchestrator | null = null;
   private cleanupInterval: NodeJS.Timeout | null = null;
   private sessionSyncService: SessionSyncService;
   private channelService: ChannelService | null = null;
 
-  constructor(config: DiscordBotConfig) {
+  constructor(config: DiscordBotConfig, promptService: PromptConfigService) {
     this.config = config;
+    this.promptService = promptService;
 
     this.client = new Client({
       intents: [
@@ -128,6 +131,7 @@ export class DiscordBot {
       messageHandler: this.messageHandler,
       messageQueue: this.messageQueue,
       channelService: this.channelService ?? undefined,
+      promptService: this.promptService,
     };
   }
 
@@ -555,22 +559,10 @@ export class DiscordBot {
       }
 
       // 加载 goal skill，用 goal 名称作为参数
-      const { readFile } = await import('fs/promises');
-      const { homedir } = await import('os');
-      const { join } = await import('path');
-      const skillPath = join(homedir(), '.claude/skills/goal/SKILL.md');
-      let skillContent: string;
-      try {
-        skillContent = await readFile(skillPath, 'utf-8');
-      } catch {
-        await interaction.followUp({ content: 'Skill file not found: ~/.claude/skills/goal/SKILL.md', ephemeral: true }).catch(() => {});
-        return;
-      }
-
-      const bodyMatch = skillContent.match(/^---[\s\S]*?---\s*([\s\S]*)$/);
-      const prompt = (bodyMatch ? bodyMatch[1] : skillContent)
-        .replace('{{SKILL_ARGS}}', goal.name)
-        .replace('{{THREAD_ID}}', channelId);
+      const prompt = this.promptService.render('skill.goal', {
+        SKILL_ARGS: goal.name,
+        THREAD_ID: channelId,
+      });
 
       this.messageHandler.handleBackgroundChat(guildId, channelId, prompt).catch((err) => {
         logger.error('goal drive_prompt failed:', err.message);
@@ -633,21 +625,9 @@ export class DiscordBot {
           idea.updatedAt = Date.now();
           await ideaRepo.save(idea);
 
-          const { readFile } = await import('fs/promises');
-          const { homedir } = await import('os');
-          const { join } = await import('path');
-          const skillPath = join(homedir(), '.claude/skills/idea/SKILL.md');
-          let skillContent: string;
-          try {
-            skillContent = await readFile(skillPath, 'utf-8');
-          } catch {
-            await interaction.followUp({ content: 'Skill file not found: ~/.claude/skills/idea/SKILL.md', ephemeral: true }).catch(() => {});
-            return;
-          }
-
-          const bodyMatch = skillContent.match(/^---[\s\S]*?---\s*([\s\S]*)$/);
-          const prompt = (bodyMatch ? bodyMatch[1] : skillContent)
-            .replace('{{SKILL_ARGS}}', `推进 Idea "${idea.name}" (project: ${idea.project}, id: ${idea.id}) 到开发`);
+          const prompt = this.promptService.render('skill.idea', {
+            SKILL_ARGS: `推进 Idea "${idea.name}" (project: ${idea.project}, id: ${idea.id}) 到开发`,
+          });
 
           this.messageHandler.handleBackgroundChat(guildId, channelId, prompt).catch((err) => {
             logger.error('idea qdev failed:', err.message);
@@ -672,22 +652,10 @@ export class DiscordBot {
           idea.updatedAt = Date.now();
           await ideaRepo.save(idea);
 
-          const { readFile } = await import('fs/promises');
-          const { homedir } = await import('os');
-          const { join } = await import('path');
-          const goalSkillPath = join(homedir(), '.claude/skills/goal/SKILL.md');
-          let goalSkillContent: string;
-          try {
-            goalSkillContent = await readFile(goalSkillPath, 'utf-8');
-          } catch {
-            await interaction.followUp({ content: 'Skill file not found: ~/.claude/skills/goal/SKILL.md', ephemeral: true }).catch(() => {});
-            return;
-          }
-
-          const goalBodyMatch = goalSkillContent.match(/^---[\s\S]*?---\s*([\s\S]*)$/);
-          const goalPrompt = (goalBodyMatch ? goalBodyMatch[1] : goalSkillContent)
-            .replace('{{SKILL_ARGS}}', idea.name)
-            .replace('{{THREAD_ID}}', channelId);
+          const goalPrompt = this.promptService.render('skill.goal', {
+            SKILL_ARGS: idea.name,
+            THREAD_ID: channelId,
+          });
 
           this.messageHandler.handleBackgroundChat(guildId, channelId, goalPrompt).catch((err) => {
             logger.error('idea to goal failed:', err.message);
@@ -851,6 +819,7 @@ export class DiscordBot {
       goalMetaRepo,
       taskRepo,
       checkpointRepo,
+      promptService: this.promptService,
     });
     this.orchestrator = orchestrator;
     await orchestrator.restoreRunningDrives();
@@ -867,6 +836,7 @@ export class DiscordBot {
         orchestrator,
         sessionSyncService: this.sessionSyncService,
         channelService: this.channelService ?? undefined,
+        promptService: this.promptService,
       });
       await this.apiServer.start();
     }
