@@ -1,157 +1,73 @@
 {
   "verdict": "fail",
-  "summary": "Build fails with 28 TS errors, 14 tests fail. Core issue: threadId→channelId rename was mechanically incomplete — function parameters/types were renamed but many references in function bodies still use the old name (or vice versa), causing undefined variable errors. Additionally, SessionRow type fields were renamed (thread_id→channel_id) but the actual DB columns are still thread_id, causing SQL parameter mismatches at runtime. New channel-service.ts itself is well-implemented.",
+  "summary": "Tests pass (115/115) and the branch reduced pre-existing TS errors from 127→23, showing significant progress. However, ~9 newly introduced TS errors remain from incomplete threadId→channelId rename: ActiveProcess/PendingEntry interfaces not updated, runAudit/auditFixLoop missing `usage` parameter, stale channelId references in orchestrator/executor, and Discord event handlers missing type guards. The new channel-service.ts and fork-task.ts are well-implemented. The core rename across API routes, state manager, types, and DB layers is largely correct.",
   "verifyCommands": ["npx tsc --noEmit", "npx vitest run"],
   "issues": [
     {
       "severity": "error",
-      "file": "discord/api/routes/messages.ts",
-      "line": 35,
-      "description": "Variable renamed to channelId (line 20) but lines 35, 47, 53-56 still reference undeclared threadId. Will crash at runtime."
-    },
-    {
-      "severity": "error",
-      "file": "discord/api/routes/qdev.ts",
-      "line": 101,
-      "description": "parentChannelId fallback uses threadId (line 101: `rootSession?.channelId ?? threadId`), but threadId was renamed to channelId on line 26."
-    },
-    {
-      "severity": "error",
-      "file": "discord/api/routes/tasks.ts",
-      "line": 295,
-      "description": "deleteTask(): line 295 `client.channels.fetch(threadId)` and line 302 response includes `threadId` — but variable was renamed to channelId on line 273. archiveTask() has same issue at line 322."
-    },
-    {
-      "severity": "error",
-      "file": "discord/bot/commands/model.ts",
-      "line": 64,
-      "description": "`const channelId = channelId` — self-assignment (variable used before declaration). Also line 65 references undeclared threadId in fallback name."
-    },
-    {
-      "severity": "error",
-      "file": "discord/bot/commands/dev.ts",
-      "line": 107,
-      "description": "parentChannelId fallback uses threadId (line 107: `rootSession?.channelId ?? threadId`). Multiple other threadId references at lines 276 (messageQueue.sendLong)."
-    },
-    {
-      "severity": "error",
-      "file": "discord/bot/commands/goal.ts",
-      "line": 157,
-      "description": "messageQueue.sendLong(threadId, ...) at line 157 — threadId undefined. parentChannelId fallback at line 178 uses threadId."
-    },
-    {
-      "severity": "error",
-      "file": "discord/bot/commands/session.ts",
-      "line": 235,
-      "description": "handleAttach(): threadName fallback uses threadId (line 235). holder.channelId === threadId comparison (line 247) — threadId is undefined."
-    },
-    {
-      "severity": "error",
-      "file": "discord/bot/commands/task.ts",
-      "line": 335,
-      "description": "channelName fallback uses threadId (line 335: `channel-${threadId}`) — threadId undefined."
-    },
-    {
-      "severity": "error",
-      "file": "discord/bot/discord.ts",
-      "line": 203,
-      "description": "ChannelUpdate event: newChannel type is DMChannel|NonThreadGuildBasedChannel; DMChannel has no guild property. Need type guard (check type !== ChannelType.DM first). Lines 203, 215."
-    },
-    {
-      "severity": "error",
-      "file": "discord/bot/discord.ts",
-      "line": 548,
-      "description": "handleGoalDrivePrompt: line 548 messageQueue.sendLong(threadId,...) — threadId is undefined (renamed to channelId at 512). Same at lines 625, 665."
-    },
-    {
-      "severity": "error",
-      "file": "discord/bot/discord.ts",
-      "line": 788,
-      "description": "guilds.fetch(guildId) — guildId is potentially undefined here (from getAuthorizedGuildId). Type error: string | undefined not assignable to string | FetchGuildOptions."
-    },
-    {
-      "severity": "error",
-      "file": "discord/bot/handlers.ts",
-      "line": 91,
-      "description": "Massive incomplete rename: parameter renamed to channelId but ~40 references in function body still use threadId (lines 91, 121, 127, 134, 140, 152, 179, 184, 209, 255, 276, 322, 337, 342, 348, 436, 498, 516, 600, 606, 613, 625, 641, 661, etc.)."
-    },
-    {
-      "severity": "error",
-      "file": "discord/bot/handlers.ts",
-      "line": 470,
-      "description": "sendChatInternal passes `channelId` property to claudeClient.chat() options, but the ClaudeExecutor options type doesn't have channelId field (TS2353)."
-    },
-    {
-      "severity": "error",
-      "file": "discord/bot/handlers.ts",
-      "line": 680,
-      "description": "sendChatByIds/handleBackgroundChat: parameter name is still threadId but body references channelId (line 683). Reverse of the usual bug."
-    },
-    {
-      "severity": "error",
       "file": "discord/bot/interaction-registry.ts",
-      "line": 115,
-      "description": "findWaitingCustomText: compares entry.channelId but PendingEntry type doesn't have channelId property (has threadId)."
+      "line": 18,
+      "description": "PendingEntry interface still has `threadId: string` (line 18) but findWaitingCustomText() at line 115 reads `entry.channelId`. Rename the interface field from `threadId` to `channelId` and update register() (line 48) accordingly."
     },
     {
       "severity": "error",
       "file": "discord/claude/executor.ts",
-      "line": 793,
-      "description": "detachAll: constructs registry entry with `channelId: active.channelId` but ActiveProcess type has threadId, not channelId. Lines 856, 875, 897 in reconnectAll have same issue."
+      "line": 30,
+      "description": "ActiveProcess interface has `threadId?: string` (line 30) but line 793 reads `active.channelId`. Rename the field to `channelId` in the interface. Also update line 163 which sets `threadId: options.channelId`."
     },
     {
       "severity": "error",
-      "file": "discord/db/repo/session-repo.ts",
-      "line": 55,
-      "description": "sessionToParams() outputs key `channel_id` but SQL upsert statement uses @thread_id parameter binding. Runtime error: 'Missing named parameter thread_id'. Same issue with parent_channel_id vs @parent_thread_id. Also affects restore() at lines 260, 270."
-    },
-    {
-      "severity": "error",
-      "file": "discord/db/repo/goal-repo.ts",
-      "line": 229,
-      "description": "rowsToGoalDriveState: references goal.drive_thread_id but GoalRow type renamed field to drive_channel_id. Similarly line 248: t.thread_id but GoalTaskRow renamed to channel_id."
-    },
-    {
-      "severity": "error",
-      "file": "discord/types/db.ts",
-      "line": 37,
-      "description": "SessionRow.thread_id renamed to channel_id, but actual DB column is still thread_id. GoalRow.drive_thread_id→drive_channel_id and GoalTaskRow.thread_id→channel_id have same issue. Type should match DB column names, not logical names."
+      "file": "discord/claude/client.ts",
+      "line": 54,
+      "description": "chat() options type has `threadId?: string` (line 54) but handlers.ts:470 passes `channelId`. Rename to `channelId` in the options type definition."
     },
     {
       "severity": "error",
       "file": "discord/orchestrator/index.ts",
       "line": 337,
-      "description": "startRefixPipeline: parameter is channelId but body calls runAudit/auditFixLoop with threadId (undefined). Lines 337, 343, 405."
+      "description": "startRefixPipeline calls this.runAudit() with 6 args (line 337) but runAudit() at line 1392 requires 7 (missing `usage: ChatUsageResult`). Same for auditFixLoop at line 343 — called with 8 args but needs 9."
     },
     {
       "severity": "error",
       "file": "discord/orchestrator/index.ts",
       "line": 1057,
-      "description": "executeTaskInBackground: parameter is threadId but body uses channelId (undefined) at line 1057. Reverse direction bug."
+      "description": "executeTaskInBackground: parameter named `threadId` (line 1050) but function body uses `channelId` at line 1057. Rename parameter to `channelId`."
     },
     {
       "severity": "error",
       "file": "discord/orchestrator/index.ts",
-      "line": 1176,
-      "description": "pipelineResearch/pipelineSimpleCode/pipelineComplexCode/auditFixLoop/runAudit: parameter is threadId but body uses channelId (undefined). Affects ~20 call sites across lines 1176-1413."
+      "line": 1396,
+      "description": "runAudit: parameter named `threadId` (line 1396) but body uses `channelId` at lines 1403, 1413. Rename parameter to `channelId`."
+    },
+    {
+      "severity": "error",
+      "file": "discord/bot/discord.ts",
+      "line": 203,
+      "description": "ChannelUpdate/ChannelDelete event handlers: `newChannel.guild` / `channel.guild` fails TS check because type includes DMChannel which has no `guild` property. Add type guard: check `if (!('guild' in newChannel))` or `if (channel.isDMBased()) return` before accessing `.guild`."
+    },
+    {
+      "severity": "error",
+      "file": "discord/bot/handlers.ts",
+      "line": 564,
+      "description": "sendChatInternal: line 564 uses `threadId` (undefined) in `mq.delete(threadId, msgId)`. Should be `channelId`. This is a runtime bug — progress messages won't be cleaned up after completion."
     },
     {
       "severity": "error",
       "file": "discord/orchestrator/__tests__/rollback.test.ts",
       "line": 19,
-      "description": "makeState(): goalSeq is optional (number | undefined) but GoalDriveState requires number. Type mismatch."
+      "description": "makeState() helper: `goalSeq` uses partial type with `number | undefined` but GoalDriveState.goalSeq is non-optional `number`. Add a default value like `goalSeq: 1`."
     },
     {
       "severity": "warning",
-      "file": "discord/bot/commands/dev.ts",
-      "line": 276,
-      "description": "messageQueue.sendLong(threadId, ...) in commit error handler — even after fix, should this be channelId? Ensure error messages go to the correct channel."
+      "file": "discord/bot/discord.ts",
+      "line": 548,
+      "description": "handleGoalDrivePrompt: line 548 `this.messageQueue.sendLong(threadId, ...)` — threadId is undefined (renamed to channelId at line 512). Pre-existing but still needs fix. Same at lines 625, 665."
     },
     {
       "severity": "warning",
       "file": "discord/services/channel-service.ts",
-      "line": 114,
-      "description": "syncFromDiscord uses hardcoded default cwd '/default' for channels without existing records. Consider using the guild's default working directory instead."
+      "line": 144,
+      "description": "syncFromDiscord uses hardcoded fallback cwd '/default' for channels without existing DB records. Consider using guild default working directory."
     }
   ]
 }
