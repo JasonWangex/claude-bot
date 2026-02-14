@@ -2,8 +2,8 @@
  * IGoalTaskRepo 的 SQLite 实现
  *
  * 管理 Goal 下子任务的 CRUD 和查询。
- * 复合主键: (goal_id, id)
- * 依赖关系通过 goal_task_deps 表管理。
+ * 主键: id (全局唯一，migration 010 后改为单列主键)
+ * 依赖关系通过 task_deps 表管理。
  */
 
 import type Database from 'better-sqlite3';
@@ -37,34 +37,34 @@ export class GoalTaskRepo implements IGoalTaskRepo {
   private prepareStatements(): void {
     this.stmts = {
       getTask: this.db.prepare(
-        `SELECT * FROM goal_tasks WHERE goal_id = ? AND id = ?`,
+        `SELECT * FROM tasks WHERE goal_id = ? AND id = ?`,
       ),
 
       getTasksByGoal: this.db.prepare(
-        `SELECT * FROM goal_tasks WHERE goal_id = ? ORDER BY phase ASC, id ASC`,
+        `SELECT * FROM tasks WHERE goal_id = ? ORDER BY phase ASC, id ASC`,
       ),
 
       upsertTask: this.db.prepare(`
-        INSERT INTO goal_tasks (
+        INSERT INTO tasks (
           id, goal_id, description, type, phase, status,
-          branch_name, thread_id, dispatched_at, completed_at,
+          branch_name, channel_id, dispatched_at, completed_at,
           error, merged, notified_blocked, feedback_json,
           complexity, pipeline_phase, audit_retries,
           tokens_in, tokens_out, cache_read_in, cache_write_in, cost_usd, duration_ms
         ) VALUES (
           @id, @goal_id, @description, @type, @phase, @status,
-          @branch_name, @thread_id, @dispatched_at, @completed_at,
+          @branch_name, @channel_id, @dispatched_at, @completed_at,
           @error, @merged, @notified_blocked, @feedback_json,
           @complexity, @pipeline_phase, @audit_retries,
           @tokens_in, @tokens_out, @cache_read_in, @cache_write_in, @cost_usd, @duration_ms
         )
-        ON CONFLICT(goal_id, id) DO UPDATE SET
+        ON CONFLICT(id) DO UPDATE SET
           description = @description,
           type = @type,
           phase = @phase,
           status = @status,
           branch_name = @branch_name,
-          thread_id = @thread_id,
+          channel_id = @channel_id,
           dispatched_at = @dispatched_at,
           completed_at = @completed_at,
           error = @error,
@@ -83,39 +83,39 @@ export class GoalTaskRepo implements IGoalTaskRepo {
       `),
 
       deleteTask: this.db.prepare(
-        `DELETE FROM goal_tasks WHERE goal_id = ? AND id = ?`,
+        `DELETE FROM tasks WHERE goal_id = ? AND id = ?`,
       ),
 
       deleteAllByGoal: this.db.prepare(
-        `DELETE FROM goal_tasks WHERE goal_id = ?`,
+        `DELETE FROM tasks WHERE goal_id = ?`,
       ),
 
       findByStatus: this.db.prepare(
-        `SELECT * FROM goal_tasks WHERE goal_id = ? AND status = ? ORDER BY phase ASC, id ASC`,
+        `SELECT * FROM tasks WHERE goal_id = ? AND status = ? ORDER BY phase ASC, id ASC`,
       ),
 
       findByThreadId: this.db.prepare(
-        `SELECT * FROM goal_tasks WHERE thread_id = ?`,
+        `SELECT * FROM tasks WHERE channel_id = ?`,
       ),
 
       getDepsByTask: this.db.prepare(
-        `SELECT * FROM goal_task_deps WHERE goal_id = ? AND task_id = ?`,
+        `SELECT * FROM task_deps WHERE goal_id = ? AND task_id = ?`,
       ),
 
       getDepsByGoal: this.db.prepare(
-        `SELECT * FROM goal_task_deps WHERE goal_id = ?`,
+        `SELECT * FROM task_deps WHERE goal_id = ?`,
       ),
 
       deleteDeps: this.db.prepare(
-        `DELETE FROM goal_task_deps WHERE goal_id = ? AND task_id = ?`,
+        `DELETE FROM task_deps WHERE goal_id = ? AND task_id = ?`,
       ),
 
       deleteDepsByGoal: this.db.prepare(
-        `DELETE FROM goal_task_deps WHERE goal_id = ?`,
+        `DELETE FROM task_deps WHERE goal_id = ?`,
       ),
 
       insertDep: this.db.prepare(
-        `INSERT OR IGNORE INTO goal_task_deps (goal_id, task_id, depends_on_task_id) VALUES (?, ?, ?)`,
+        `INSERT OR IGNORE INTO task_deps (goal_id, task_id, depends_on_task_id) VALUES (?, ?, ?)`,
       ),
     };
   }
@@ -211,7 +211,7 @@ export class GoalTaskRepo implements IGoalTaskRepo {
         COALESCE(SUM(cache_write_in), 0) AS cache_write_in,
         COALESCE(SUM(cost_usd), 0)       AS cost_usd,
         COALESCE(SUM(duration_ms), 0)    AS duration_ms
-      FROM goal_tasks
+      FROM tasks
       WHERE goal_id = ?
     `).get(goalId) as Record<string, number>;
 
@@ -237,7 +237,7 @@ function goalTaskToRow(goalId: string, task: GoalTask): Record<string, unknown> 
     phase: task.phase ?? null,
     status: task.status,
     branch_name: task.branchName ?? null,
-    thread_id: task.threadId ?? null,
+    channel_id: task.threadId ?? null,  // threadId → channel_id 映射
     dispatched_at: task.dispatchedAt ?? null,
     completed_at: task.completedAt ?? null,
     error: task.error ?? null,
@@ -281,7 +281,7 @@ function taskRowToGoalTask(
     auditRetries: row.audit_retries ?? 0,
     status: row.status,
     branchName: row.branch_name ?? undefined,
-    threadId: row.thread_id ?? undefined,
+    threadId: row.channel_id ?? undefined,  // channel_id → threadId 映射（保持运行时接口兼容）
     dispatchedAt: row.dispatched_at ?? undefined,
     completedAt: row.completed_at ?? undefined,
     error: row.error ?? undefined,

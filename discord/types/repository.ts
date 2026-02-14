@@ -14,6 +14,8 @@ import type {
   GoalTask,
   GoalTaskStatus,
   GoalCheckpoint,
+  Channel,
+  ClaudeSession,
 } from './index.js';
 
 // ==================== 新增实体类型 ====================
@@ -255,4 +257,50 @@ export interface IKnowledgeBaseRepo {
   findByProject(project: string): Promise<KnowledgeBase[]>;
   findByCategory(category: string): Promise<KnowledgeBase[]>;
   search(query: string): Promise<KnowledgeBase[]>;
+}
+
+// ==================== 新表 Repository 接口（migration 010 引入）====================
+
+/**
+ * Channel 仓库
+ *
+ * 管理 Discord Channel 实体（替代 sessions 表中的 Channel 部分）。
+ * 主键: id (Discord Channel ID)
+ */
+export interface IChannelRepo {
+  get(channelId: string): Promise<Channel | null>;
+  getByGuild(guildId: string): Promise<Channel[]>;
+  getByGuildAndStatus(guildId: string, status: 'active' | 'archived'): Promise<Channel[]>;
+  save(channel: Channel): Promise<void>;
+  delete(channelId: string): Promise<boolean>;
+  archive(channelId: string, userId?: string, reason?: string): Promise<boolean>;
+  restore(channelId: string): Promise<boolean>;
+  count(status?: 'active' | 'archived'): Promise<number>;
+}
+
+/**
+ * ClaudeSession 仓库
+ *
+ * 管理 Claude CLI 会话实体（替代 sessions 表中的会话部分）。
+ * 主键: id (UUID)
+ */
+export interface IClaudeSessionRepo {
+  get(id: string): Promise<ClaudeSession | null>;
+  getByChannel(channelId: string): Promise<ClaudeSession[]>;
+  getActiveByChannel(channelId: string): Promise<ClaudeSession | null>;
+  findByClaudeSessionId(claudeSessionId: string): Promise<ClaudeSession | null>;
+  save(session: ClaudeSession): Promise<void>;
+  close(id: string): Promise<boolean>;
+}
+
+/**
+ * SyncCursor 仓库
+ *
+ * 管理同步游标（跟踪各数据源的同步进度）。
+ * 主键: source
+ */
+export interface ISyncCursorRepo {
+  get(source: string): Promise<string | null>;
+  set(source: string, cursor: string): Promise<void>;
+  delete(source: string): Promise<boolean>;
 }

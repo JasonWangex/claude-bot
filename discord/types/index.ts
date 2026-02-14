@@ -391,3 +391,38 @@ export interface ArchivedSession extends Session {
   archivedBy?: string;       // 归档操作者 user ID (string)
   archiveReason?: string;
 }
+
+// ================================================================
+// 新表类型（migration 010 引入）
+// ================================================================
+
+// Channel（Discord Text Channel 实体）
+export interface Channel {
+  id: string;               // Discord Channel ID
+  guildId: string;
+  name: string;
+  cwd: string;
+  worktreeBranch?: string;
+  parentChannelId?: string;
+  status: 'active' | 'archived';
+  archivedAt?: number;
+  archivedBy?: string;
+  archiveReason?: string;
+  messageCount: number;
+  createdAt: number;
+  lastMessage?: string;
+  lastMessageAt?: number;
+}
+
+// ClaudeSession（Claude Code CLI 会话实体）
+export interface ClaudeSession {
+  id: string;               // UUID
+  claudeSessionId?: string; // Claude CLI session_id
+  prevClaudeSessionId?: string;
+  channelId?: string;
+  model?: string;
+  planMode: boolean;
+  status: 'active' | 'closed';
+  createdAt: number;
+  closedAt?: number;
+}
