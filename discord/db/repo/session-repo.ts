@@ -97,17 +97,17 @@ export class SessionRepository implements ISessionRepo {
   private prepareStatements(): void {
     this.stmts = {
       getByKey: this.db.prepare(
-        `SELECT * FROM sessions WHERE guild_id = ? AND thread_id = ?`,
+        `SELECT * FROM _deprecated_sessions WHERE guild_id = ? AND thread_id = ?`,
       ),
 
       getAllByGuild: this.db.prepare(
-        `SELECT * FROM sessions WHERE guild_id = ?`,
+        `SELECT * FROM _deprecated_sessions WHERE guild_id = ?`,
       ),
 
-      getAll: this.db.prepare(`SELECT * FROM sessions`),
+      getAll: this.db.prepare(`SELECT * FROM _deprecated_sessions`),
 
       upsert: this.db.prepare(`
-        INSERT INTO sessions (
+        INSERT INTO _deprecated_sessions (
           id, name, thread_id, guild_id, claude_session_id, prev_claude_session_id,
           cwd, created_at, last_message, last_message_at, plan_mode, model,
           parent_thread_id, worktree_branch, message_count
@@ -131,43 +131,43 @@ export class SessionRepository implements ISessionRepo {
       `),
 
       deleteByKey: this.db.prepare(
-        `DELETE FROM sessions WHERE guild_id = ? AND thread_id = ?`,
+        `DELETE FROM _deprecated_sessions WHERE guild_id = ? AND thread_id = ?`,
       ),
 
       deleteById: this.db.prepare(
-        `DELETE FROM sessions WHERE id = ?`,
+        `DELETE FROM _deprecated_sessions WHERE id = ?`,
       ),
 
       findByClaudeSession: this.db.prepare(
-        `SELECT * FROM sessions WHERE guild_id = ? AND claude_session_id = ?`,
+        `SELECT * FROM _deprecated_sessions WHERE guild_id = ? AND claude_session_id = ?`,
       ),
 
       findByParent: this.db.prepare(
-        `SELECT * FROM sessions WHERE guild_id = ? AND parent_thread_id = ?`,
+        `SELECT * FROM _deprecated_sessions WHERE guild_id = ? AND parent_thread_id = ?`,
       ),
 
       clearParentRef: this.db.prepare(
-        `UPDATE sessions SET parent_thread_id = NULL WHERE guild_id = ? AND parent_thread_id = ?`,
+        `UPDATE _deprecated_sessions SET parent_thread_id = NULL WHERE guild_id = ? AND parent_thread_id = ?`,
       ),
 
-      count: this.db.prepare(`SELECT COUNT(*) as cnt FROM sessions`),
+      count: this.db.prepare(`SELECT COUNT(*) as cnt FROM _deprecated_sessions`),
 
       updateLastMessage: this.db.prepare(
-        `UPDATE sessions SET last_message = ?, last_message_at = ? WHERE id = ?`,
+        `UPDATE _deprecated_sessions SET last_message = ?, last_message_at = ? WHERE id = ?`,
       ),
 
       getArchivedByKey: this.db.prepare(
-        `SELECT * FROM archived_sessions WHERE guild_id = ? AND thread_id = ?`,
+        `SELECT * FROM _deprecated_archived_sessions WHERE guild_id = ? AND thread_id = ?`,
       ),
 
       getAllArchivedByGuild: this.db.prepare(
-        `SELECT * FROM archived_sessions WHERE guild_id = ?`,
+        `SELECT * FROM _deprecated_archived_sessions WHERE guild_id = ?`,
       ),
 
-      getAllArchived: this.db.prepare(`SELECT * FROM archived_sessions`),
+      getAllArchived: this.db.prepare(`SELECT * FROM _deprecated_archived_sessions`),
 
       insertArchived: this.db.prepare(`
-        INSERT INTO archived_sessions (
+        INSERT INTO _deprecated_archived_sessions (
           id, name, thread_id, guild_id, claude_session_id, prev_claude_session_id,
           cwd, created_at, last_message, last_message_at, plan_mode, model,
           parent_thread_id, worktree_branch, message_count, archived_at, archived_by,
@@ -181,7 +181,7 @@ export class SessionRepository implements ISessionRepo {
       `),
 
       deleteArchived: this.db.prepare(
-        `DELETE FROM archived_sessions WHERE guild_id = ? AND thread_id = ?`,
+        `DELETE FROM _deprecated_archived_sessions WHERE guild_id = ? AND thread_id = ?`,
       ),
     };
   }
