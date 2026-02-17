@@ -1,12 +1,75 @@
+import { useState, useEffect } from 'react';
 import { useParams, Navigate } from 'react-router';
 import { Typography, Breadcrumb, Card, Descriptions, Spin, Space, Alert, Tabs } from 'antd';
 import { BranchesOutlined, FolderOutlined, ClockCircleOutlined, RobotOutlined } from '@ant-design/icons';
 import { Link } from 'react-router';
 import { TaskTree } from '@/components/tasks/TaskTree';
+import ConversationViewer from '@/components/sessions/ConversationViewer';
 import { useTask } from '@/lib/hooks/use-tasks';
+import { useTaskSessions, fetchSessionConversation } from '@/lib/hooks/use-sessions';
+import type { SessionEvent } from '@/lib/hooks/use-sessions';
 import { formatDistanceToNow } from '@/lib/format';
 
 const { Title } = Typography;
+
+function SessionsTab({ channelId }: { channelId: string }) {
+  const { data: sessions, isLoading: sessionsLoading } = useTaskSessions(channelId);
+  const [conversationMap, setConversationMap] = useState<Map<string, SessionEvent[]>>(new Map());
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!sessions || sessions.length === 0) return;
+
+    let cancelled = false;
+    setLoading(true);
+
+    // Concurrency-limited fetch (max 3 parallel)
+    const results: [string, SessionEvent[]][] = [];
+    const queue = [...sessions];
+    const workers = Array.from({ length: Math.min(3, queue.length) }, async () => {
+      while (queue.length > 0) {
+        const s = queue.shift()!;
+        try {
+          const events = await fetchSessionConversation(s.id);
+          results.push([s.id, events]);
+        } catch {
+          results.push([s.id, []]);
+        }
+      }
+    });
+
+    Promise.all(workers).then(() => {
+      if (cancelled) return;
+      const map = new Map<string, SessionEvent[]>();
+      for (const [id, events] of results) {
+        map.set(id, events);
+      }
+      setConversationMap(map);
+      setLoading(false);
+    });
+
+    return () => { cancelled = true; };
+  }, [sessions]);
+
+  if (sessionsLoading || loading) {
+    return (
+      <div style={{ textAlign: 'center', padding: 48 }}>
+        <Spin size="large" />
+      </div>
+    );
+  }
+
+  if (!sessions || sessions.length === 0) {
+    return <Alert message="暂无关联的 Claude Session" type="info" showIcon />;
+  }
+
+  return (
+    <ConversationViewer
+      sessions={sessions}
+      conversationMap={conversationMap}
+    />
+  );
+}
 
 export default function TaskDetail() {
   const { channelId } = useParams<{ channelId: string }>();
@@ -25,6 +88,22 @@ export default function TaskDetail() {
       </div>
     );
   }
+
+  const tabItems = [];
+
+  if (task.children?.length) {
+    tabItems.push({
+      key: 'children',
+      label: `子任务 (${task.children.length})`,
+      children: <TaskTree tasks={task.children} />,
+    });
+  }
+
+  tabItems.push({
+    key: 'sessions',
+    label: '会话历史',
+    children: <SessionsTab channelId={channelId} />,
+  });
 
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
@@ -56,18 +135,7 @@ export default function TaskDetail() {
         </Descriptions>
       </Card>
 
-      {task.children?.length ? (
-        <Tabs
-          defaultActiveKey="children"
-          items={[
-            {
-              key: 'children',
-              label: `子任务 (${task.children.length})`,
-              children: <TaskTree tasks={task.children} />,
-            },
-          ]}
-        />
-      ) : null}
+      <Tabs defaultActiveKey={task.children?.length ? 'children' : 'sessions'} items={tabItems} />
     </Space>
   );
 }

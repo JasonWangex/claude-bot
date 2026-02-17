@@ -95,6 +95,7 @@ export interface TaskSummary {
   last_message_at: number | null;
   parent_channel_id: string | null;
   worktree_branch: string | null;
+  status?: 'active' | 'archived';
   children: TaskSummary[];
 }
 

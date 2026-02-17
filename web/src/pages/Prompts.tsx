@@ -25,10 +25,6 @@ interface PromptConfig {
   updated_at: number;
 }
 
-interface PromptsResponse {
-  data: PromptConfig[];
-}
-
 const categoryIcons: Record<string, React.ReactNode> = {
   skill: <ThunderboltOutlined />,
   orchestrator: <NodeIndexOutlined />,
@@ -56,8 +52,8 @@ export default function Prompts() {
   const loadPrompts = async () => {
     try {
       setLoading(true);
-      const data = await apiFetch<PromptsResponse>('/api/prompts');
-      setPrompts(data.data);
+      const data = await apiFetch<PromptConfig[]>('/api/prompts');
+      setPrompts(data);
     } catch (err: any) {
       setError(err?.message || 'Failed to load prompts');
     } finally {

@@ -844,6 +844,7 @@ export class DiscordBot {
         client: this.client,
         mq: this.messageQueue,
         config: this.config,
+        db,
         orchestrator,
         sessionSyncService: this.sessionSyncService,
         channelService: this.channelService ?? undefined,

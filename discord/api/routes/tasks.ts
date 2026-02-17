@@ -23,6 +23,7 @@ import {
   resolveCustomPath,
 } from '../../utils/topic-path.js';
 import { forkTaskCore } from '../../utils/fork-task.js';
+import { ChannelRepository } from '../../db/repo/channel-repo.js';
 import { logger } from '../../utils/logger.js';
 
 function sessionToSummary(s: Session, children: TaskSummary[]): TaskSummary {
@@ -38,6 +39,7 @@ function sessionToSummary(s: Session, children: TaskSummary[]): TaskSummary {
     last_message_at: s.lastMessageAt || null,
     parent_channel_id: s.parentChannelId || null,
     worktree_branch: s.worktreeBranch || null,
+    status: 'active',
     children,
   };
 }
@@ -62,12 +64,66 @@ function buildTaskTree(sessions: Session[]): TaskSummary[] {
 }
 
 // GET /api/tasks
-export const listTasks: RouteHandler = async (_req, res, _params, deps) => {
+export const listTasks: RouteHandler = async (req, res, _params, deps) => {
   const guildId = requireAuth(res);
   if (!guildId) return;
 
-  const sessions = deps.stateManager.getAllSessions(guildId);
-  sendJson(res, 200, { ok: true, data: buildTaskTree(sessions) });
+  const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+  const statusFilter = url.searchParams.get('status') || 'active';
+
+  if (statusFilter === 'all') {
+    // 从数据库查所有 channel，合并内存中的活跃状态
+    const channelRepo = new ChannelRepository(deps.db);
+    const allChannels = await channelRepo.getByGuild(guildId);
+    const activeSessions = deps.stateManager.getAllSessions(guildId);
+    const activeIds = new Set(activeSessions.map(s => s.channelId));
+
+    const summaries: TaskSummary[] = allChannels.map(ch => {
+      // 优先从内存取活跃 session 数据
+      const activeSession = activeSessions.find(s => s.channelId === ch.id);
+      if (activeSession) {
+        return {
+          ...sessionToSummary(activeSession, []),
+          status: 'active' as const,
+        };
+      }
+      return {
+        channel_id: ch.id,
+        name: ch.name,
+        cwd: ch.cwd,
+        model: null,
+        has_session: false,
+        message_count: ch.messageCount,
+        created_at: ch.createdAt,
+        last_message: ch.lastMessage || null,
+        last_message_at: ch.lastMessageAt || null,
+        parent_channel_id: ch.parentChannelId || null,
+        worktree_branch: ch.worktreeBranch || null,
+        status: ch.status,
+        children: [],
+      };
+    });
+
+    // 构建树结构
+    const idSet = new Set(summaries.map(s => s.channel_id));
+    const childMap = new Map<string, TaskSummary[]>();
+    for (const s of summaries) {
+      if (s.parent_channel_id && idSet.has(s.parent_channel_id)) {
+        const arr = childMap.get(s.parent_channel_id) || [];
+        arr.push(s);
+        childMap.set(s.parent_channel_id, arr);
+      }
+    }
+    const topLevel = summaries
+      .filter(s => !s.parent_channel_id || !idSet.has(s.parent_channel_id))
+      .map(s => ({ ...s, children: childMap.get(s.channel_id) || [] }));
+
+    sendJson(res, 200, { ok: true, data: topLevel });
+  } else {
+    // 默认：只返回活跃 task（从内存）
+    const sessions = deps.stateManager.getAllSessions(guildId);
+    sendJson(res, 200, { ok: true, data: buildTaskTree(sessions) });
+  }
 };
 
 // POST /api/tasks

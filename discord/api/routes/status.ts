@@ -19,6 +19,7 @@ function sessionToSummary(s: Session, children: TaskSummary[]): TaskSummary {
     last_message_at: s.lastMessageAt || null,
     parent_channel_id: s.parentChannelId || null,
     worktree_branch: s.worktreeBranch || null,
+    status: 'active',
     children,
   };
 }

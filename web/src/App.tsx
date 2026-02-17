@@ -12,6 +12,8 @@ import DevLogDetail from '@/pages/DevLogDetail';
 import Ideas from '@/pages/Ideas';
 import KnowledgeBase from '@/pages/KnowledgeBase';
 import KBDetail from '@/pages/KBDetail';
+import Sessions from '@/pages/Sessions';
+import SessionDetail from '@/pages/SessionDetail';
 import Commands from '@/pages/Commands';
 import Prompts from '@/pages/Prompts';
 import Login from '@/pages/Login';
@@ -32,6 +34,8 @@ export default function App() {
             <Route path="goals/:goalId" element={<GoalDetail />} />
             <Route path="tasks" element={<Tasks />} />
             <Route path="tasks/:channelId" element={<TaskDetail />} />
+            <Route path="sessions" element={<Sessions />} />
+            <Route path="sessions/:sessionId" element={<SessionDetail />} />
             <Route path="devlogs" element={<DevLogs />} />
             <Route path="devlogs/:devlogId" element={<DevLogDetail />} />
             <Route path="ideas" element={<Ideas />} />

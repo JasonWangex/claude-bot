@@ -3,6 +3,7 @@
  */
 
 import type { IncomingMessage, ServerResponse } from 'http';
+import type Database from 'better-sqlite3';
 import type { Client } from 'discord.js';
 import type { StateManager } from '../bot/state.js';
 import type { ClaudeClient } from '../claude/client.js';
@@ -32,6 +33,7 @@ export interface ApiDeps {
   client: Client;
   mq: MessageQueue;
   config: DiscordBotConfig;
+  db: Database.Database;
   orchestrator?: GoalOrchestrator;
   sessionSyncService?: SessionSyncService;
   channelService?: ChannelService;
@@ -76,6 +78,7 @@ export interface TaskSummary {
   last_message_at: number | null;
   parent_channel_id: string | null;
   worktree_branch: string | null;
+  status: 'active' | 'archived';
   children: TaskSummary[];
 }
 

@@ -2,8 +2,9 @@ import useSWR from 'swr';
 import { apiFetch } from '@/lib/api';
 import type { TaskSummary, TaskDetail, SystemStatus } from '@/lib/types';
 
-export function useTasks() {
-  return useSWR<TaskSummary[]>('/api/tasks', apiFetch, {
+export function useTasks(status?: 'active' | 'all') {
+  const query = status && status !== 'active' ? `?status=${status}` : '';
+  return useSWR<TaskSummary[]>(`/api/tasks${query}`, apiFetch, {
     refreshInterval: 5000,
   });
 }

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Typography, Space, Empty } from 'antd';
+import { Typography, Space, Empty, Tag } from 'antd';
 import { RightOutlined, DownOutlined, BranchesOutlined, ClockCircleOutlined } from '@ant-design/icons';
 import { Link } from 'react-router';
 import { formatDistanceToNow } from '@/lib/format';
@@ -10,6 +10,7 @@ const { Text } = Typography;
 function TaskTreeNode({ task, depth = 0 }: { task: TaskSummary; depth?: number }) {
   const [expanded, setExpanded] = useState(true);
   const hasChildren = (task.children?.length ?? 0) > 0;
+  const isArchived = task.status === 'archived';
 
   return (
     <div>
@@ -23,6 +24,7 @@ function TaskTreeNode({ task, depth = 0 }: { task: TaskSummary; depth?: number }
           borderRadius: 6,
           marginLeft: depth * 24,
           transition: 'background 0.2s',
+          opacity: isArchived ? 0.5 : 1,
         }}
       >
         {hasChildren ? (
@@ -42,8 +44,9 @@ function TaskTreeNode({ task, depth = 0 }: { task: TaskSummary; depth?: number }
         <Link to={`/tasks/${task.channel_id}`} style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Text strong style={{ fontSize: 14 }} ellipsis>{task.name}</Text>
-              {task.has_session && (
+              <Text strong style={{ fontSize: 14, color: isArchived ? '#999' : undefined }} ellipsis>{task.name}</Text>
+              {isArchived && <Tag color="default">已归档</Tag>}
+              {!isArchived && task.has_session && (
                 <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#52c41a', flexShrink: 0 }} title="有活跃 Session" />
               )}
             </div>

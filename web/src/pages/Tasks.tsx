@@ -1,17 +1,29 @@
-import { Typography, Card, Spin, Space, Alert } from 'antd';
+import { useState } from 'react';
+import { Typography, Card, Spin, Space, Alert, Segmented } from 'antd';
 import { TaskTree } from '@/components/tasks/TaskTree';
 import { useTasks } from '@/lib/hooks/use-tasks';
 
 const { Title, Text } = Typography;
 
 export default function Tasks() {
-  const { data: tasks, isLoading, error } = useTasks();
+  const [showAll, setShowAll] = useState(false);
+  const { data: tasks, isLoading, error } = useTasks(showAll ? 'all' : 'active');
 
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
-      <div>
-        <Title level={3} style={{ margin: 0 }}>Tasks</Title>
-        <Text type="secondary">Session / Task 管理</Text>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <div>
+          <Title level={3} style={{ margin: 0 }}>Tasks</Title>
+          <Text type="secondary">Session / Task 管理</Text>
+        </div>
+        <Segmented
+          options={[
+            { label: '活跃', value: 'active' },
+            { label: '全部', value: 'all' },
+          ]}
+          value={showAll ? 'all' : 'active'}
+          onChange={(v) => setShowAll(v === 'all')}
+        />
       </div>
 
       {error ? (

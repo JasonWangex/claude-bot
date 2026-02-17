@@ -28,6 +28,8 @@ import { listKnowledgeBase, createKnowledgeBase, getKnowledgeBaseEntry, updateKn
 import { syncSessions } from './routes/sync.js';
 import { getCommands } from './routes/commands.js';
 import { getSessionConversation } from './routes/sessions.js';
+import { listSessions, getSessionMeta } from './routes/session-list.js';
+import { listTaskSessions } from './routes/task-sessions.js';
 import { listPrompts, getPrompt, updatePrompt, refreshPrompts } from './routes/prompts.js';
 import { getRunningTasks, getActiveProcesses, killZombieTasks } from './routes/debug.js';
 import { handleSessionEvent } from './routes/hooks.js';
@@ -63,6 +65,9 @@ function defineRoutes(): Route[] {
     r('POST',   '/api/tasks/:channelId/archive', archiveTask),
     r('POST',   '/api/tasks/:channelId/fork', forkTask),
     r('POST',   '/api/tasks/:channelId/qdev', qdev),
+
+    // Task sessions
+    r('GET',  '/api/tasks/:channelId/sessions', listTaskSessions),
 
     // Task 内操作
     r('POST', '/api/tasks/:channelId/message', sendMessage),
@@ -115,6 +120,8 @@ function defineRoutes(): Route[] {
     r('POST', '/api/sync/sessions', syncSessions),
 
     // Sessions
+    r('GET', '/api/sessions', listSessions),
+    r('GET', '/api/sessions/:id/meta', getSessionMeta),
     r('GET', '/api/sessions/:id/conversation', getSessionConversation),
 
     // Prompt Config
