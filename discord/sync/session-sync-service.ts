@@ -224,7 +224,6 @@ export class SessionSyncService {
           claudeSessionId,
           channelId,
           model: metadata.model,
-          parentSessionId: metadata.parentSessionId,
           planMode: false,
           status: 'active',
           createdAt: metadata.timestamp ? new Date(metadata.timestamp).getTime() : Date.now(),
@@ -255,11 +254,6 @@ export class SessionSyncService {
 
         if (channelId && channelId !== existing.channelId) {
           existing.channelId = channelId;
-          updated = true;
-        }
-
-        if (metadata.parentSessionId && metadata.parentSessionId !== existing.parentSessionId) {
-          existing.parentSessionId = metadata.parentSessionId;
           updated = true;
         }
 

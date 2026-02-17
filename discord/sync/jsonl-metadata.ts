@@ -3,7 +3,6 @@ import { basename } from 'path';
 
 export interface SessionMetadata {
   fileSessionId: string;        // 从文件名提取（主标识）
-  parentSessionId?: string;     // 事件内的 sessionId（可能不同，用于关联）
   cwd?: string;                 // 工作目录
   model?: string;               // Claude 模型
   gitBranch?: string;           // git 分支
@@ -53,11 +52,8 @@ export function extractSessionMetadata(jsonlPath: string): SessionMetadata | nul
       try {
         const event = JSON.parse(line);
 
-        // 从 type: "queue-operation" 提取 timestamp 和事件 sessionId
+        // 从 type: "queue-operation" 提取 timestamp
         if (event.type === 'queue-operation') {
-          if (event.sessionId && !metadata.parentSessionId) {
-            metadata.parentSessionId = event.sessionId;
-          }
           if (!metadata.timestamp && event.timestamp) {
             metadata.timestamp = event.timestamp;
           }
@@ -65,9 +61,6 @@ export function extractSessionMetadata(jsonlPath: string): SessionMetadata | nul
 
         // 从 type: "user" 提取完整元数据
         if (event.type === 'user') {
-          if (event.sessionId && !metadata.parentSessionId) {
-            metadata.parentSessionId = event.sessionId;
-          }
           if (event.cwd && !metadata.cwd) metadata.cwd = event.cwd;
           if (event.version && !metadata.version) metadata.version = event.version;
           if (event.gitBranch && !metadata.gitBranch) metadata.gitBranch = event.gitBranch;
@@ -77,9 +70,6 @@ export function extractSessionMetadata(jsonlPath: string): SessionMetadata | nul
 
         // 从 type: "system", subtype: "local_command" 提取元数据
         if (event.type === 'system' && event.subtype === 'local_command') {
-          if (event.sessionId && !metadata.parentSessionId) {
-            metadata.parentSessionId = event.sessionId;
-          }
           if (event.cwd && !metadata.cwd) metadata.cwd = event.cwd;
           if (event.version && !metadata.version) metadata.version = event.version;
           if (event.gitBranch && !metadata.gitBranch) metadata.gitBranch = event.gitBranch;
