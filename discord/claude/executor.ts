@@ -474,7 +474,7 @@ export class ClaudeExecutor {
             ? Object.keys(resultEvent.modelUsage)[0]
             : undefined;
           try {
-            this.onSessionSync(lastSessionId, active?.threadId, model);
+            this.onSessionSync(lastSessionId, active?.channelId, model);
           } catch (e: any) {
             logger.warn(`Session sync failed: ${e.message}`);
           }
@@ -1034,7 +1034,7 @@ export class ClaudeExecutor {
         ? Object.keys(parseResult.resultEvent.modelUsage)[0]
         : undefined;
       try {
-        this.onSessionSync(sessionId, entry.threadId, model);
+        this.onSessionSync(sessionId, entry.channelId, model);
       } catch (e: any) {
         logger.warn(`Session sync failed (reconnect): ${e.message}`);
       }

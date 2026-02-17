@@ -35,6 +35,15 @@ export class SessionSyncService {
     }
 
     logger.info(`Starting Claude session sync service (scan interval: ${SCAN_INTERVAL_MS}ms)`);
+
+    // 检查是否有 cursor，没有则先做全量同步
+    const cursors = this.syncCursorRepo.loadAll();
+    if (!cursors.has(CURSOR_SOURCE)) {
+      logger.info('No sync cursor found, running initial full sync...');
+      this.syncAll();
+    }
+
+    // 启动定时扫描
     this.scanTimer = setInterval(() => {
       this.scanForChanges();
     }, SCAN_INTERVAL_MS);
@@ -188,16 +197,17 @@ export class SessionSyncService {
   /** 处理单个 JSONL 文件 */
   private processJsonlFileSync(jsonlPath: string): 'created' | 'updated' | 'skipped' {
     try {
-      // 提取元数据
+      // 提取元数据（agent 文件会返回 null）
       const metadata = extractSessionMetadata(jsonlPath);
-      if (!metadata || !metadata.sessionId) {
+      if (!metadata) {
         return 'skipped';
       }
 
+      const claudeSessionId = metadata.fileSessionId;
+
       // 查询是否已有记录
-      // 注意：虽然方法返回 Promise，但 better-sqlite3 是同步的，这里用同步方式处理
       const stmt = this.db.prepare('SELECT * FROM claude_sessions WHERE claude_session_id = ?');
-      const existingRow = stmt.get(metadata.sessionId) as any;
+      const existingRow = stmt.get(claudeSessionId) as any;
 
       // 查找对应的 channel（通过 cwd 匹配）
       let channelId: string | undefined;
@@ -211,13 +221,14 @@ export class SessionSyncService {
         // 创建新记录
         const newSession: ClaudeSession = {
           id: randomUUID(),
-          claudeSessionId: metadata.sessionId,
+          claudeSessionId,
           channelId,
           model: metadata.model,
+          parentSessionId: metadata.parentSessionId,
           planMode: false,
           status: 'active',
           createdAt: metadata.timestamp ? new Date(metadata.timestamp).getTime() : Date.now(),
-          purpose: channelId ? 'channel' : 'temp',  // 有 channel 为 channel，否则为临时
+          purpose: channelId ? 'channel' : 'temp',
         };
         this.claudeSessionRepo.save(newSession);
         return 'created';
@@ -234,6 +245,7 @@ export class SessionSyncService {
           status: existingRow.status,
           createdAt: existingRow.created_at,
           closedAt: existingRow.closed_at ?? undefined,
+          parentSessionId: existingRow.parent_session_id ?? undefined,
         };
 
         if (metadata.model && metadata.model !== existing.model) {
@@ -243,6 +255,11 @@ export class SessionSyncService {
 
         if (channelId && channelId !== existing.channelId) {
           existing.channelId = channelId;
+          updated = true;
+        }
+
+        if (metadata.parentSessionId && metadata.parentSessionId !== existing.parentSessionId) {
+          existing.parentSessionId = metadata.parentSessionId;
           updated = true;
         }
 

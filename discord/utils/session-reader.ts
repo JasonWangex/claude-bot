@@ -9,7 +9,7 @@
  * 3. 提供结构化的交互事件序列
  */
 
-import { readdirSync, statSync, createReadStream } from 'fs';
+import { readdirSync, statSync, readFileSync, createReadStream } from 'fs';
 import { join } from 'path';
 import { createInterface } from 'readline';
 
@@ -154,7 +154,6 @@ export function streamSessionEvents(
  */
 export function readSessionEventsSync(jsonlPath: string): SessionEvent[] {
   try {
-    const { readFileSync } = require('fs');
     const content = readFileSync(jsonlPath, 'utf8');
     const lines = content.split('\n').filter((line) => line.trim());
     const events: SessionEvent[] = [];

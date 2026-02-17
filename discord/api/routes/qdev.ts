@@ -87,13 +87,13 @@ export const qdev: RouteHandler = async (req, res, params, deps) => {
     // 3b. 保存 task 到数据库（goal_id=null 表示独立任务）
     const repo = getTaskRepo();
     await repo.save({
-      id: forkResult.threadId,       // channel ID 作为 task ID
+      id: forkResult.channelId,       // channel ID 作为 task ID
       description,
       type: '代码',
       depends: [],
       status: 'dispatched',
       branchName: forkResult.branchName,
-      threadId: forkResult.threadId,  // channel_id
+      channelId: forkResult.channelId,
       dispatchedAt: Date.now(),
     }, null);  // goalId = null（独立任务）
 

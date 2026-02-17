@@ -1,28 +1,43 @@
 import { openSync, readSync, closeSync } from 'fs';
+import { basename } from 'path';
 
 export interface SessionMetadata {
-  sessionId: string;              // Claude CLI session UUID
-  cwd?: string;                   // 工作目录
-  model?: string;                 // Claude 模型
-  gitBranch?: string;             // git 分支
-  version?: string;               // Claude CLI 版本
-  timestamp?: string;             // ISO-8601 时间
-  permissionMode?: string;        // 权限模式
+  fileSessionId: string;        // 从文件名提取（主标识）
+  parentSessionId?: string;     // 事件内的 sessionId（可能不同，用于关联）
+  cwd?: string;                 // 工作目录
+  model?: string;               // Claude 模型
+  gitBranch?: string;           // git 分支
+  version?: string;             // Claude CLI 版本
+  timestamp?: string;           // ISO-8601 时间
+  permissionMode?: string;      // 权限模式
 }
+
+const BUFFER_SIZE = 16384; // 16KB — 覆盖更多 assistant 事件以获取 model
 
 /**
  * 从 JSONL 文件提取会话元数据
  *
- * 读取策略：openSync + readSync 读取前 8KB → 按行解析 → 找到含 sessionId 的事件即停止
+ * 读取策略：openSync + readSync 读取前 16KB → 按行解析 → 收集所有可用元数据
  * 不读取整个文件（可能很大），只取头部。
+ *
+ * @param jsonlPath 文件绝对路径
+ * @returns 元数据（agent 文件返回 null）
  */
 export function extractSessionMetadata(jsonlPath: string): SessionMetadata | null {
+  // 从文件名提取 session ID（去掉 .jsonl 后缀）
+  const fileName = basename(jsonlPath, '.jsonl');
+
+  // 跳过 agent 子任务文件（不需要独立入库）
+  if (fileName.startsWith('agent-')) {
+    return null;
+  }
+
   let fd: number | null = null;
   try {
-    // 打开文件并读取前 8KB
+    // 打开文件并读取前 16KB
     fd = openSync(jsonlPath, 'r');
-    const buffer = Buffer.alloc(8192);
-    const bytesRead = readSync(fd, buffer, 0, 8192, 0);
+    const buffer = Buffer.alloc(BUFFER_SIZE);
+    const bytesRead = readSync(fd, buffer, 0, BUFFER_SIZE, 0);
 
     if (bytesRead === 0) {
       return null; // 空文件
@@ -31,17 +46,17 @@ export function extractSessionMetadata(jsonlPath: string): SessionMetadata | nul
     const content = buffer.toString('utf8', 0, bytesRead);
     const lines = content.split('\n').filter(line => line.trim());
 
-    const metadata: SessionMetadata = { sessionId: '' };
+    const metadata: SessionMetadata = { fileSessionId: fileName };
 
-    // 逐行解析 JSON 事件
+    // 逐行解析 JSON 事件，收集尽可能多的元数据
     for (const line of lines) {
       try {
         const event = JSON.parse(line);
 
-        // 从 type: "queue-operation" 提取 sessionId 和 timestamp
-        if (event.type === 'queue-operation' && event.sessionId) {
-          if (!metadata.sessionId) {
-            metadata.sessionId = event.sessionId;
+        // 从 type: "queue-operation" 提取 timestamp 和事件 sessionId
+        if (event.type === 'queue-operation') {
+          if (event.sessionId && !metadata.parentSessionId) {
+            metadata.parentSessionId = event.sessionId;
           }
           if (!metadata.timestamp && event.timestamp) {
             metadata.timestamp = event.timestamp;
@@ -50,28 +65,24 @@ export function extractSessionMetadata(jsonlPath: string): SessionMetadata | nul
 
         // 从 type: "user" 提取完整元数据
         if (event.type === 'user') {
-          if (event.sessionId) metadata.sessionId = event.sessionId;
-          if (event.cwd) metadata.cwd = event.cwd;
-          if (event.version) metadata.version = event.version;
-          if (event.gitBranch) metadata.gitBranch = event.gitBranch;
-          if (event.timestamp) metadata.timestamp = event.timestamp;
-          if (event.permissionMode) metadata.permissionMode = event.permissionMode;
+          if (event.sessionId && !metadata.parentSessionId) {
+            metadata.parentSessionId = event.sessionId;
+          }
+          if (event.cwd && !metadata.cwd) metadata.cwd = event.cwd;
+          if (event.version && !metadata.version) metadata.version = event.version;
+          if (event.gitBranch && !metadata.gitBranch) metadata.gitBranch = event.gitBranch;
+          if (event.timestamp && !metadata.timestamp) metadata.timestamp = event.timestamp;
+          if (event.permissionMode && !metadata.permissionMode) metadata.permissionMode = event.permissionMode;
         }
 
         // 从 type: "system", subtype: "local_command" 提取元数据
         if (event.type === 'system' && event.subtype === 'local_command') {
-          if (event.sessionId && !metadata.sessionId) {
-            metadata.sessionId = event.sessionId;
+          if (event.sessionId && !metadata.parentSessionId) {
+            metadata.parentSessionId = event.sessionId;
           }
-          if (event.cwd && !metadata.cwd) {
-            metadata.cwd = event.cwd;
-          }
-          if (event.version && !metadata.version) {
-            metadata.version = event.version;
-          }
-          if (event.gitBranch && !metadata.gitBranch) {
-            metadata.gitBranch = event.gitBranch;
-          }
+          if (event.cwd && !metadata.cwd) metadata.cwd = event.cwd;
+          if (event.version && !metadata.version) metadata.version = event.version;
+          if (event.gitBranch && !metadata.gitBranch) metadata.gitBranch = event.gitBranch;
         }
 
         // 从 type: "assistant" 提取模型
@@ -81,8 +92,8 @@ export function extractSessionMetadata(jsonlPath: string): SessionMetadata | nul
           }
         }
 
-        // 如果已获取 sessionId 且有基本信息，可以提前返回
-        if (metadata.sessionId && (metadata.cwd || metadata.timestamp)) {
+        // 所有关键字段都已获取时才提前退出
+        if (metadata.cwd && metadata.model && metadata.timestamp) {
           break;
         }
       } catch (e) {
@@ -91,8 +102,7 @@ export function extractSessionMetadata(jsonlPath: string): SessionMetadata | nul
       }
     }
 
-    // 必须至少有 sessionId 才返回有效结果
-    return metadata.sessionId ? metadata : null;
+    return metadata;
 
   } catch (e) {
     // 文件不存在或读取失败
