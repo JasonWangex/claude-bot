@@ -10,6 +10,8 @@ Environment=NODE_ENV=production
 Environment=PATH=/home/jason/.local/bin:/home/jason/projects/claude-bot/web/node_modules/.bin:/usr/local/bin:/usr/bin:/bin
 ExecStart=/usr/bin/node /home/jason/projects/claude-bot/web/node_modules/.bin/../vite/bin/vite.js preview --host
 KillMode=process
+SuccessExitStatus=143
+ExecStopPost=/bin/sh -c 'kill -- -$MAINPID 2>/dev/null || true'
 Restart=on-failure
 RestartSec=5
 StandardOutput=journal
