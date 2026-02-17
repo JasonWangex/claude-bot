@@ -6,6 +6,7 @@
  * 不再从内存 messageHistory 读取，改为从 ~/.claude/projects/xxx/*.jsonl 文件流式读取
  */
 
+import { join } from 'path';
 import type { RouteHandler } from '../types.js';
 import { requireAuth } from '../middleware.js';
 import { ClaudeSessionRepository } from '../../db/repo/claude-session-repo.js';
@@ -55,7 +56,6 @@ export const getSessionConversation: RouteHandler = async (_req, res, params, de
     }
 
     // 查找 .jsonl 文件（使用默认路径 ~/.claude/projects）
-    const { join } = require('path');
     const claudeProjectsDir = join(process.env.HOME || '/tmp', '.claude', 'projects');
     const jsonlPath = findSessionJsonlFile(claudeProjectsDir, session.claudeSessionId);
 
