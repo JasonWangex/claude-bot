@@ -630,6 +630,11 @@ export class StateManager {
         session.prevClaudeSessionId = session.claudeSessionId;
       }
       session.claudeSessionId = targetCliSessionId;
+      // 同步 session.id 与 attach 目标的 claude_sessions UUID，
+      // 保证后续 setSessionClaudeId() 使用正确的 UUID 维护 link 表
+      if (targetUuid) {
+        session.id = targetUuid;
+      }
       this.persistSession(guildId, channelId);
     }
 
