@@ -248,6 +248,7 @@ export class MessageHandler {
     for (let round = 0; round < MAX_INTERACTIVE_ROUNDS; round++) {
 
     this.mq.resetThreadState(channelId);
+    this.stateManager.clearDoneSentAt(channelId);
     logger.info(`[${session.name}] Message:`, text.substring(0, 100));
     this.stateManager.updateSessionMessage(guildId, channelId, text, 'user');
 
@@ -289,6 +290,9 @@ export class MessageHandler {
     const allProgressMsgIds = new Set<string>([progressMsgId]);
     let recreatingProgress = false;
 
+    let progressNeedsReposition = false;
+    let repositionTimer: NodeJS.Timeout | null = null;
+
     const recreateProgress = async () => {
       if (recreatingProgress) return;
       recreatingProgress = true;
@@ -296,9 +300,37 @@ export class MessageHandler {
         mq.delete(channelId, progressMsgId);
         progressMsgId = await mq.send(channelId, lastProgressText, { components: [stopRow as any], silent: true, embedColor: EmbedColors.GRAY });
         allProgressMsgIds.add(progressMsgId);
+        progressNeedsReposition = false;
       } finally {
         recreatingProgress = false;
       }
+    };
+
+    const repositionProgressIfNeeded = () => {
+      if (!progressNeedsReposition || repositionTimer) return;
+      repositionTimer = setTimeout(async () => {
+        repositionTimer = null;
+        if (!progressNeedsReposition) return;
+        try {
+          await recreateProgress();
+        } catch (e) {
+          logger.warn(`[${session.name}] repositionProgress failed:`, e);
+        }
+      }, 1000);
+    };
+
+    const cleanupProgressMessages = async (excludeId?: string) => {
+      if (repositionTimer) { clearTimeout(repositionTimer); repositionTimer = null; }
+      for (const msgId of allProgressMsgIds) {
+        if (msgId !== excludeId) mq.delete(channelId, msgId);
+      }
+      try {
+        await mq.drain(5000);
+      } catch {
+        logger.warn(`[${session.name}] Progress cleanup drain timeout`);
+      }
+      allProgressMsgIds.clear();
+      if (excludeId) allProgressMsgIds.add(excludeId);
     };
 
     const flushTextBuffer = async () => {
@@ -334,7 +366,8 @@ export class MessageHandler {
           textFlushedContent = '';
           logger.debug(`[${session.name}] flushText: sent long msg (${newContent.length} chars)`);
         }
-        await recreateProgress();
+        progressNeedsReposition = true;
+        repositionProgressIfNeeded();
         lastTextFlushTime = Date.now();
       } catch (e) {
         logger.warn(`[${session.name}] flushText failed, restoring ${drained.length} chunks:`, e);
@@ -472,9 +505,18 @@ export class MessageHandler {
 
             const now = Date.now();
             if (newText !== lastProgressText && now - lastEditTime >= 5000) {
+              // 如果 progress 消息需要重新定位，立即触发 recreate（替代 debounce）
+              if (progressNeedsReposition) {
+                if (repositionTimer) { clearTimeout(repositionTimer); repositionTimer = null; }
+                // fire-and-forget recreate，完成后再 edit 新消息
+                recreateProgress().then(() => {
+                  mq.edit(channelId, progressMsgId, newText, { components: [stopRow as any], embedColor: EmbedColors.GRAY });
+                }).catch(e => logger.warn(`[${session.name}] recreateProgress in tool update failed:`, e));
+              } else {
+                mq.edit(channelId, progressMsgId, newText, { components: [stopRow as any], embedColor: EmbedColors.GRAY });
+              }
               lastProgressText = newText;
               lastEditTime = now;
-              mq.edit(channelId, progressMsgId, newText, { components: [stopRow as any], embedColor: EmbedColors.GRAY });
               // 回写进度到 executor，用于中断上下文保存
               this.claudeClient.updateProgressInfo(lockKey, newText, toolUseCount);
             }
@@ -536,9 +578,7 @@ export class MessageHandler {
         await flushTextBuffer();
         await mq.drain(10000);
 
-        for (const msgId of allProgressMsgIds) {
-          mq.delete(channelId, msgId);
-        }
+        await cleanupProgressMessages();
 
         // 补发内容
         let planSent = false;
@@ -601,13 +641,15 @@ export class MessageHandler {
 
       // 正常流程：先等 sendChain 完成（防止竞态），再 flush 残留文字
       logger.debug(`[${session.name}] Completion: sentTextCount=${sentTextCount}, textBuffer=${textBuffer.length}, result=${response.result.length} chars`);
-      await sendChain;
-      await flushTextBuffer();
-      await mq.drain();
-
-      for (const msgId of allProgressMsgIds) {
-        mq.delete(channelId, msgId);
+      try {
+        await sendChain;
+        await flushTextBuffer();
+        await mq.drain();
+      } catch (e) {
+        logger.warn(`[${session.name}] Completion drain error:`, e);
       }
+
+      await cleanupProgressMessages();
 
       if (sentTextCount === 0 && response.result.trim()) {
         logger.debug(`[${session.name}] No text sent during stream, sending result as fallback`);
@@ -665,6 +707,7 @@ export class MessageHandler {
       } else {
         doneMsgId = await mq.send(channelId, `${sessionPrefix}@everyone Done${summary}`, { priority: 'high', embedColor: EmbedColors.GREEN });
       }
+      this.stateManager.setDoneSentAt(channelId);
 
       // 记录最新 Discord 消息 ID 到 link（reply 路由用）
       // 通过 claudeSessionId 查找对应 link 的 UUID（兼容 reply 路由后 session.id 已被替换的情况）
@@ -680,9 +723,7 @@ export class MessageHandler {
       await flushTextBuffer().catch(() => {});
       await mq.drain(3000).catch(() => {});
 
-      for (const msgId of allProgressMsgIds) {
-        if (msgId !== progressMsgId) mq.delete(channelId, msgId);
-      }
+      await cleanupProgressMessages(progressMsgId);
 
       if (fileChanges.length > 0) {
         try {
@@ -722,6 +763,17 @@ export class MessageHandler {
       if (this.errorReporter) {
         const sessionInfo = errorSessionId ? ` session=${errorSessionId.slice(0, 8)}` : '';
         this.errorReporter(guildId, channelId, `${session.name}${sessionInfo}`, error);
+      }
+    } finally {
+      // 安全网：10 秒后清理可能遗留的 progress 消息
+      if (repositionTimer) { clearTimeout(repositionTimer); repositionTimer = null; }
+      const remainingIds = [...allProgressMsgIds].filter(id => id !== progressMsgId);
+      if (remainingIds.length > 0) {
+        setTimeout(() => {
+          for (const msgId of remainingIds) {
+            mq.delete(channelId, msgId);
+          }
+        }, 10000);
       }
     }
 

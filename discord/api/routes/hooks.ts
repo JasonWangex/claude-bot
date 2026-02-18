@@ -296,19 +296,29 @@ async function handleStop(
     }
   }
 
-  // 发送完成消息
+  // 延迟 5 秒发送 Done（作为 handler 的 fallback）
   const parts = ['@everyone Done'];
   if (durationText) parts.push(durationText);
   if (tokenText) parts.push(tokenText);
   if (costText) parts.push(costText);
+  const doneText = parts.join(' | ');
 
-  await deps.mq.send(
-    channelId,
-    parts.join(' | '),
-    { priority: 'high', embedColor: EmbedColors.GREEN }
-  );
+  setTimeout(async () => {
+    try {
+      const doneSentAt = deps.stateManager.getDoneSentAt(channelId);
+      if (doneSentAt && (Date.now() - doneSentAt) < 15000) {
+        logger.debug('[Hook] Done already sent by handler, skipping');
+        return;
+      }
+      await deps.mq.send(channelId, doneText, { priority: 'high', embedColor: EmbedColors.GREEN });
+      deps.stateManager.setDoneSentAt(channelId);
+      logger.info('[Hook] Sent fallback Done message');
+    } catch (err) {
+      logger.error('[Hook] Failed to send fallback Done:', err);
+    }
+  }, 5000);
 
-  // 触发 Goal task 检查（仅 goalId 存在时）
+  // 触发 Goal task 检查（仅 goalId 存在时，不延迟）
   if (deps.orchestrator) {
     await checkGoalTaskCompletion(session, channelId, deps);
   }

@@ -26,6 +26,7 @@ import type { ChannelSessionLinkRepository } from '../db/repo/channel-session-li
 interface SessionTracking {
   waitingMessageId?: string;      // 等待消息 ID（用于删除）
   waitingTimer?: NodeJS.Timeout;  // 等待消息定时器（用于取消）
+  doneSentAt?: number;            // Done 消息发送时间戳（用于 hook 去重）
 }
 
 export class StateManager {
@@ -724,9 +725,34 @@ export class StateManager {
 
   clearSessionTracking(channelId: string): void {
     const tracking = this.sessionTracking.get(channelId);
-    if (tracking?.waitingTimer !== undefined) {
+    if (!tracking) return;
+    if (tracking.waitingTimer !== undefined) {
       clearTimeout(tracking.waitingTimer);
     }
-    this.sessionTracking.delete(channelId);
+    // 保留 doneSentAt（hook setTimeout 可能仍在等待检查）
+    if (tracking.doneSentAt) {
+      this.sessionTracking.set(channelId, { doneSentAt: tracking.doneSentAt });
+    } else {
+      this.sessionTracking.delete(channelId);
+    }
+  }
+
+  // ========== Done 消息去重（handler vs hook）==========
+
+  setDoneSentAt(channelId: string): void {
+    const tracking = this.sessionTracking.get(channelId) || {};
+    tracking.doneSentAt = Date.now();
+    this.sessionTracking.set(channelId, tracking);
+  }
+
+  getDoneSentAt(channelId: string): number | undefined {
+    return this.sessionTracking.get(channelId)?.doneSentAt;
+  }
+
+  clearDoneSentAt(channelId: string): void {
+    const tracking = this.sessionTracking.get(channelId);
+    if (tracking) {
+      tracking.doneSentAt = undefined;
+    }
   }
 }
