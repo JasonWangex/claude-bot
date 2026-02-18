@@ -55,7 +55,7 @@ export async function createGoalBranch(
 ): Promise<string> {
   const stdout = await execGit(['rev-parse', '--show-toplevel'], baseCwd, 'createGoalBranch: toplevel');
   const repoName = stdout.trim().split('/').pop() || 'repo';
-  const worktreeDir = resolve(worktreesDir, `${repoName}_${goalBranch.replace(/\//g, '_')}`);
+  const worktreeDir = resolve(worktreesDir, `${repoName}-${goalBranch.replace(/\//g, '-')}`);
 
   await mkdir(worktreesDir, { recursive: true });
 
@@ -87,7 +87,7 @@ export async function createSubtaskBranch(
   const stdout = await execGit(['rev-parse', '--show-toplevel'], goalWorktreeDir, 'createSubtaskBranch: toplevel');
   const repoRoot = stdout.trim();
   const repoName = repoRoot.split('/').pop() || 'repo';
-  const worktreeDir = resolve(worktreesDir, `${repoName}_${subtaskBranch.replace(/\//g, '_')}`);
+  const worktreeDir = resolve(worktreesDir, `${repoName}-${subtaskBranch.replace(/\//g, '-')}`);
 
   await mkdir(worktreesDir, { recursive: true });
   // 从 goal 分支 fork 出子任务分支
