@@ -1,7 +1,6 @@
 import type Database from 'better-sqlite3';
 import { openSync, readSync, closeSync, readdirSync, statSync } from 'fs';
 import { join, basename, dirname } from 'path';
-import { randomUUID } from 'crypto';
 import { extractSessionMetadata } from './jsonl-metadata.js';
 import { ClaudeSessionRepository } from '../db/repo/claude-session-repo.js';
 import { SyncCursorRepository } from '../db/repo/sync-cursor-repo.js';
@@ -100,21 +99,20 @@ export class SessionSyncService {
 
   private async _doSyncSession(claudeSessionId: string, channelId?: string, model?: string): Promise<void> {
     try {
-      // 查询是否已有记录
-      const existing = await this.claudeSessionRepo.findByClaudeSessionId(claudeSessionId);
+      // 查询是否已有记录（PK = claudeSessionId）
+      const existing = await this.claudeSessionRepo.get(claudeSessionId);
 
       if (!existing) {
         // 创建新记录
         const ctx = resolveSessionContext(this.db, channelId);
         const newSession: ClaudeSession = {
-          id: randomUUID(),
           claudeSessionId,
           channelId,
           model,
           planMode: false,
           status: 'active',
           createdAt: Date.now(),
-          purpose: channelId ? 'channel' : 'temp',  // 有 channel 为 channel，否则为临时
+          purpose: channelId ? 'channel' : 'temp',
           taskId: ctx.taskId ?? undefined,
           goalId: ctx.goalId ?? undefined,
           cwd: ctx.cwd ?? undefined,
@@ -161,16 +159,11 @@ export class SessionSyncService {
   /** 关闭会话（进程被中止/杀死时调用） */
   async closeSession(claudeSessionId: string): Promise<void> {
     try {
-      const existing = await this.claudeSessionRepo.findByClaudeSessionId(claudeSessionId);
-      if (!existing) {
-        logger.warn(`Cannot close session ${claudeSessionId}: not found`);
-        return;
-      }
-
-      // 调用 repository 的 close 方法
-      const closed = await this.claudeSessionRepo.close(existing.id);
+      const closed = await this.claudeSessionRepo.close(claudeSessionId);
       if (closed) {
         logger.info(`Claude session closed: ${claudeSessionId.slice(0, 8)}...`);
+      } else {
+        logger.warn(`Cannot close session ${claudeSessionId}: not found`);
       }
     } catch (e: any) {
       logger.error(`Failed to close session ${claudeSessionId}: ${e.message}`);
@@ -292,7 +285,6 @@ export class SessionSyncService {
         // 创建新记录
         const ctx = resolveSessionContext(this.db, channelId);
         const newSession: ClaudeSession = {
-          id: randomUUID(),
           claudeSessionId,
           channelId,
           model: metadata.model,
@@ -310,15 +302,14 @@ export class SessionSyncService {
         this.claudeSessionRepo.save(newSession);
 
         // 异步生成 title（不阻塞同步流程）
-        void this.generateAndSaveTitle(newSession.id, jsonlPath);
+        void this.generateAndSaveTitle(claudeSessionId, jsonlPath);
 
         return 'created';
       } else {
         // 检查是否需要更新
         let updated = false;
         const existing: ClaudeSession = {
-          id: existingRow.id,
-          claudeSessionId: existingRow.claude_session_id ?? undefined,
+          claudeSessionId: existingRow.claude_session_id,
           prevClaudeSessionId: existingRow.prev_claude_session_id ?? undefined,
           channelId: existingRow.channel_id ?? undefined,
           model: existingRow.model ?? undefined,
@@ -494,16 +485,15 @@ export class SessionSyncService {
   }
 
   /** 生成 title 并保存到数据库 */
-  private async generateAndSaveTitle(sessionId: string, jsonlPath: string): Promise<void> {
+  private async generateAndSaveTitle(claudeSessionId: string, jsonlPath: string): Promise<void> {
     try {
       const title = await this.generateSessionTitle(jsonlPath);
       if (!title) return;
 
-      // 直接 SQL 更新 title（避免覆盖其他字段）
-      this.db.prepare('UPDATE claude_sessions SET title = ? WHERE id = ?').run(title, sessionId);
-      logger.debug(`Session title generated: "${title}" (${sessionId.slice(0, 8)}...)`);
+      this.db.prepare('UPDATE claude_sessions SET title = ? WHERE claude_session_id = ?').run(title, claudeSessionId);
+      logger.debug(`Session title generated: "${title}" (${claudeSessionId.slice(0, 8)}...)`);
     } catch (e: any) {
-      logger.warn(`Failed to generate title for ${sessionId}: ${e.message}`);
+      logger.warn(`Failed to generate title for ${claudeSessionId}: ${e.message}`);
     }
   }
 
@@ -516,8 +506,8 @@ export class SessionSyncService {
 
     try {
       const rows = this.db.prepare(
-        'SELECT id, claude_session_id FROM claude_sessions WHERE title IS NULL AND claude_session_id IS NOT NULL',
-      ).all() as Array<{ id: string; claude_session_id: string }>;
+        'SELECT claude_session_id FROM claude_sessions WHERE title IS NULL',
+      ).all() as Array<{ claude_session_id: string }>;
 
       if (rows.length === 0) return;
 
@@ -531,7 +521,7 @@ export class SessionSyncService {
 
         const title = await this.generateSessionTitle(jsonlPath);
         if (title) {
-          this.db.prepare('UPDATE claude_sessions SET title = ? WHERE id = ?').run(title, row.id);
+          this.db.prepare('UPDATE claude_sessions SET title = ? WHERE claude_session_id = ?').run(title, row.claude_session_id);
           filled++;
         }
 

@@ -3,7 +3,7 @@
  * 每个 Text Channel 对应一个独立 Session，不同 channel 并行无干扰
  * ID 全部使用 string (Discord snowflake)
  *
- * 持久化后端：SQLite（通过 SessionRepository + GuildRepository）
+ * 持久化后端：SQLite（通过 ChannelRepository + GuildRepository + ClaudeSessionRepository）
  * 内存 Map 作为读缓存，写操作同步写入 SQLite（better-sqlite3 是同步的）
  *
  * Link 体系：
@@ -13,21 +13,14 @@
  *   - attach 操作 = 转移 link（旧 session unlink，新 session link）
  */
 
-import { randomUUID } from 'crypto';
-import { readFileSync, renameSync } from 'fs';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
 import { Session, GuildState, ArchivedSession, Channel, ClaudeSession } from '../types/index.js';
 import { logger } from '../utils/logger.js';
-import type { SessionRepository } from '../db/repo/session-repo.js';
 import type { GuildRepository } from '../db/repo/guild-repo.js';
 import type { ChannelRepository } from '../db/repo/channel-repo.js';
 import type { ClaudeSessionRepository } from '../db/repo/claude-session-repo.js';
 import type Database from 'better-sqlite3';
 import { resolveSessionContext } from '../sync/session-context.js';
 import type { ChannelSessionLinkRepository } from '../db/repo/channel-session-link-repo.js';
-
-const MAX_HISTORY = 50;
 
 // Session 状态追踪（用于 hooks 事件处理）
 interface SessionTracking {
@@ -53,7 +46,6 @@ export class StateManager {
 
   constructor(
     defaultWorkDir: string,
-    private sessionRepo?: SessionRepository,
     private guildRepo?: GuildRepository,
     private channelRepo?: ChannelRepository,
     private claudeSessionRepo?: ClaudeSessionRepository,
@@ -70,59 +62,40 @@ export class StateManager {
   // ========== 加载 ==========
 
   async load(): Promise<void> {
-    if (!this.sessionRepo || !this.guildRepo) {
+    if (!this.channelRepo || !this.guildRepo) {
       logger.warn('StateManager: No repositories provided, running without persistence');
       return;
     }
 
-    // 优先从新表（claude_sessions + channel_session_links）重建内存 Map
-    if (this.claudeSessionRepo && this.linkRepo && this.channelRepo) {
-      const channels = this.channelRepo.loadAll();
-      const rebuilt = this._rebuildFromNewTables(channels);
-      if (rebuilt > 0) {
-        const guilds = this.guildRepo.loadAll();
-        for (const g of guilds) {
-          this.guilds.set(g.guildId, g);
-        }
-        // 归档 sessions 仍从旧表加载（新表暂无归档专用查询）
-        const archived = this.sessionRepo.loadAllArchived();
-        for (const a of archived) {
-          this.archivedSessions.set(this.channelKey(a.guildId, a.channelId), a);
-        }
-        logger.info(`Loaded ${this.sessions.size} session(s) from new tables, ${this.guilds.size} guild(s), ${this.archivedSessions.size} archived`);
-        return;
-      }
+    const channels = this.channelRepo.loadAll();
+    this._rebuildFromNewTables(channels.filter(c => c.status === 'active'));
+
+    // 从 channels (status='archived') 重建 archivedSessions
+    for (const ch of channels.filter(c => c.status === 'archived')) {
+      const archived: ArchivedSession = {
+        name: ch.name,
+        channelId: ch.id,
+        guildId: ch.guildId,
+        cwd: ch.cwd,
+        createdAt: ch.createdAt,
+        lastMessage: ch.lastMessage,
+        lastMessageAt: ch.lastMessageAt,
+        messageCount: ch.messageCount,
+        parentChannelId: ch.parentChannelId,
+        worktreeBranch: ch.worktreeBranch,
+        archivedAt: ch.archivedAt ?? Date.now(),
+        archivedBy: ch.archivedBy,
+        archiveReason: ch.archiveReason,
+      };
+      this.archivedSessions.set(this.channelKey(ch.guildId, ch.id), archived);
     }
 
-    // 回退：从旧表加载（新表为空时）
-    const sessions = this.sessionRepo.loadAllSessions();
     const guilds = this.guildRepo.loadAll();
-
-    if (sessions.length === 0 && guilds.length === 0) {
-      await this.migrateFromJson();
-      const migratedSessions = this.sessionRepo.loadAllSessions();
-      const migratedGuilds = this.guildRepo.loadAll();
-      for (const s of migratedSessions) {
-        this.sessions.set(this.channelKey(s.guildId, s.channelId), s);
-      }
-      for (const g of migratedGuilds) {
-        this.guilds.set(g.guildId, g);
-      }
-    } else {
-      for (const s of sessions) {
-        this.sessions.set(this.channelKey(s.guildId, s.channelId), s);
-      }
-      for (const g of guilds) {
-        this.guilds.set(g.guildId, g);
-      }
+    for (const g of guilds) {
+      this.guilds.set(g.guildId, g);
     }
 
-    const archived = this.sessionRepo.loadAllArchived();
-    for (const a of archived) {
-      this.archivedSessions.set(this.channelKey(a.guildId, a.channelId), a);
-    }
-
-    logger.info(`Loaded ${this.sessions.size} session(s), ${this.guilds.size} guild(s), ${this.archivedSessions.size} archived from SQLite (deprecated tables)`);
+    logger.info(`Loaded ${this.sessions.size} session(s), ${this.guilds.size} guild(s), ${this.archivedSessions.size} archived`);
   }
 
   /**
@@ -131,22 +104,18 @@ export class StateManager {
    * 返回成功重建的 session 数量
    */
   private _rebuildFromNewTables(channels: Channel[]): number {
-    const activeChannels = channels.filter(c => c.status === 'active');
-    if (activeChannels.length === 0) return 0;
+    if (channels.length === 0) return 0;
 
     let count = 0;
-    for (const ch of activeChannels) {
+    for (const ch of channels) {
       // 查该 channel 最新活跃的 link → claude_session
-      const activeLinks = this.linkRepo!.getActiveLinks(ch.id);
+      const activeLinks = this.linkRepo?.getActiveLinks(ch.id) ?? [];
       const latestLink = activeLinks[activeLinks.length - 1]; // linked_at ASC，取最新
 
       // 无活跃 link 的 channel 仍需重建 Session（用于接收新消息），但不关联 claudeSessionId
       const claudeSessionId = latestLink?.claudeSessionId;  // CLI session_id
-      const claudeUuid = latestLink?.claudeSessionUuid;
 
       const session: Session = {
-        // 有 link 时用 link 的 UUID，否则使用稳定的 channelId 派生标识（不生成随机 UUID 以防孤儿数据）
-        id: claudeUuid ?? ch.id,
         name: ch.name,
         channelId: ch.id,
         guildId: ch.guildId,
@@ -167,79 +136,6 @@ export class StateManager {
     return count;
   }
 
-  /**
-   * 从旧版 discord-states.json 迁移数据到 SQLite（一次性操作）
-   */
-  private async migrateFromJson(): Promise<void> {
-    const __dirname = dirname(fileURLToPath(import.meta.url));
-    const jsonPath = join(__dirname, '../../data/discord-states.json');
-
-    let raw: string;
-    try {
-      raw = readFileSync(jsonPath, 'utf-8');
-    } catch (err: any) {
-      if (err.code === 'ENOENT') {
-        logger.info('No JSON state file found, starting fresh with SQLite');
-        return;
-      }
-      logger.error('Failed to read JSON state file for migration:', err.message);
-      return;
-    }
-
-    let data: {
-      sessions?: Record<string, Session>;
-      guilds?: Record<string, GuildState>;
-      archivedSessions?: Record<string, ArchivedSession>;
-    };
-    try {
-      data = JSON.parse(raw);
-    } catch (err: any) {
-      logger.error('Failed to parse JSON state file:', err.message);
-      return;
-    }
-
-    let sessionCount = 0;
-    let guildCount = 0;
-    let archivedCount = 0;
-
-    if (data.guilds && this.guildRepo) {
-      for (const guild of Object.values(data.guilds)) {
-        if (!guild.lastActivity) guild.lastActivity = Date.now();
-        await this.guildRepo.save(guild);
-        guildCount++;
-      }
-    }
-
-    if (data.sessions && this.sessionRepo) {
-      for (const session of Object.values(data.sessions)) {
-        await this.sessionRepo.save(session);
-        sessionCount++;
-      }
-    }
-
-    if (data.archivedSessions && this.sessionRepo) {
-      for (const archived of Object.values(data.archivedSessions)) {
-        await this.sessionRepo.save(archived as Session);
-        await this.sessionRepo.archive(
-          archived.guildId,
-          archived.channelId,
-          archived.archivedBy,
-          archived.archiveReason,
-        );
-        archivedCount++;
-      }
-    }
-
-    logger.info(`Migrated from JSON: ${sessionCount} session(s), ${guildCount} guild(s), ${archivedCount} archived`);
-
-    try {
-      renameSync(jsonPath, jsonPath + '.bak');
-      logger.info('Renamed discord-states.json → discord-states.json.bak');
-    } catch (err: any) {
-      logger.warn('Failed to rename JSON file:', err.message);
-    }
-  }
-
   async flush(): Promise<void> {
     // SQLite writes are immediate, nothing to flush
   }
@@ -250,12 +146,6 @@ export class StateManager {
     const session = this.sessions.get(this.channelKey(guildId, channelId));
     if (!session) return;
 
-    // 写入旧表（兼容，待旧表完全废弃后删除）
-    if (this.sessionRepo) {
-      this.sessionRepo.save(session);
-    }
-
-    // 双写到新表
     if (this.channelRepo && this.claudeSessionRepo) {
       const channel: Channel = {
         id: session.channelId,
@@ -276,7 +166,6 @@ export class StateManager {
       if (session.claudeSessionId) {
         const ctx = this.db ? resolveSessionContext(this.db, session.channelId) : null;
         const claudeSession: ClaudeSession = {
-          id: session.id,
           claudeSessionId: session.claudeSessionId,
           prevClaudeSessionId: session.prevClaudeSessionId,
           channelId: session.channelId,
@@ -310,7 +199,6 @@ export class StateManager {
     if (!this.sessions.has(key)) {
       const guildModel = this.getGuildDefaultModel(guildId);
       const session: Session = {
-        id: randomUUID(),
         name: defaults.name,
         channelId,
         guildId,
@@ -355,17 +243,14 @@ export class StateManager {
    * 优先查 link repo（新表），回退到内存 Map
    */
   findSessionHolder(guildId: string, claudeSessionId: string): { channelId: string; name: string } | null {
-    // 通过 link repo 查（需要先找到对应的 claude_sessions.id UUID）
-    if (this.claudeSessionRepo && this.linkRepo) {
-      const cs = this.claudeSessionRepo.findByClaudeSessionId(claudeSessionId);
-      if (cs) {
-        const link = this.linkRepo.getActiveBySession(cs.id);
-        if (link) {
-          const session = this.sessions.get(this.channelKey(guildId, link.channelId));
-          if (session) return { channelId: link.channelId, name: session.name };
-          // session 不在内存，构造最小信息
-          return { channelId: link.channelId, name: link.channelId };
-        }
+    // 通过 link repo 直接查 claudeSessionId
+    if (this.linkRepo) {
+      const link = this.linkRepo.getActiveBySession(claudeSessionId);
+      if (link) {
+        const session = this.sessions.get(this.channelKey(guildId, link.channelId));
+        if (session) return { channelId: link.channelId, name: session.name };
+        // session 不在内存，构造最小信息
+        return { channelId: link.channelId, name: link.channelId };
       }
     }
 
@@ -391,47 +276,42 @@ export class StateManager {
       session.lastMessageAt = Date.now();
     }
 
-    if (this.sessionRepo) {
-      this.persistSession(guildId, channelId);
-    }
+    this.persistSession(guildId, channelId);
   }
 
   /**
    * 设置 claudeSessionId（CLI session_id），同时维护 link
-   * @param claudeUuid claude_sessions.id（UUID），用于 link 操作；传 undefined 时不操作 link
    */
-  setSessionClaudeId(guildId: string, channelId: string, claudeSessionId: string, claudeUuid?: string): void {
+  setSessionClaudeId(guildId: string, channelId: string, claudeSessionId: string): void {
     const session = this.getSession(guildId, channelId);
     if (!session) return;
     if (session.claudeSessionId && session.claudeSessionId !== claudeSessionId) {
       session.prevClaudeSessionId = session.claudeSessionId;
     }
     session.claudeSessionId = claudeSessionId;
-    // 同步 session.id 与 link UUID（隐性约定：session.id === link.claudeSessionUuid）
-    // 必须在 persistSession() 之前赋值，否则 claude_sessions 表写入的 id 与 link 不一致
-    if (claudeUuid) {
-      session.id = claudeUuid;
-    }
 
-    // persistSession（写 claude_sessions）与 createLink（写 channel_session_links）必须原子完成：
-    // 若 save() 成功但 createLink 失败，link 表中不会有该 session 的记录，导致 reply 路由永远失败。
-    if (claudeUuid && this.linkRepo && this.db) {
-      this.db.transaction(() => {
+    // persistSession（写 claude_sessions）与 createLink（写 channel_session_links）必须原子完成
+    if (this.linkRepo && this.db) {
+      try {
+        this.db.transaction(() => {
+          this.persistSession(guildId, channelId);
+          const existingLinks = this.linkRepo!.getActiveLinks(channelId);
+          const alreadyLinked = existingLinks.some(l => l.claudeSessionId === claudeSessionId);
+          if (!alreadyLinked) {
+            this.linkRepo!.createLink(channelId, claudeSessionId);
+          }
+        })();
+      } catch (err: any) {
+        logger.error(`[setSessionClaudeId] transaction failed: ${err.message} (cli=${claudeSessionId.slice(0, 8)})`);
         this.persistSession(guildId, channelId);
-        const existingLinks = this.linkRepo!.getActiveLinks(channelId);
-        const alreadyLinked = existingLinks.some(l => l.claudeSessionUuid === claudeUuid);
-        if (!alreadyLinked) {
-          this.linkRepo!.createLink(channelId, claudeUuid);
-        }
-      })();
+      }
     } else {
-      // 降级：无 db 引用（测试环境）或无 linkRepo，各自独立写入
       this.persistSession(guildId, channelId);
-      if (claudeUuid && this.linkRepo) {
+      if (this.linkRepo) {
         const existingLinks = this.linkRepo.getActiveLinks(channelId);
-        const alreadyLinked = existingLinks.some(l => l.claudeSessionUuid === claudeUuid);
+        const alreadyLinked = existingLinks.some(l => l.claudeSessionId === claudeSessionId);
         if (!alreadyLinked) {
-          this.linkRepo.createLink(channelId, claudeUuid);
+          this.linkRepo.createLink(channelId, claudeSessionId);
         }
       }
     }
@@ -449,9 +329,8 @@ export class StateManager {
     if (!session) return;
 
     // unlink 当前活跃 link
-    // session.id 经 setSessionClaudeId() 已与 link.claudeSessionUuid 同步，直接使用
     if (this.linkRepo && session.claudeSessionId) {
-      this.linkRepo.unlinkSession(channelId, session.id);
+      this.linkRepo.unlinkSession(channelId, session.claudeSessionId);
     }
 
     session.claudeSessionId = undefined;
@@ -532,7 +411,7 @@ export class StateManager {
   }
 
   /**
-   * 通过 Discord 消息 ID 反查 claudeSessionUuid（reply 路由）
+   * 通过 Discord 消息 ID 反查 link（reply 路由）
    */
   findLinkByDiscordMessageId(discordMessageId: string) {
     return this.linkRepo?.getByDiscordMessageId(discordMessageId) ?? null;
@@ -541,30 +420,37 @@ export class StateManager {
   /**
    * 更新 link 的最新 Discord 消息 ID（消息发出后调用）
    */
-  updateLinkLastMessageId(channelId: string, claudeSessionUuid: string, discordMessageId: string): void {
-    this.linkRepo?.updateLastMessageId(channelId, claudeSessionUuid, discordMessageId);
+  updateLinkLastMessageId(channelId: string, claudeSessionId: string, discordMessageId: string): void {
+    this.linkRepo?.updateLastMessageId(channelId, claudeSessionId, discordMessageId);
   }
 
   /**
    * 创建 link（前台 session 创建时）
    */
-  createLink(channelId: string, claudeSessionUuid: string): void {
-    this.linkRepo?.createLink(channelId, claudeSessionUuid);
+  createLink(channelId: string, claudeSessionId: string): void {
+    this.linkRepo?.createLink(channelId, claudeSessionId);
+  }
+
+  /**
+   * 软删除指定 link（/sessions cleanup 使用）
+   */
+  unlinkSession(channelId: string, claudeSessionId: string): void {
+    this.linkRepo?.unlinkSession(channelId, claudeSessionId);
   }
 
   /**
    * 将 channel 下所有活跃 link 全部 unlink，然后创建新 link（attach 操作）
    */
-  transferLink(channelId: string, newClaudeSessionUuid: string): void {
+  transferLink(channelId: string, newClaudeSessionId: string): void {
     if (!this.linkRepo) return;
     if (this.db) {
       this.db.transaction(() => {
         this.linkRepo!.unlinkAllForChannel(channelId);
-        this.linkRepo!.createLink(channelId, newClaudeSessionUuid);
+        this.linkRepo!.createLink(channelId, newClaudeSessionId);
       })();
     } else {
       this.linkRepo.unlinkAllForChannel(channelId);
-      this.linkRepo.createLink(channelId, newClaudeSessionUuid);
+      this.linkRepo.createLink(channelId, newClaudeSessionId);
     }
   }
 
@@ -578,43 +464,47 @@ export class StateManager {
     channelId: string,
     targetCliSessionId: string,
   ): { success: boolean; prevHolder?: { channelId: string; name: string } } {
-    // 找到对应的 claude_sessions UUID
-    const cs = this.claudeSessionRepo?.findByClaudeSessionId(targetCliSessionId);
-    const targetUuid = cs?.id;
-
-    // 找到旧持有者（内存 Map 或 link）
+    // 1. 找到旧持有者（在修改内存前查找）
     const prevHolder = this.findSessionHolder(guildId, targetCliSessionId) ?? undefined;
 
-    // 将所有 DB 写操作包裹在事务中（better-sqlite3 同步事务）
-    if (this.db) {
-      const doDbWrites = this.db.transaction(() => {
-        if (prevHolder && prevHolder.channelId !== channelId) {
-          if (targetUuid && this.linkRepo) {
-            this.linkRepo.unlinkSession(prevHolder.channelId, targetUuid);
+    // 2. 更新内存 Session
+    const session = this.getSession(guildId, channelId);
+    if (!session) return { success: false };
+
+    if (session.claudeSessionId && session.claudeSessionId !== targetCliSessionId) {
+      session.prevClaudeSessionId = session.claudeSessionId;
+    }
+    session.claudeSessionId = targetCliSessionId;
+
+    // 3. 事务：unlink + persistSession + createLink
+    //    persistSession 必须在 createLink 之前，确保 claude_sessions 记录存在（FK 约束）
+    if (this.db && this.linkRepo) {
+      try {
+        this.db.transaction(() => {
+          // 3a. 从旧持有者 unlink
+          if (prevHolder && prevHolder.channelId !== channelId) {
+            this.linkRepo!.unlinkSession(prevHolder.channelId, targetCliSessionId);
           }
-        }
-        if (targetUuid && this.linkRepo) {
-          const alreadyLinked = this.linkRepo.getActiveLinks(channelId).some(l => l.claudeSessionUuid === targetUuid);
-          if (!alreadyLinked) {
-            this.linkRepo.createLink(channelId, targetUuid);
-          }
-        }
-      });
-      doDbWrites();
+          // 3b. 清理当前 channel 的所有旧 link
+          this.linkRepo!.unlinkAllForChannel(channelId);
+          // 3c. 写入 claude_sessions 记录（如果不存在则创建）
+          this.persistSession(guildId, channelId);
+          // 3d. 创建 link（此时 claude_sessions 记录已存在，FK 满足）
+          this.linkRepo!.createLink(channelId, targetCliSessionId);
+        })();
+      } catch (err: any) {
+        logger.error(`[attachSession] transaction failed: ${err.message}`);
+        this.persistSession(guildId, channelId);
+      }
+    } else if (this.linkRepo) {
+      this.persistSession(guildId, channelId);
+      this.linkRepo.unlinkAllForChannel(channelId);
+      this.linkRepo.createLink(channelId, targetCliSessionId);
     } else {
-      // 无 db（测试环境），降级执行
-      if (prevHolder && prevHolder.channelId !== channelId && targetUuid && this.linkRepo) {
-        this.linkRepo.unlinkSession(prevHolder.channelId, targetUuid);
-      }
-      if (targetUuid && this.linkRepo) {
-        const alreadyLinked = this.linkRepo.getActiveLinks(channelId).some(l => l.claudeSessionUuid === targetUuid);
-        if (!alreadyLinked) {
-          this.linkRepo.createLink(channelId, targetUuid);
-        }
-      }
+      this.persistSession(guildId, channelId);
     }
 
-    // 更新内存 Map（事务提交后再更新，保证 DB 写成功）
+    // 4. 清理旧持有者的内存状态
     if (prevHolder && prevHolder.channelId !== channelId) {
       const prevSession = this.getSession(guildId, prevHolder.channelId);
       if (prevSession && prevSession.claudeSessionId === targetCliSessionId) {
@@ -622,20 +512,6 @@ export class StateManager {
         prevSession.prevClaudeSessionId = undefined;
         this.persistSession(guildId, prevHolder.channelId);
       }
-    }
-
-    const session = this.getSession(guildId, channelId);
-    if (session) {
-      if (session.claudeSessionId && session.claudeSessionId !== targetCliSessionId) {
-        session.prevClaudeSessionId = session.claudeSessionId;
-      }
-      session.claudeSessionId = targetCliSessionId;
-      // 同步 session.id 与 attach 目标的 claude_sessions UUID，
-      // 保证后续 setSessionClaudeId() 使用正确的 UUID 维护 link 表
-      if (targetUuid) {
-        session.id = targetUuid;
-      }
-      this.persistSession(guildId, channelId);
     }
 
     return { success: true, prevHolder };
@@ -651,8 +527,8 @@ export class StateManager {
       const lastActive = session.lastMessageAt || session.createdAt;
       if (now - lastActive > maxAge) {
         this.sessions.delete(key);
-        if (this.sessionRepo) {
-          this.sessionRepo.delete(session.guildId, session.channelId);
+        if (this.channelRepo) {
+          this.channelRepo.archive(session.channelId);
         }
       }
     }
@@ -683,10 +559,6 @@ export class StateManager {
 
     logger.info(`Archived session: ${session.name} (channel=${channelId}, guild=${guildId})`);
 
-    if (this.sessionRepo) {
-      this.sessionRepo.archive(guildId, channelId, userId, reason);
-    }
-
     if (this.channelRepo) {
       this.channelRepo.archive(channelId, userId, reason);
     }
@@ -698,7 +570,7 @@ export class StateManager {
     if (this.claudeSessionRepo) {
       const activeSession = this.claudeSessionRepo.getActiveByChannel(channelId);
       if (activeSession) {
-        this.claudeSessionRepo.close(activeSession.id);
+        this.claudeSessionRepo.close(activeSession.claudeSessionId);
       }
     }
 
@@ -712,8 +584,8 @@ export class StateManager {
     if (existed) {
       this.sessions.delete(key);
       this.clearChildParentRefs(guildId, channelId);
-      if (this.sessionRepo) {
-        this.sessionRepo.delete(guildId, channelId);
+      if (this.channelRepo) {
+        this.channelRepo.delete(channelId);
       }
       if (this.linkRepo) {
         this.linkRepo.unlinkAllForChannel(channelId);
@@ -729,8 +601,8 @@ export class StateManager {
         session.parentChannelId = undefined;
       }
     }
-    if (this.sessionRepo) {
-      this.sessionRepo.clearParentRefs(guildId, parentChannelId);
+    if (this.channelRepo) {
+      this.channelRepo.clearParentRefs(guildId, parentChannelId);
     }
   }
 
@@ -749,8 +621,8 @@ export class StateManager {
     this.sessions.set(key, session as Session);
     this.archivedSessions.delete(key);
 
-    if (this.sessionRepo) {
-      this.sessionRepo.restore(guildId, channelId);
+    if (this.channelRepo) {
+      this.channelRepo.restore(channelId);
     }
     return true;
   }

@@ -64,6 +64,7 @@ export class ChannelRepository implements IChannelRepo {
     restore: Database.Statement;
     count: Database.Statement;
     countByStatus: Database.Statement;
+    clearParentRefs: Database.Statement;
   };
 
   constructor(private db: Database.Database) {
@@ -137,6 +138,10 @@ export class ChannelRepository implements IChannelRepo {
       countByStatus: this.db.prepare(
         `SELECT COUNT(*) as cnt FROM channels WHERE status = ?`,
       ),
+
+      clearParentRefs: this.db.prepare(
+        `UPDATE channels SET parent_channel_id = NULL WHERE guild_id = ? AND parent_channel_id = ?`,
+      ),
     };
   }
 
@@ -201,5 +206,10 @@ export class ChannelRepository implements IChannelRepo {
   loadAll(): Channel[] {
     const rows = this.stmts.getAll.all() as ChannelRow[];
     return rows.map((row) => rowToChannel(row));
+  }
+
+  /** 清除指定 parent_channel_id 的引用（父 channel 归档/删除时调用） */
+  clearParentRefs(guildId: string, parentChannelId: string): void {
+    this.stmts.clearParentRefs.run(guildId, parentChannelId);
   }
 }

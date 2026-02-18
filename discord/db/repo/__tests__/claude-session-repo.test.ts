@@ -7,7 +7,7 @@ import type { ClaudeSession } from '../../../types/index.js';
 
 function makeClaudeSession(overrides: Partial<ClaudeSession> = {}): ClaudeSession {
   return {
-    id: 'session-001',
+    claudeSessionId: 'session-001',
     planMode: false,
     status: 'active',
     createdAt: Date.now(),
@@ -59,7 +59,7 @@ describe('ClaudeSessionRepository', () => {
 
       const result = await repo.get('session-001');
       expect(result).not.toBeNull();
-      expect(result!.id).toBe('session-001');
+      expect(result!.claudeSessionId).toBe('session-001');
       expect(result!.planMode).toBe(false);
       expect(result!.status).toBe('active');
     });
@@ -71,7 +71,6 @@ describe('ClaudeSessionRepository', () => {
 
     it('should preserve optional fields', async () => {
       const session = makeClaudeSession({
-        claudeSessionId: 'claude-123',
         prevClaudeSessionId: 'claude-122',
         channelId: 'channel-1',
         model: 'opus',
@@ -79,13 +78,12 @@ describe('ClaudeSessionRepository', () => {
       await repo.save(session);
 
       const result = await repo.get('session-001');
-      expect(result!.claudeSessionId).toBe('claude-123');
       expect(result!.prevClaudeSessionId).toBe('claude-122');
       expect(result!.channelId).toBe('channel-1');
       expect(result!.model).toBe('opus');
     });
 
-    it('should upsert on conflict (same id)', async () => {
+    it('should upsert on conflict (same claudeSessionId)', async () => {
       await repo.save(makeClaudeSession({ model: 'haiku' }));
       await repo.save(makeClaudeSession({ model: 'opus', planMode: true }));
 
@@ -99,14 +97,14 @@ describe('ClaudeSessionRepository', () => {
 
   describe('getByChannel', () => {
     it('should retrieve all sessions for a channel', async () => {
-      await repo.save(makeClaudeSession({ id: 'session-1', channelId: 'channel-1' }));
-      await repo.save(makeClaudeSession({ id: 'session-2', channelId: 'channel-1' }));
-      await repo.save(makeClaudeSession({ id: 'session-3', channelId: 'channel-2' }));
+      await repo.save(makeClaudeSession({ claudeSessionId: 'session-1', channelId: 'channel-1' }));
+      await repo.save(makeClaudeSession({ claudeSessionId: 'session-2', channelId: 'channel-1' }));
+      await repo.save(makeClaudeSession({ claudeSessionId: 'session-3', channelId: 'channel-2' }));
 
       const results = await repo.getByChannel('channel-1');
       expect(results).toHaveLength(2);
-      expect(results.map((s) => s.id)).toContain('session-1');
-      expect(results.map((s) => s.id)).toContain('session-2');
+      expect(results.map((s) => s.claudeSessionId)).toContain('session-1');
+      expect(results.map((s) => s.claudeSessionId)).toContain('session-2');
     });
 
     it('should return empty array if no sessions exist', async () => {
@@ -115,47 +113,32 @@ describe('ClaudeSessionRepository', () => {
     });
 
     it('should order results by created_at DESC', async () => {
-      await repo.save(makeClaudeSession({ id: 'session-1', channelId: 'channel-1', createdAt: 1000 }));
-      await repo.save(makeClaudeSession({ id: 'session-2', channelId: 'channel-1', createdAt: 2000 }));
-      await repo.save(makeClaudeSession({ id: 'session-3', channelId: 'channel-1', createdAt: 1500 }));
+      await repo.save(makeClaudeSession({ claudeSessionId: 'session-1', channelId: 'channel-1', createdAt: 1000 }));
+      await repo.save(makeClaudeSession({ claudeSessionId: 'session-2', channelId: 'channel-1', createdAt: 2000 }));
+      await repo.save(makeClaudeSession({ claudeSessionId: 'session-3', channelId: 'channel-1', createdAt: 1500 }));
 
       const results = await repo.getByChannel('channel-1');
-      expect(results[0].id).toBe('session-2');
-      expect(results[1].id).toBe('session-3');
-      expect(results[2].id).toBe('session-1');
+      expect(results[0].claudeSessionId).toBe('session-2');
+      expect(results[1].claudeSessionId).toBe('session-3');
+      expect(results[2].claudeSessionId).toBe('session-1');
     });
   });
 
   describe('getActiveByChannel', () => {
     it('should retrieve the most recent active session for a channel', async () => {
-      await repo.save(makeClaudeSession({ id: 'session-1', channelId: 'channel-1', status: 'active', createdAt: 1000 }));
-      await repo.save(makeClaudeSession({ id: 'session-2', channelId: 'channel-1', status: 'active', createdAt: 2000 }));
-      await repo.save(makeClaudeSession({ id: 'session-3', channelId: 'channel-1', status: 'closed', createdAt: 3000 }));
+      await repo.save(makeClaudeSession({ claudeSessionId: 'session-1', channelId: 'channel-1', status: 'active', createdAt: 1000 }));
+      await repo.save(makeClaudeSession({ claudeSessionId: 'session-2', channelId: 'channel-1', status: 'active', createdAt: 2000 }));
+      await repo.save(makeClaudeSession({ claudeSessionId: 'session-3', channelId: 'channel-1', status: 'closed', createdAt: 3000 }));
 
       const result = await repo.getActiveByChannel('channel-1');
       expect(result).not.toBeNull();
-      expect(result!.id).toBe('session-2');
+      expect(result!.claudeSessionId).toBe('session-2');
     });
 
     it('should return null if no active sessions exist', async () => {
       await repo.save(makeClaudeSession({ channelId: 'channel-1', status: 'closed' }));
 
       const result = await repo.getActiveByChannel('channel-1');
-      expect(result).toBeNull();
-    });
-  });
-
-  describe('findByClaudeSessionId', () => {
-    it('should find session by Claude CLI session_id', async () => {
-      await repo.save(makeClaudeSession({ claudeSessionId: 'claude-123' }));
-
-      const result = await repo.findByClaudeSessionId('claude-123');
-      expect(result).not.toBeNull();
-      expect(result!.id).toBe('session-001');
-    });
-
-    it('should return null if not found', async () => {
-      const result = await repo.findByClaudeSessionId('claude-999');
       expect(result).toBeNull();
     });
   });
@@ -184,13 +167,13 @@ describe('ClaudeSessionRepository', () => {
 
   describe('loadAll', () => {
     it('should load all sessions', () => {
-      repo.save(makeClaudeSession({ id: 'session-1' }));
-      repo.save(makeClaudeSession({ id: 'session-2' }));
+      repo.save(makeClaudeSession({ claudeSessionId: 'session-1' }));
+      repo.save(makeClaudeSession({ claudeSessionId: 'session-2' }));
 
       const all = repo.loadAll();
       expect(all).toHaveLength(2);
-      expect(all.map((s) => s.id)).toContain('session-1');
-      expect(all.map((s) => s.id)).toContain('session-2');
+      expect(all.map((s) => s.claudeSessionId)).toContain('session-1');
+      expect(all.map((s) => s.claudeSessionId)).toContain('session-2');
     });
   });
 });

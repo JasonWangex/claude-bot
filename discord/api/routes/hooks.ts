@@ -100,7 +100,7 @@ async function handleSessionEventLocked(
     return;
   }
 
-  const session = await claudeSessionRepo.findByClaudeSessionId(session_id);
+  const session = await claudeSessionRepo.get(session_id);
   if (!session) {
     logger.warn(`[Hook] Session not found for claude_session_id: ${session_id}`);
     return;
@@ -108,7 +108,7 @@ async function handleSessionEventLocked(
 
   const channelId = session.channelId;
   if (!channelId) {
-    logger.warn(`[Hook] Session ${session.id} has no channelId, skipping`);
+    logger.warn(`[Hook] Session ${session.claudeSessionId} has no channelId, skipping`);
     return;
   }
 
@@ -150,7 +150,7 @@ async function handleSessionStart(
   session.lastActivityAt = now;
   await claudeSessionRepo.save(session);
 
-  logger.debug(`[Hook] SessionStart: ${session.id} → active`);
+  logger.debug(`[Hook] SessionStart: ${session.claudeSessionId} → active`);
 }
 
 /**
@@ -170,7 +170,7 @@ async function handleNotification(
   session.lastActivityAt = now;
   await claudeSessionRepo.save(session);
 
-  logger.debug(`[Hook] Notification: ${session.id} → waiting`);
+  logger.debug(`[Hook] Notification: ${session.claudeSessionId} → waiting`);
 
   // 延迟 5 秒发送等待消息
   const timer = setTimeout(async () => {
@@ -183,7 +183,7 @@ async function handleNotification(
       }
 
       // 检查是否仍在 waiting 状态
-      const latestSession = await claudeSessionRepo.get(session.id);
+      const latestSession = await claudeSessionRepo.get(session.claudeSessionId);
       if (latestSession?.status === 'waiting') {
         // 计算 token 使用率
         let usageText = '';
@@ -253,7 +253,7 @@ async function handleStop(
 
   await claudeSessionRepo.save(session);
 
-  logger.debug(`[Hook] Stop: ${session.id} → idle`);
+  logger.debug(`[Hook] Stop: ${session.claudeSessionId} → idle`);
 
   // 取消待发的等待消息
   const waitingMsgId = deps.stateManager.getWaitingMessageId(channelId);
@@ -331,7 +331,7 @@ async function handleSessionEnd(
   session.closedAt = Date.now();
   await claudeSessionRepo.save(session);
 
-  logger.debug(`[Hook] SessionEnd: ${session.id} → closed (reason: ${reason})`);
+  logger.debug(`[Hook] SessionEnd: ${session.claudeSessionId} → closed (reason: ${reason})`);
 
   // 清除追踪状态
   deps.stateManager.clearSessionTracking(channelId);

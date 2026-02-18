@@ -22,8 +22,7 @@ export const listTaskSessions: RouteHandler = async (_req, res, params, deps) =>
   const sessions = await repo.getByChannel(channelId);
 
   const data = sessions.map(s => ({
-    id: s.id,
-    claude_session_id: s.claudeSessionId || null,
+    claude_session_id: s.claudeSessionId,
     channel_id: s.channelId || null,
     model: s.model || null,
     status: s.status,

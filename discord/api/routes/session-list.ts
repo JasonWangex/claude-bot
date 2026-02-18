@@ -10,8 +10,7 @@ import { sendJson, requireAuth } from '../middleware.js';
 
 // JOIN 查询结果行类型
 interface SessionListRow {
-  id: string;
-  claude_session_id: string | null;
+  claude_session_id: string;
   channel_id: string | null;
   model: string | null;
   plan_mode: number;
@@ -72,7 +71,7 @@ export const listSessions: RouteHandler = async (req, res, _params, deps) => {
 
   // 数据查询（JOIN task/goal/channel）
   const dataSql = `
-    SELECT cs.id, cs.claude_session_id, cs.channel_id, cs.model, cs.plan_mode,
+    SELECT cs.claude_session_id, cs.channel_id, cs.model, cs.plan_mode,
            cs.status, cs.purpose, cs.title, cs.created_at, cs.closed_at,
            cs.last_activity_at, cs.task_id, cs.goal_id, cs.cwd, cs.git_branch, cs.project_path,
            ch.name AS channel_name,
@@ -92,7 +91,6 @@ export const listSessions: RouteHandler = async (req, res, _params, deps) => {
   const rows = deps.db.prepare(dataSql).all(...params, limit, offset) as SessionListRow[];
 
   const data = rows.map(r => ({
-    id: r.id,
     claude_session_id: r.claude_session_id,
     channel_id: r.channel_id,
     channel_name: r.channel_name,
@@ -129,7 +127,7 @@ export const getSessionMeta: RouteHandler = async (_req, res, params, deps) => {
   }
 
   const sql = `
-    SELECT cs.id, cs.claude_session_id, cs.channel_id, cs.model, cs.plan_mode,
+    SELECT cs.claude_session_id, cs.channel_id, cs.model, cs.plan_mode,
            cs.status, cs.purpose, cs.title, cs.created_at, cs.closed_at,
            cs.last_activity_at, cs.task_id, cs.goal_id, cs.cwd, cs.git_branch, cs.project_path,
            ch.name AS channel_name,
@@ -141,7 +139,7 @@ export const getSessionMeta: RouteHandler = async (_req, res, params, deps) => {
     LEFT JOIN channels ch ON cs.channel_id = ch.id
     LEFT JOIN tasks t ON cs.task_id = t.id
     LEFT JOIN goals g ON cs.goal_id = g.id
-    WHERE cs.id = ?
+    WHERE cs.claude_session_id = ?
   `;
 
   const row = deps.db.prepare(sql).get(sessionId) as SessionListRow | undefined;
@@ -153,7 +151,6 @@ export const getSessionMeta: RouteHandler = async (_req, res, params, deps) => {
   sendJson(res, 200, {
     ok: true,
     data: {
-      id: row.id,
       claude_session_id: row.claude_session_id,
       channel_id: row.channel_id,
       channel_name: row.channel_name,

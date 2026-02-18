@@ -25,52 +25,6 @@ export type GoalType = '探索型' | '交付型';
 export type { GoalDriveStatus, GoalTaskStatus, GoalTaskType } from './index.js';
 
 // ================================================================
-// sessions 表 — 对应 Session 接口
-// @deprecated - 将被 ChannelRow + ClaudeSessionRow 替代（migration 010）
-// ================================================================
-
-export interface SessionRow {
-  /** 本地 UUID (PRIMARY KEY) */
-  id: string;
-  /** 用户自定义名称 */
-  name: string;
-  /** Discord Channel ID (DB 列名仍为 thread_id) */
-  thread_id: string;
-  /** Discord Guild ID */
-  guild_id: string;
-  /** Claude CLI session_id (当前活跃) */
-  claude_session_id: string | null;
-  /** 上一轮 session_id（用于 rewind） */
-  prev_claude_session_id: string | null;
-  /** 按模型分槽的 session IDs (JSON) */
-  session_ids_json: string | null;
-  /** 按模型分槽的 prev session IDs (JSON, 用于 rewind) */
-  prev_session_ids_json: string | null;
-  /** 工作目录 */
-  cwd: string;
-  /** 创建时间 (Unix ms) */
-  created_at: number;
-  /** 最近一条 Claude 回复 */
-  last_message: string | null;
-  /** 最近消息时间 (Unix ms) */
-  last_message_at: number | null;
-  /** 是否处于 plan mode (0/1) */
-  plan_mode: number;
-  /** 用户选择的 Claude 模型 */
-  model: string | null;
-  /** 父 Channel ID（fork 产生的子 channel，DB 列名仍为 parent_thread_id） */
-  parent_thread_id: string | null;
-  /** worktree 分支名 */
-  worktree_branch: string | null;
-  /** 消息历史条数（替代 messageHistory.length） */
-  message_count: number;
-}
-
-// ================================================================
-// message_history 表已废弃 (migration 006)
-// ================================================================
-
-// ================================================================
 // guilds 表 — 对应 GuildState 接口
 // ================================================================
 
@@ -83,22 +37,6 @@ export interface GuildRow {
   default_model: string | null;
   /** 最近活动时间 (Unix ms) */
   last_activity: number;
-}
-
-// ================================================================
-// archived_sessions 表 — 对应 ArchivedSession 接口
-// @deprecated - 将被 ChannelRow (status='archived') 替代（migration 010）
-// ================================================================
-
-export interface ArchivedSessionRow extends SessionRow {
-  /** 归档时间 (Unix ms) */
-  archived_at: number;
-  /** 归档操作者 user ID */
-  archived_by: string | null;
-  /** 归档原因 */
-  archive_reason: string | null;
-  /** 归档时的消息历史 (JSON 序列化) */
-  message_history_json: string | null;
 }
 
 // ================================================================
@@ -351,8 +289,7 @@ export interface ChannelRow {
 // ================================================================
 
 export interface ClaudeSessionRow {
-  id: string;                    // UUID (PK)
-  claude_session_id: string | null;
+  claude_session_id: string;         // Claude CLI session_id (PK)
   prev_claude_session_id: string | null;
   channel_id: string | null;
   model: string | null;
@@ -361,7 +298,7 @@ export interface ClaudeSessionRow {
   created_at: number;
   closed_at: number | null;
   purpose: 'channel' | 'plan' | 'temp' | 'replan' | null;  // 会话用途
-  parent_session_id: string | null;  // 父会话 ID
+  parent_session_id: string | null;  // 父会话 CLI session_id
   last_activity_at: number | null;   // 最后活动时间
   last_usage_json: string | null;    // 最后一次 token/cost 数据（JSON）
   last_stop_at: number | null;       // 最后一次 Stop 事件时间（幂等窗口）
@@ -468,18 +405,10 @@ export interface PromptConfigRow {
 // ================================================================
 
 import type {
-  Session,
   GuildState,
-  ArchivedSession,
   GoalDriveState,
   GoalTask,
 } from './index.js';
-
-/** Session → SessionRow */
-export type SessionToRow = (session: Session) => SessionRow;
-
-/** SessionRow → Session */
-export type RowToSession = (row: SessionRow) => Session;
 
 /** GuildState → GuildRow */
 export type GuildStateToRow = (guild: GuildState) => GuildRow;

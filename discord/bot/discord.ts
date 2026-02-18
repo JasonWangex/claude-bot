@@ -25,7 +25,6 @@ import { initDb, getDb, closeDb } from '../db/index.js';
 import { GoalRepo, TaskRepo, CheckpointRepo } from '../db/repo/index.js';
 import { GoalMetaRepo } from '../db/goal-meta-repo.js';
 import { IdeaRepository } from '../db/idea-repo.js';
-import { SessionRepository } from '../db/repo/session-repo.js';
 import { GuildRepository } from '../db/repo/guild-repo.js';
 import { ChannelRepository } from '../db/repo/channel-repo.js';
 import { ClaudeSessionRepository } from '../db/repo/claude-session-repo.js';
@@ -70,7 +69,6 @@ export class DiscordBot {
     });
 
     const db = initDb();
-    const sessionRepo = new SessionRepository(db);
     const guildRepo = new GuildRepository(db);
     const channelRepo = new ChannelRepository(db);
     const claudeSessionRepo = new ClaudeSessionRepository(db);
@@ -78,7 +76,7 @@ export class DiscordBot {
     const syncCursorRepo = new SyncCursorRepository(db);
 
     this.channelService = new ChannelService(channelRepo, claudeSessionRepo, syncCursorRepo);
-    this.stateManager = new StateManager(config.defaultWorkDir, sessionRepo, guildRepo, channelRepo, claudeSessionRepo, db, linkRepo);
+    this.stateManager = new StateManager(config.defaultWorkDir, guildRepo, channelRepo, claudeSessionRepo, db, linkRepo);
     this.interactionRegistry = new InteractionRegistry();
     this.claudeClient = new ClaudeClient(
       config.claudeCliPath,
@@ -386,6 +384,12 @@ export class DiscordBot {
       return;
     }
 
+    // Sessions buttons: sessions:<action>:<param>
+    if (customId.startsWith('sessions:')) {
+      await this.handleSessionsButton(interaction);
+      return;
+    }
+
     // AskUserQuestion / ExitPlanMode buttons: input:<prefix>:<selection>
     if (customId.startsWith('input:')) {
       const parts = customId.split(':');
@@ -687,6 +691,68 @@ export class DiscordBot {
         ? interaction.followUp.bind(interaction)
         : interaction.reply.bind(interaction);
       await reply({ content: `操作失败: ${err.message}`, ephemeral: true }).catch(() => {});
+    }
+  }
+
+  /**
+   * 处理 /sessions 按钮交互
+   * customId 格式: sessions:<action>:<param>
+   */
+  private async handleSessionsButton(interaction: any): Promise<void> {
+    const guildId = interaction.guildId;
+    const channelId = interaction.channelId;
+    if (!guildId || !channelId) return;
+
+    const parts = interaction.customId.split(':');
+    const action = parts[1];
+
+    try {
+      if (action === 'switch') {
+        // sessions:switch:<cliSessionIdPrefix>
+        const cliIdPrefix = parts[2];
+        // 查找完整的 CLI session ID
+        const activeLinks = this.stateManager.getActiveLinks(channelId);
+        const targetLink = activeLinks.find(l => l.claudeSessionId?.startsWith(cliIdPrefix));
+        if (!targetLink?.claudeSessionId) {
+          await interaction.reply({ content: 'Session not found.', ephemeral: true }).catch(() => {});
+          return;
+        }
+
+        const result = this.stateManager.attachSession(guildId, channelId, targetLink.claudeSessionId);
+        await interaction.update({
+          content: `Switched to session \`${targetLink.claudeSessionId.slice(0, 8)}...\``,
+          components: [],
+        }).catch(() => {});
+      } else if (action === 'cleanup') {
+        // sessions:cleanup:<channelId> — 只保留 current session 的 link
+        const session = this.stateManager.getSession(guildId, channelId);
+        const activeLinks = this.stateManager.getActiveLinks(channelId);
+
+        if (!session?.claudeSessionId || activeLinks.length <= 1) {
+          await interaction.reply({ content: 'Nothing to clean up.', ephemeral: true }).catch(() => {});
+          return;
+        }
+
+        // unlink 所有非 current 的 link
+        let cleaned = 0;
+        for (const link of activeLinks) {
+          if (link.claudeSessionId !== session.claudeSessionId) {
+            this.stateManager.unlinkSession(channelId, link.claudeSessionId);
+            cleaned++;
+          }
+        }
+
+        await interaction.update({
+          content: `Cleaned up ${cleaned} stale link(s). Current session: \`${session.claudeSessionId.slice(0, 8)}...\``,
+          components: [],
+        }).catch(() => {});
+      }
+    } catch (err: any) {
+      logger.error(`[DiscordBot] handleSessionsButton error: ${err.message}`);
+      const reply = interaction.replied || interaction.deferred
+        ? interaction.followUp.bind(interaction)
+        : interaction.reply.bind(interaction);
+      await reply({ content: `Error: ${err.message}`, ephemeral: true }).catch(() => {});
     }
   }
 

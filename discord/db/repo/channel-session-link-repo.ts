@@ -6,9 +6,7 @@
  * - unlinkSession() 软删除（设置 unlinked_at），不做物理删除
  * - 活跃 link = WHERE unlinked_at IS NULL
  *
- * 索引：
- *   idx_csl_channel_active (channel_id, unlinked_at)   — 查活跃 link
- *   idx_csl_last_message   (last_message_discord_id)   — reply 路由
+ * FK 直接引用 claude_sessions(claude_session_id)，不再有 UUID 层。
  */
 
 import type Database from 'better-sqlite3';
@@ -17,8 +15,8 @@ import { logger } from '../../utils/logger.js';
 
 export interface ChannelSessionLink {
   channelId: string;
-  /** claude_sessions.id（UUID，非 Claude CLI session_id） */
-  claudeSessionUuid: string;
+  /** claude_sessions.claude_session_id（CLI session_id，即 PK） */
+  claudeSessionId: string;
   linkedAt: number;
   unlinkedAt?: number;
   /** 该 link 最近一次发出的 Discord 消息 ID（reply 路由用） */
@@ -28,7 +26,7 @@ export interface ChannelSessionLink {
 function rowToLink(row: ChannelSessionLinkRow): ChannelSessionLink {
   return {
     channelId: row.channel_id,
-    claudeSessionUuid: row.claude_session_id,
+    claudeSessionId: row.claude_session_id,
     linkedAt: row.linked_at,
     unlinkedAt: row.unlinked_at ?? undefined,
     lastMessageDiscordId: row.last_message_discord_id ?? undefined,
@@ -79,9 +77,9 @@ export class ChannelSessionLinkRepository {
 
       // 查 channel 所有活跃 link（走 idx_csl_channel_active）
       getActiveLinks: this.db.prepare(`
-        SELECT csl.*, cs.model, cs.claude_session_id AS cs_claude_session_id
+        SELECT csl.*, cs.model
         FROM channel_session_links csl
-        JOIN claude_sessions cs ON cs.id = csl.claude_session_id
+        JOIN claude_sessions cs ON cs.claude_session_id = csl.claude_session_id
         WHERE csl.channel_id = ? AND csl.unlinked_at IS NULL
         ORDER BY csl.linked_at ASC
       `),
@@ -93,7 +91,7 @@ export class ChannelSessionLinkRepository {
         LIMIT 1
       `),
 
-      // 查某个 claude session UUID 当前 link 到哪个 channel（用于 findSessionHolder）
+      // 查某个 claude session 当前 link 到哪个 channel（用于 findSessionHolder）
       getActiveBySession: this.db.prepare(`
         SELECT * FROM channel_session_links
         WHERE claude_session_id = ? AND unlinked_at IS NULL
@@ -121,24 +119,31 @@ export class ChannelSessionLinkRepository {
   /**
    * 创建 link（前台 Claude session 创建时调用）
    */
-  createLink(channelId: string, claudeSessionUuid: string): void {
-    const result = this.stmts.insert.run({
-      channel_id: channelId,
-      claude_session_id: claudeSessionUuid,
-      linked_at: Date.now(),
-    });
-    if (result.changes === 0) {
-      logger.warn(`[LinkRepo] createLink ignored (duplicate or FK violation): channel=${channelId}, uuid=${claudeSessionUuid.slice(0, 8)}`);
+  createLink(channelId: string, claudeSessionId: string): boolean {
+    try {
+      const result = this.stmts.insert.run({
+        channel_id: channelId,
+        claude_session_id: claudeSessionId,
+        linked_at: Date.now(),
+      });
+      if (result.changes === 0) {
+        logger.warn(`[LinkRepo] createLink ignored (duplicate): channel=${channelId}, session=${claudeSessionId.slice(0, 8)}`);
+        return false;
+      }
+      return true;
+    } catch (err: any) {
+      logger.error(`[LinkRepo] createLink failed: channel=${channelId}, session=${claudeSessionId.slice(0, 8)}, error=${err.message}`);
+      return false;
     }
   }
 
   /**
    * 软删除指定 link（unlink）
    */
-  unlinkSession(channelId: string, claudeSessionUuid: string): void {
+  unlinkSession(channelId: string, claudeSessionId: string): void {
     this.stmts.unlink.run({
       channel_id: channelId,
-      claude_session_id: claudeSessionUuid,
+      claude_session_id: claudeSessionId,
       unlinked_at: Date.now(),
     });
   }
@@ -152,14 +157,12 @@ export class ChannelSessionLinkRepository {
 
   /**
    * 获取 channel 所有活跃 link（含 model 信息）
-   * 返回结果带有 model 和原始 claudeSessionId（CLI 层），方便消息标头生成
    */
-  getActiveLinks(channelId: string): Array<ChannelSessionLink & { model?: string; claudeSessionId?: string }> {
-    const rows = this.stmts.getActiveLinks.all(channelId) as Array<ChannelSessionLinkRow & { model: string | null; cs_claude_session_id: string | null }>;
+  getActiveLinks(channelId: string): Array<ChannelSessionLink & { model?: string }> {
+    const rows = this.stmts.getActiveLinks.all(channelId) as Array<ChannelSessionLinkRow & { model: string | null }>;
     return rows.map(row => ({
       ...rowToLink(row),
       model: row.model ?? undefined,
-      claudeSessionId: row.cs_claude_session_id ?? undefined,
     }));
   }
 
@@ -173,20 +176,20 @@ export class ChannelSessionLinkRepository {
   }
 
   /**
-   * 查某个 claude session UUID 当前 link 到的 channel（用于 findSessionHolder）
+   * 查某个 claude session 当前 link 到的 channel（用于 findSessionHolder）
    */
-  getActiveBySession(claudeSessionUuid: string): ChannelSessionLink | null {
-    const row = this.stmts.getActiveBySession.get(claudeSessionUuid) as ChannelSessionLinkRow | undefined;
+  getActiveBySession(claudeSessionId: string): ChannelSessionLink | null {
+    const row = this.stmts.getActiveBySession.get(claudeSessionId) as ChannelSessionLinkRow | undefined;
     return row ? rowToLink(row) : null;
   }
 
   /**
    * 更新 link 的 last_message_discord_id（消息发出后调用）
    */
-  updateLastMessageId(channelId: string, claudeSessionUuid: string, discordMessageId: string): void {
+  updateLastMessageId(channelId: string, claudeSessionId: string, discordMessageId: string): void {
     this.stmts.updateLastMessageId.run({
       channel_id: channelId,
-      claude_session_id: claudeSessionUuid,
+      claude_session_id: claudeSessionId,
       discord_message_id: discordMessageId,
     });
   }

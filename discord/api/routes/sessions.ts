@@ -9,7 +9,6 @@
 import { join } from 'path';
 import type { RouteHandler } from '../types.js';
 import { requireAuth } from '../middleware.js';
-import { ClaudeSessionRepository } from '../../db/repo/claude-session-repo.js';
 import { findSessionJsonlFile, streamSessionEvents } from '../../utils/session-reader.js';
 import { logger } from '../../utils/logger.js';
 
@@ -40,24 +39,9 @@ export const getSessionConversation: RouteHandler = async (_req, res, params, de
 
   try {
     // 查询 claude_sessions 表
-    const claudeSessionRepo = new ClaudeSessionRepository(deps.db);
-    const session = await claudeSessionRepo.get(sessionId);
-
-    if (!session) {
-      res.writeHead(404, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ok: false, error: 'Session not found' }));
-      return;
-    }
-
-    if (!session.claudeSessionId) {
-      res.writeHead(404, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ ok: false, error: 'No Claude session ID associated' }));
-      return;
-    }
-
-    // 查找 .jsonl 文件（使用默认路径 ~/.claude/projects）
+    // sessionId 就是 CLI session ID（PK）
     const claudeProjectsDir = join(process.env.HOME || '/tmp', '.claude', 'projects');
-    const jsonlPath = findSessionJsonlFile(claudeProjectsDir, session.claudeSessionId);
+    const jsonlPath = findSessionJsonlFile(claudeProjectsDir, sessionId);
 
     if (!jsonlPath) {
       res.writeHead(404, { 'Content-Type': 'application/json' });

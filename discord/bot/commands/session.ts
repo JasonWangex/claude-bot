@@ -1,10 +1,13 @@
 /**
- * Session 命令: /clear, /compact, /rewind, /plan, /stop, /attach
+ * Session 命令: /clear, /compact, /rewind, /plan, /stop, /attach, /sessions
  * 这些命令只在 task channel 中有效
  */
 
 import {
   SlashCommandBuilder,
+  ButtonBuilder,
+  ButtonStyle,
+  ActionRowBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
 import { escapeMarkdown } from '../message-utils.js';
@@ -48,6 +51,10 @@ export const sessionCommands = [
     .addStringOption(opt =>
       opt.setName('session_id').setDescription('Claude session ID to attach to').setRequired(false)
     ),
+
+  new SlashCommandBuilder()
+    .setName('sessions')
+    .setDescription('List active sessions linked to this channel'),
 ];
 
 export async function handleSessionCommand(
@@ -67,6 +74,8 @@ export async function handleSessionCommand(
       return handleStop(interaction, deps);
     case 'attach':
       return handleAttach(interaction, deps);
+    case 'sessions':
+      return handleSessions(interaction, deps);
   }
 }
 
@@ -288,5 +297,86 @@ async function handleAttach(
     msg += `\n(Disconnected from thread "${result.prevHolder.name}")`;
   }
   await interaction.reply(msg);
+}
+
+// ========== /sessions ==========
+
+async function handleSessions(
+  interaction: ChatInputCommandInteraction,
+  deps: CommandDeps,
+): Promise<void> {
+  if (!requireAuth(interaction)) return;
+  if (!requireThread(interaction)) return;
+
+  const guildId = interaction.guildId!;
+  const channelId = interaction.channelId;
+  const { stateManager, claudeClient } = deps;
+
+  const session = stateManager.getSession(guildId, channelId);
+  const activeLinks = stateManager.getActiveLinks(channelId);
+
+  if (activeLinks.length === 0) {
+    const currentId = session?.claudeSessionId;
+    await interaction.reply({
+      content: currentId
+        ? `No active links.\nMemory session: \`${currentId.slice(0, 8)}...\``
+        : 'No active sessions.',
+      ephemeral: true,
+    });
+    return;
+  }
+
+  // 构建 session 列表
+  let text = `**Active Sessions** (${activeLinks.length})\n\n`;
+  for (let i = 0; i < activeLinks.length; i++) {
+    const link = activeLinks[i];
+    const isCurrent = link.claudeSessionId === session?.claudeSessionId;
+    const marker = isCurrent ? ' **(current)**' : '';
+    const model = link.model?.match(/sonnet|opus|haiku/i)?.[0]?.toLowerCase() ?? 'unknown';
+    const cliId = link.claudeSessionId ? `\`${link.claudeSessionId.slice(0, 8)}...\`` : '(no CLI session)';
+    const lockKey = StateManager.channelLockKey(guildId, channelId);
+    const running = link.claudeSessionId && claudeClient.isRunning(lockKey) && isCurrent ? ' Running' : '';
+
+    text += `${i + 1}. ${cliId} | ${model}${marker}${running}\n`;
+  }
+
+  // Buttons: "Set Active" 和 "Unlink All Others"
+  const rows: ActionRowBuilder<ButtonBuilder>[] = [];
+
+  if (activeLinks.length > 1) {
+    // 为每个非 current session 添加 "Switch" 按钮
+    const switchButtons: ButtonBuilder[] = [];
+    for (let i = 0; i < activeLinks.length && switchButtons.length < 4; i++) {
+      const link = activeLinks[i];
+      if (link.claudeSessionId && link.claudeSessionId !== session?.claudeSessionId) {
+        switchButtons.push(
+          new ButtonBuilder()
+            .setCustomId(`sessions:switch:${link.claudeSessionId.slice(0, 20)}`)
+            .setLabel(`Switch to #${i + 1}`)
+            .setStyle(ButtonStyle.Primary)
+        );
+      }
+    }
+
+    // "Unlink All Others" 按钮
+    const cleanupBtn = new ButtonBuilder()
+      .setCustomId(`sessions:cleanup:${channelId}`)
+      .setLabel('Keep Current Only')
+      .setStyle(ButtonStyle.Danger);
+
+    if (switchButtons.length > 0) {
+      rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(...switchButtons, cleanupBtn));
+    } else {
+      rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(cleanupBtn));
+    }
+
+    text += `\nUse buttons to switch or clean up, or \`/attach <session_id>\` to link a specific session.`;
+  }
+
+  await interaction.reply({
+    content: text,
+    components: rows as any,
+    ephemeral: false,
+  });
 }
 

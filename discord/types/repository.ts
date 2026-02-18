@@ -6,8 +6,6 @@
  */
 
 import type {
-  Session,
-  ArchivedSession,
   GuildState,
   GoalDriveState,
   GoalDriveStatus,
@@ -75,33 +73,6 @@ export interface Idea {
 }
 
 // ==================== Repository 接口 ====================
-
-/**
- * Session 仓库
- *
- * 管理 Discord Channel 对应的会话，包括活跃会话和归档会话。
- * 复合键: (guildId, channelId)
- */
-export interface ISessionRepo {
-  // —— CRUD ——
-  get(guildId: string, channelId: string): Promise<Session | null>;
-  getAll(guildId: string): Promise<Session[]>;
-  save(session: Session): Promise<void>;
-  delete(guildId: string, channelId: string): Promise<boolean>;
-
-  // —— 查询 ——
-  findByClaudeSessionId(guildId: string, claudeSessionId: string): Promise<Session | null>;
-  findByParentChannelId(guildId: string, parentChannelId: string): Promise<Session[]>;
-
-  // —— 归档 ——
-  archive(guildId: string, channelId: string, userId?: string, reason?: string): Promise<boolean>;
-  restore(guildId: string, channelId: string): Promise<boolean>;
-  getArchived(guildId: string, channelId: string): Promise<ArchivedSession | null>;
-  getAllArchived(guildId: string): Promise<ArchivedSession[]>;
-
-  // —— 统计 ——
-  count(): Promise<number>;
-}
 
 /**
  * Guild 仓库
@@ -304,16 +275,15 @@ export interface IChannelRepo {
 /**
  * ClaudeSession 仓库
  *
- * 管理 Claude CLI 会话实体（替代 sessions 表中的会话部分）。
- * 主键: id (UUID)
+ * 管理 Claude CLI 会话实体。
+ * 主键: claudeSessionId (Claude CLI session_id)
  */
 export interface IClaudeSessionRepo {
-  get(id: string): ClaudeSession | null;
+  get(claudeSessionId: string): ClaudeSession | null;
   getByChannel(channelId: string): ClaudeSession[];
   getActiveByChannel(channelId: string): ClaudeSession | null;
-  findByClaudeSessionId(claudeSessionId: string): ClaudeSession | null;
   save(session: ClaudeSession): void;
-  close(id: string): boolean;
+  close(claudeSessionId: string): boolean;
 }
 
 /**

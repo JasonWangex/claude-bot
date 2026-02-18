@@ -19,6 +19,8 @@ import migration003 from './migrations/003_add_session_context.js';
 import migration004 from './migrations/004_add_session_project_path.js';
 import migration005 from './migrations/005_unique_claude_session_id.js';
 import migration006 from './migrations/006_channel_session_links.js';
+import migration007 from './migrations/007_session_pk_refactor.js';
+import migration008 from './migrations/008_drop_deprecated_sessions.js';
 
 const allMigrations: Migration[] = [
   migration001,
@@ -27,6 +29,8 @@ const allMigrations: Migration[] = [
   migration004,
   migration005,
   migration006,
+  migration007,
+  migration008,
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -118,7 +122,7 @@ export { GoalMetaRepo } from './goal-meta-repo.js';
 export { GoalRepo, TaskRepo, CheckpointRepo } from './repo/index.js';
 /** @deprecated Use TaskRepo */
 export { TaskRepo as GoalTaskRepo } from './repo/index.js';
-export { SessionRepository, GuildRepository } from './repo/index.js';
+export { GuildRepository } from './repo/index.js';
 export { ChannelRepository, ClaudeSessionRepository, ChannelSessionLinkRepository, SyncCursorRepository } from './repo/index.js';
 export type { ChannelSessionLink } from './repo/index.js';
 export { KnowledgeBaseRepository } from './knowledge-base-repo.js';

@@ -72,66 +72,7 @@ const migration: Migration = {
         ON goal_checkpoints(goal_id, created_at);
 
       -- ============================================================
-      -- _deprecated_sessions 表 (SessionRepository 仍在使用)
-      -- ============================================================
-      CREATE TABLE IF NOT EXISTS _deprecated_sessions (
-        id                      TEXT PRIMARY KEY,
-        name                    TEXT NOT NULL DEFAULT '',
-        thread_id               TEXT NOT NULL,
-        guild_id                TEXT NOT NULL,
-        claude_session_id       TEXT,
-        prev_claude_session_id  TEXT,
-        cwd                     TEXT NOT NULL,
-        created_at              INTEGER NOT NULL,
-        last_message            TEXT,
-        last_message_at         INTEGER,
-        plan_mode               INTEGER NOT NULL DEFAULT 0,
-        model                   TEXT,
-        parent_thread_id        TEXT,
-        worktree_branch         TEXT,
-        message_count           INTEGER NOT NULL DEFAULT 0,
-        session_ids_json        TEXT,
-        prev_session_ids_json   TEXT,
-        UNIQUE(guild_id, thread_id)
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_dep_sessions_guild_thread
-        ON _deprecated_sessions(guild_id, thread_id);
-      CREATE INDEX IF NOT EXISTS idx_dep_sessions_claude_session
-        ON _deprecated_sessions(guild_id, claude_session_id);
-
-      -- ============================================================
-      -- _deprecated_archived_sessions 表 (SessionRepository 仍在使用)
-      -- ============================================================
-      CREATE TABLE IF NOT EXISTS _deprecated_archived_sessions (
-        id                      TEXT PRIMARY KEY,
-        name                    TEXT NOT NULL DEFAULT '',
-        thread_id               TEXT NOT NULL,
-        guild_id                TEXT NOT NULL,
-        claude_session_id       TEXT,
-        prev_claude_session_id  TEXT,
-        cwd                     TEXT NOT NULL,
-        created_at              INTEGER NOT NULL,
-        last_message            TEXT,
-        last_message_at         INTEGER,
-        plan_mode               INTEGER NOT NULL DEFAULT 0,
-        model                   TEXT,
-        parent_thread_id        TEXT,
-        worktree_branch         TEXT,
-        archived_at             INTEGER NOT NULL,
-        archived_by             TEXT,
-        archive_reason          TEXT,
-        message_history_json    TEXT,
-        message_count           INTEGER NOT NULL DEFAULT 0,
-        session_ids_json        TEXT,
-        prev_session_ids_json   TEXT
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_dep_archived_guild_thread
-        ON _deprecated_archived_sessions(guild_id, thread_id);
-
-      -- ============================================================
-      -- channels 表 (替代原 sessions + archived_sessions)
+      -- channels 表
       -- ============================================================
       CREATE TABLE IF NOT EXISTS channels (
         id                TEXT PRIMARY KEY,        -- Discord Channel ID (snowflake)
@@ -349,8 +290,6 @@ const migration: Migration = {
       DROP TABLE IF EXISTS ideas;
       DROP TABLE IF EXISTS knowledge_base;
       DROP TABLE IF EXISTS prompt_configs;
-      DROP TABLE IF EXISTS _deprecated_archived_sessions;
-      DROP TABLE IF EXISTS _deprecated_sessions;
     `);
   },
 };

@@ -7,7 +7,7 @@
 
 import { randomUUID } from 'node:crypto';
 import type { IChannelRepo, IClaudeSessionRepo, ISyncCursorRepo } from '../types/repository.js';
-import type { Channel, ClaudeSession } from '../types/index.js';
+import type { Channel } from '../types/index.js';
 import type { GuildChannel } from 'discord.js';
 
 /**
@@ -161,48 +161,12 @@ export class ChannelService {
   // ==================== ClaudeSession 管理 ====================
 
   /**
-   * 获取或创建活跃 ClaudeSession
-   *
-   * - 查询 claudeSessionRepo.getActiveByChannel()
-   * - 不存在则创建新 ClaudeSession（UUID + channelId + status=active）
-   * - 返回 ClaudeSession
-   */
-  async getOrCreateClaudeSession(channelId: string): Promise<ClaudeSession> {
-    const existing = this.claudeSessionRepo.getActiveByChannel(channelId);
-    if (existing) return existing;
-
-    // 创建新 session
-    const newSession: ClaudeSession = {
-      id: randomUUID(),
-      channelId,
-      planMode: false,
-      status: 'active',
-      createdAt: Date.now(),
-      purpose: 'channel',  // 明确标记为 channel 用途
-    };
-
-    this.claudeSessionRepo.save(newSession);
-    return newSession;
-  }
-
-  /**
    * 关闭 Channel 当前活跃 session
    */
   async closeActiveSession(channelId: string): Promise<boolean> {
     const activeSession = this.claudeSessionRepo.getActiveByChannel(channelId);
     if (!activeSession) return false;
 
-    return this.claudeSessionRepo.close(activeSession.id);
-  }
-
-  /**
-   * Claude CLI 返回后更新 claude_session_id
-   */
-  async updateClaudeSessionId(localSessionId: string, claudeSessionId: string): Promise<void> {
-    const session = this.claudeSessionRepo.get(localSessionId);
-    if (!session) return;
-
-    session.claudeSessionId = claudeSessionId;
-    this.claudeSessionRepo.save(session);
+    return this.claudeSessionRepo.close(activeSession.claudeSessionId);
   }
 }

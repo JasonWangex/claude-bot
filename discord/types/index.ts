@@ -10,7 +10,6 @@ export type {
   DevLog,
   Idea,
   IdeaStatus,
-  ISessionRepo,
   IGuildRepo,
   IGoalRepo,
   IGoalMetaRepo,
@@ -21,9 +20,8 @@ export type {
   IIdeaRepo,
 } from './repository.js';
 
-// 会话
+// 会话（内存状态，用 channelId 标识）
 export interface Session {
-  id: string;                // 本地 UUID
   name: string;              // 用户自定义名称
   channelId: string;         // Discord Channel ID (Text Channel under Category)
   guildId: string;           // Discord Guild ID
@@ -430,10 +428,9 @@ export interface Channel {
   lastMessageAt?: number;
 }
 
-// ClaudeSession（Claude Code CLI 会话实体）
+// ClaudeSession（Claude Code CLI 会话实体，PK = claudeSessionId）
 export interface ClaudeSession {
-  id: string;               // UUID
-  claudeSessionId?: string; // Claude CLI session_id
+  claudeSessionId: string;   // Claude CLI session_id (PK)
   prevClaudeSessionId?: string;
   channelId?: string;
   model?: string;
@@ -442,7 +439,7 @@ export interface ClaudeSession {
   createdAt: number;
   closedAt?: number;
   purpose?: 'channel' | 'plan' | 'temp' | 'replan';  // 会话用途
-  parentSessionId?: string;  // 父会话 ID（plan/replan session 使用）
+  parentSessionId?: string;  // 父会话 CLI session_id
   lastActivityAt?: number;   // 最后活动时间（用于超时监控）
   lastUsageJson?: string;    // 最后一次 token/cost 数据（JSON string）
   lastStopAt?: number;       // 最后一次 Stop 事件时间（幂等窗口）

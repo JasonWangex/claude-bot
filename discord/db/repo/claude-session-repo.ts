@@ -2,7 +2,7 @@
  * ClaudeSessionRepository
  *
  * 管理 Claude CLI 会话实体的 CRUD（同步接口，基于 better-sqlite3）。
- * 主键: id (UUID)
+ * 主键: claude_session_id (Claude CLI session_id)
  */
 
 import type Database from 'better-sqlite3';
@@ -14,8 +14,7 @@ import { logger } from '../../utils/logger.js';
 
 function rowToClaudeSession(row: ClaudeSessionRow): ClaudeSession {
   return {
-    id: row.id,
-    claudeSessionId: row.claude_session_id ?? undefined,
+    claudeSessionId: row.claude_session_id,
     prevClaudeSessionId: row.prev_claude_session_id ?? undefined,
     channelId: row.channel_id ?? undefined,
     model: row.model ?? undefined,
@@ -39,8 +38,7 @@ function rowToClaudeSession(row: ClaudeSessionRow): ClaudeSession {
 
 function claudeSessionToParams(session: ClaudeSession): Record<string, unknown> {
   return {
-    id: session.id,
-    claude_session_id: session.claudeSessionId ?? null,
+    claude_session_id: session.claudeSessionId,
     prev_claude_session_id: session.prevClaudeSessionId ?? null,
     channel_id: session.channelId ?? null,
     model: session.model ?? null,
@@ -69,7 +67,6 @@ export class ClaudeSessionRepository {
     get: Database.Statement;
     getByChannel: Database.Statement;
     getActiveByChannel: Database.Statement;
-    findByClaudeSessionId: Database.Statement;
     getAll: Database.Statement;
     upsert: Database.Statement;
     close: Database.Statement;
@@ -82,7 +79,7 @@ export class ClaudeSessionRepository {
   private prepareStatements(): void {
     this.stmts = {
       get: this.db.prepare(
-        `SELECT * FROM claude_sessions WHERE id = ?`,
+        `SELECT * FROM claude_sessions WHERE claude_session_id = ?`,
       ),
 
       getByChannel: this.db.prepare(
@@ -93,26 +90,21 @@ export class ClaudeSessionRepository {
         `SELECT * FROM claude_sessions WHERE channel_id = ? AND status = 'active' ORDER BY created_at DESC LIMIT 1`,
       ),
 
-      findByClaudeSessionId: this.db.prepare(
-        `SELECT * FROM claude_sessions WHERE claude_session_id = ?`,
-      ),
-
       getAll: this.db.prepare(`SELECT * FROM claude_sessions`),
 
       upsert: this.db.prepare(`
         INSERT INTO claude_sessions (
-          id, claude_session_id, prev_claude_session_id,
+          claude_session_id, prev_claude_session_id,
           channel_id, model, plan_mode, status, created_at, closed_at,
           purpose, parent_session_id, last_activity_at, last_usage_json, last_stop_at, title,
           task_id, goal_id, cwd, git_branch, project_path
         ) VALUES (
-          @id, @claude_session_id, @prev_claude_session_id,
+          @claude_session_id, @prev_claude_session_id,
           @channel_id, @model, @plan_mode, @status, @created_at, @closed_at,
           @purpose, @parent_session_id, @last_activity_at, @last_usage_json, @last_stop_at, @title,
           @task_id, @goal_id, @cwd, @git_branch, @project_path
         )
-        ON CONFLICT(id) DO UPDATE SET
-          claude_session_id = @claude_session_id,
+        ON CONFLICT(claude_session_id) DO UPDATE SET
           prev_claude_session_id = @prev_claude_session_id,
           channel_id = @channel_id,
           model = @model,
@@ -135,15 +127,15 @@ export class ClaudeSessionRepository {
       close: this.db.prepare(`
         UPDATE claude_sessions
         SET status = 'closed', closed_at = ?
-        WHERE id = ?
+        WHERE claude_session_id = ?
       `),
     };
   }
 
   // ==================== 同步 CRUD ====================
 
-  get(id: string): ClaudeSession | null {
-    const row = this.stmts.get.get(id) as ClaudeSessionRow | undefined;
+  get(claudeSessionId: string): ClaudeSession | null {
+    const row = this.stmts.get.get(claudeSessionId) as ClaudeSessionRow | undefined;
     return row ? rowToClaudeSession(row) : null;
   }
 
@@ -157,21 +149,16 @@ export class ClaudeSessionRepository {
     return row ? rowToClaudeSession(row) : null;
   }
 
-  findByClaudeSessionId(claudeSessionId: string): ClaudeSession | null {
-    const row = this.stmts.findByClaudeSessionId.get(claudeSessionId) as ClaudeSessionRow | undefined;
-    return row ? rowToClaudeSession(row) : null;
-  }
-
   save(session: ClaudeSession): void {
     try {
       this.stmts.upsert.run(claudeSessionToParams(session));
     } catch (err: any) {
-      logger.error(`[ClaudeSessionRepo] save failed: id=${session.id}, claude_session_id=${session.claudeSessionId}, code=${err.code}`, err.message);
+      logger.error(`[ClaudeSessionRepo] save failed: claude_session_id=${session.claudeSessionId}, code=${err.code}`, err.message);
     }
   }
 
-  close(id: string): boolean {
-    const result = this.stmts.close.run(Date.now(), id);
+  close(claudeSessionId: string): boolean {
+    const result = this.stmts.close.run(Date.now(), claudeSessionId);
     return result.changes > 0;
   }
 

@@ -1085,7 +1085,7 @@ export class GoalOrchestrator {
       const existingSessionId = sonnetLink?.claudeSessionId;
       if (existingSessionId) {
         // 恢复到已有的 sonnet session
-        this.deps.stateManager.setSessionClaudeId(guildId, channelId, existingSessionId, sonnetLink!.claudeSessionUuid);
+        this.deps.stateManager.setSessionClaudeId(guildId, channelId, existingSessionId);
         this.deps.stateManager.setSessionModel(guildId, channelId, model);
         logger.info(`[Orchestrator] Reusing Sonnet session for fix: ${existingSessionId.slice(0, 8)}`);
         return;

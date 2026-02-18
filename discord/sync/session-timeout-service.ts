@@ -69,9 +69,9 @@ export class SessionTimeoutService {
       // 检查 lastActivityAt 是否超时
       const lastActivity = session.lastActivityAt || session.createdAt;
       if (lastActivity < threshold) {
-        logger.warn(`[SessionTimeout] Closing inactive session: ${session.id} (${session.claudeSessionId?.slice(0, 8)}) - last activity: ${new Date(lastActivity).toISOString()}`);
+        logger.warn(`[SessionTimeout] Closing inactive session: ${session.claudeSessionId.slice(0, 8)} - last activity: ${new Date(lastActivity).toISOString()}`);
 
-        await this.claudeSessionRepo.close(session.id);
+        await this.claudeSessionRepo.close(session.claudeSessionId);
         closedCount++;
       }
     }
