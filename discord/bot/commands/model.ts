@@ -48,7 +48,7 @@ export async function handleModelCommand(
             .setDefault(currentModel === opt.id)
         ),
         new StringSelectMenuOptionBuilder()
-          .setLabel('Sonnet 4.5 (default)')
+          .setLabel(`${getModelLabel(process.env.PIPELINE_SONNET_MODEL || 'claude-sonnet-4-6')} (default)`)
           .setValue('default')
           .setDefault(!currentModel),
       );

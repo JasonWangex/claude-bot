@@ -67,6 +67,6 @@ export function loadDiscordConfig(): DiscordBotConfig {
     apiPort,
     apiListen,
     pipelineOpusModel: process.env.PIPELINE_OPUS_MODEL || 'claude-opus-4-6',
-    pipelineSonnetModel: process.env.PIPELINE_SONNET_MODEL || 'claude-sonnet-4-5',
+    pipelineSonnetModel: process.env.PIPELINE_SONNET_MODEL || 'claude-sonnet-4-6',
   };
 }

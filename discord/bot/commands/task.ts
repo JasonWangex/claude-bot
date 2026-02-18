@@ -27,10 +27,9 @@ import type { CommandDeps } from './types.js';
 import { requireAuth, requireThread } from './utils.js';
 
 export const MODEL_OPTIONS = [
-  { id: 'claude-sonnet-4-5-20250929', label: 'Sonnet 4.5' },
-  { id: 'claude-opus-4-6', label: 'Opus 4.6' },
-  { id: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' },
-] as const;
+  { id: process.env.PIPELINE_SONNET_MODEL || 'claude-sonnet-4-6', label: 'Sonnet 4.6' },
+  { id: process.env.PIPELINE_OPUS_MODEL || 'claude-opus-4-6', label: 'Opus 4.6' },
+];
 
 export const taskCommands = [
   new SlashCommandBuilder()
@@ -251,7 +250,7 @@ function getCategoryNameFromCwd(cwd: string): string {
 }
 
 export function getModelLabel(model: string | undefined): string {
-  if (!model) return 'Sonnet 4.5 (default)';
+  if (!model) return `${MODEL_OPTIONS[0].label} (default)`;
   const found = MODEL_OPTIONS.find(m => m.id === model);
   return found ? found.label : model;
 }
