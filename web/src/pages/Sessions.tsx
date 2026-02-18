@@ -120,7 +120,7 @@ const columns = [
     key: 'action',
     width: 80,
     render: (_: unknown, record: SessionSummary) => (
-      <Link to={`/sessions/${record.id}`}>详情</Link>
+      <Link to={`/sessions/${record.claude_session_id}`}>详情</Link>
     ),
   },
 ];
@@ -154,7 +154,7 @@ export default function Sessions() {
           <Table
             dataSource={sessions || []}
             columns={columns}
-            rowKey="id"
+            rowKey="claude_session_id"
             loading={isLoading}
             pagination={{ pageSize: 50 }}
             size="small"

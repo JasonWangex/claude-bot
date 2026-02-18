@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams, Navigate } from 'react-router';
-import { Typography, Breadcrumb, Card, Descriptions, Spin, Space, Alert, Tabs } from 'antd';
+import { Typography, Breadcrumb, Card, Descriptions, Spin, Space, Alert, Tabs, Tag } from 'antd';
 import { BranchesOutlined, FolderOutlined, ClockCircleOutlined, RobotOutlined } from '@ant-design/icons';
 import { Link } from 'react-router';
 import { TaskTree } from '@/components/tasks/TaskTree';
@@ -8,32 +8,46 @@ import ConversationViewer from '@/components/sessions/ConversationViewer';
 import { useTask } from '@/lib/hooks/use-tasks';
 import { useTaskSessions, fetchSessionConversation } from '@/lib/hooks/use-sessions';
 import type { SessionEvent } from '@/lib/hooks/use-sessions';
-import { formatDistanceToNow } from '@/lib/format';
+import { formatDistanceToNow, formatDateTime } from '@/lib/format';
 
-const { Title } = Typography;
+const { Title, Text } = Typography;
+const MAX_LOADED_SESSIONS = 5;
 
 function SessionsTab({ channelId }: { channelId: string }) {
   const { data: sessions, isLoading: sessionsLoading } = useTaskSessions(channelId);
   const [conversationMap, setConversationMap] = useState<Map<string, SessionEvent[]>>(new Map());
   const [loading, setLoading] = useState(false);
 
+  // Sort sessions newest-first, split into recent (loaded) and older (links only)
+  const sortedSessions = useMemo(() => {
+    if (!sessions) return [];
+    return [...sessions].sort((a, b) => b.created_at - a.created_at);
+  }, [sessions]);
+
+  const recentSessions = sortedSessions.slice(0, MAX_LOADED_SESSIONS);
+  const olderSessions = sortedSessions.slice(MAX_LOADED_SESSIONS);
+
   useEffect(() => {
     if (!sessions || sessions.length === 0) return;
+
+    const sorted = [...sessions].sort((a, b) => b.created_at - a.created_at);
+    const recent = sorted.slice(0, MAX_LOADED_SESSIONS);
+    if (recent.length === 0) return;
 
     let cancelled = false;
     setLoading(true);
 
-    // Concurrency-limited fetch (max 3 parallel)
+    // Concurrency-limited fetch (max 3 parallel) — only recent sessions
     const results: [string, SessionEvent[]][] = [];
-    const queue = [...sessions];
+    const queue = [...recent];
     const workers = Array.from({ length: Math.min(3, queue.length) }, async () => {
       while (queue.length > 0) {
         const s = queue.shift()!;
         try {
-          const events = await fetchSessionConversation(s.id);
-          results.push([s.id, events]);
+          const events = await fetchSessionConversation(s.claude_session_id);
+          results.push([s.claude_session_id, events]);
         } catch {
-          results.push([s.id, []]);
+          results.push([s.claude_session_id, []]);
         }
       }
     });
@@ -64,10 +78,37 @@ function SessionsTab({ channelId }: { channelId: string }) {
   }
 
   return (
-    <ConversationViewer
-      sessions={sessions}
-      conversationMap={conversationMap}
-    />
+    <div>
+      <ConversationViewer
+        sessions={recentSessions}
+        conversationMap={conversationMap}
+      />
+      {olderSessions.length > 0 && (
+        <div style={{ marginTop: 16, padding: '12px 16px', background: '#fafafa', borderRadius: 8 }}>
+          <Text type="secondary" style={{ fontSize: 13, display: 'block', marginBottom: 8 }}>
+            更早的 {olderSessions.length} 个 Session
+          </Text>
+          {olderSessions.map(s => (
+            <div key={s.claude_session_id} style={{
+              padding: '6px 0',
+              borderBottom: '1px solid #f0f0f0',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+            }}>
+              <Link to={`/sessions/${s.claude_session_id}`}>
+                <Text code style={{ fontSize: 12 }}>{s.claude_session_id.slice(0, 8)}</Text>
+              </Link>
+              {s.model && <Text type="secondary" style={{ fontSize: 12 }}>{s.model}</Text>}
+              <Tag style={{ fontSize: 11 }}>{s.status}</Tag>
+              <Text type="secondary" style={{ fontSize: 11 }}>
+                {formatDateTime(s.created_at)}
+              </Text>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }
 

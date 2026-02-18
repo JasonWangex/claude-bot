@@ -3,8 +3,7 @@ import { apiFetch } from '@/lib/api';
 import { getToken, clearToken } from '@/lib/auth';
 
 export interface SessionSummary {
-  id: string;
-  claude_session_id: string | null;
+  claude_session_id: string;
   channel_id: string | null;
   channel_name: string | null;
   model: string | null;

@@ -80,8 +80,7 @@ export default function SessionDetail() {
   }
 
   const sessionForViewer: SessionSummary = session || {
-    id: sessionId,
-    claude_session_id: null,
+    claude_session_id: sessionId,
     channel_id: null,
     channel_name: null,
     model: null,
