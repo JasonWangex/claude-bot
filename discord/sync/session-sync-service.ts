@@ -1,22 +1,41 @@
 import type Database from 'better-sqlite3';
-import { readdirSync, statSync } from 'fs';
-import { join } from 'path';
+import { openSync, readSync, closeSync, readdirSync, statSync } from 'fs';
+import { join, basename, dirname } from 'path';
 import { randomUUID } from 'crypto';
 import { extractSessionMetadata } from './jsonl-metadata.js';
 import { ClaudeSessionRepository } from '../db/repo/claude-session-repo.js';
 import { SyncCursorRepository } from '../db/repo/sync-cursor-repo.js';
 import { ChannelRepository } from '../db/repo/channel-repo.js';
 import type { ClaudeSession } from '../types/index.js';
+import type { PromptConfigService } from '../services/prompt-config-service.js';
+import { chatCompletion } from '../utils/llm.js';
 import { logger } from '../utils/logger.js';
+import { resolveSessionContext, decodeProjectDirName } from './session-context.js';
 
 const SCAN_INTERVAL_MS = 60_000; // 60 seconds
 const CURSOR_SOURCE = 'claude_session_scan';
+const FIRST_MSG_BUFFER_SIZE = 32768; // 32KB — 第一条用户消息可能较远
+const FIRST_MSG_MAX_CHARS = 500;     // 截取前 500 字符给 LLM
+const TITLE_MAX_CHARS = 30;
+
+/**
+ * 从 JSONL 文件路径提取 Claude 项目路径
+ *
+ * 取 JSONL 所在目录名，用文件系统贪心解码还原为真实路径。
+ */
+function projectPathFromJsonl(jsonlPath: string): string {
+  const dirName = basename(dirname(jsonlPath));
+  return decodeProjectDirName(dirName);
+}
 
 export class SessionSyncService {
   private scanTimer: NodeJS.Timeout | null = null;
   private claudeSessionRepo: ClaudeSessionRepository;
   private syncCursorRepo: SyncCursorRepository;
   private channelRepo: ChannelRepository;
+  private promptService: PromptConfigService | null = null;
+  /** 序列化同一 claudeSessionId 的并发 syncSession 调用，避免重复 INSERT */
+  private syncSessionLocks: Map<string, Promise<void>> = new Map();
 
   constructor(
     private db: Database.Database,
@@ -25,6 +44,11 @@ export class SessionSyncService {
     this.claudeSessionRepo = new ClaudeSessionRepository(db);
     this.syncCursorRepo = new SyncCursorRepository(db);
     this.channelRepo = new ChannelRepository(db);
+  }
+
+  /** 注入 PromptConfigService（启动后调用） */
+  setPromptService(promptService: PromptConfigService): void {
+    this.promptService = promptService;
   }
 
   /** 启动定时扫描（60s 间隔） */
@@ -60,12 +84,28 @@ export class SessionSyncService {
 
   /** 实时同步单个会话（execute 回调调用） */
   async syncSession(claudeSessionId: string, channelId?: string, model?: string): Promise<void> {
+    // 序列化同一 session 的并发调用：等待上一次调用完成后再执行
+    const prev = this.syncSessionLocks.get(claudeSessionId) ?? Promise.resolve();
+    const current = prev.then(() => this._doSyncSession(claudeSessionId, channelId, model));
+    const guard = current.catch(() => {});
+    this.syncSessionLocks.set(claudeSessionId, guard);
+    // 完成后清理，避免 Map 无限增长
+    guard.then(() => {
+      if (this.syncSessionLocks.get(claudeSessionId) === guard) {
+        this.syncSessionLocks.delete(claudeSessionId);
+      }
+    });
+    return current;
+  }
+
+  private async _doSyncSession(claudeSessionId: string, channelId?: string, model?: string): Promise<void> {
     try {
       // 查询是否已有记录
       const existing = await this.claudeSessionRepo.findByClaudeSessionId(claudeSessionId);
 
       if (!existing) {
         // 创建新记录
+        const ctx = resolveSessionContext(this.db, channelId);
         const newSession: ClaudeSession = {
           id: randomUUID(),
           claudeSessionId,
@@ -75,6 +115,10 @@ export class SessionSyncService {
           status: 'active',
           createdAt: Date.now(),
           purpose: channelId ? 'channel' : 'temp',  // 有 channel 为 channel，否则为临时
+          taskId: ctx.taskId ?? undefined,
+          goalId: ctx.goalId ?? undefined,
+          cwd: ctx.cwd ?? undefined,
+          gitBranch: ctx.gitBranch ?? undefined,
         };
         await this.claudeSessionRepo.save(newSession);
         logger.info(`Claude session created: ${claudeSessionId.slice(0, 8)}... (channel: ${channelId || 'none'})`);
@@ -90,6 +134,18 @@ export class SessionSyncService {
         if (channelId && channelId !== existing.channelId) {
           existing.channelId = channelId;
           updated = true;
+        }
+
+        // 补充缺失的 context
+        if (!existing.taskId && channelId) {
+          const ctx = resolveSessionContext(this.db, channelId);
+          if (ctx.taskId) {
+            existing.taskId = ctx.taskId;
+            existing.goalId = ctx.goalId ?? undefined;
+            existing.cwd = existing.cwd ?? ctx.cwd ?? undefined;
+            existing.gitBranch = existing.gitBranch ?? ctx.gitBranch ?? undefined;
+            updated = true;
+          }
         }
 
         if (updated) {
@@ -147,6 +203,9 @@ export class SessionSyncService {
       this.syncCursorRepo.set(CURSOR_SOURCE, String(Date.now()));
 
       logger.info(`Full sync completed: ${stats.discovered} files, ${stats.created} created, ${stats.updated} updated`);
+
+      // 异步补充缺失的 title
+      void this.backfillTitles();
     } catch (e: any) {
       logger.error(`Full sync failed: ${e.message}`);
     }
@@ -203,6 +262,11 @@ export class SessionSyncService {
         return 'skipped';
       }
 
+      // 获取文件时间戳
+      const fileStat = statSync(jsonlPath);
+      const fileMtimeMs = Math.floor(fileStat.mtimeMs);
+      const fileBirthtimeMs = Math.floor(fileStat.birthtimeMs);
+
       const claudeSessionId = metadata.fileSessionId;
 
       // 查询是否已有记录
@@ -217,8 +281,16 @@ export class SessionSyncService {
         channelId = matchedChannel?.id;
       }
 
+      // created_at: 优先用事件时间戳，fallback 用文件 birthtime
+      const createdAt = metadata.timestamp
+        ? new Date(metadata.timestamp).getTime()
+        : fileBirthtimeMs;
+
+      const projectPath = projectPathFromJsonl(jsonlPath);
+
       if (!existingRow) {
         // 创建新记录
+        const ctx = resolveSessionContext(this.db, channelId);
         const newSession: ClaudeSession = {
           id: randomUUID(),
           claudeSessionId,
@@ -226,10 +298,20 @@ export class SessionSyncService {
           model: metadata.model,
           planMode: false,
           status: 'active',
-          createdAt: metadata.timestamp ? new Date(metadata.timestamp).getTime() : Date.now(),
+          createdAt,
+          lastActivityAt: fileMtimeMs,
           purpose: channelId ? 'channel' : 'temp',
+          taskId: ctx.taskId ?? undefined,
+          goalId: ctx.goalId ?? undefined,
+          cwd: metadata.cwd ?? ctx.cwd ?? undefined,
+          gitBranch: ctx.gitBranch ?? undefined,
+          projectPath,
         };
         this.claudeSessionRepo.save(newSession);
+
+        // 异步生成 title（不阻塞同步流程）
+        void this.generateAndSaveTitle(newSession.id, jsonlPath);
+
         return 'created';
       } else {
         // 检查是否需要更新
@@ -245,6 +327,12 @@ export class SessionSyncService {
           createdAt: existingRow.created_at,
           closedAt: existingRow.closed_at ?? undefined,
           parentSessionId: existingRow.parent_session_id ?? undefined,
+          lastActivityAt: existingRow.last_activity_at ?? undefined,
+          taskId: existingRow.task_id ?? undefined,
+          goalId: existingRow.goal_id ?? undefined,
+          cwd: existingRow.cwd ?? undefined,
+          gitBranch: existingRow.git_branch ?? undefined,
+          projectPath: existingRow.project_path ?? projectPath,
         };
 
         if (metadata.model && metadata.model !== existing.model) {
@@ -254,6 +342,42 @@ export class SessionSyncService {
 
         if (channelId && channelId !== existing.channelId) {
           existing.channelId = channelId;
+          updated = true;
+        }
+
+        // 更新 lastActivityAt（文件 mtime 可能比 DB 记录更新）
+        if (!existing.lastActivityAt || fileMtimeMs > existing.lastActivityAt) {
+          existing.lastActivityAt = fileMtimeMs;
+          updated = true;
+        }
+
+        // 修正错误的 createdAt（导入时用了 Date.now() 的历史数据）
+        if (createdAt < existing.createdAt) {
+          existing.createdAt = createdAt;
+          updated = true;
+        }
+
+        // 补充缺失的 context
+        if (!existing.taskId && (channelId || existing.channelId)) {
+          const ctx = resolveSessionContext(this.db, channelId || existing.channelId);
+          if (ctx.taskId) {
+            existing.taskId = ctx.taskId;
+            existing.goalId = ctx.goalId ?? undefined;
+            updated = true;
+          }
+          if (!existing.cwd && ctx.cwd) {
+            existing.cwd = metadata.cwd ?? ctx.cwd ?? undefined;
+            updated = true;
+          }
+          if (!existing.gitBranch && ctx.gitBranch) {
+            existing.gitBranch = ctx.gitBranch ?? undefined;
+            updated = true;
+          }
+        }
+
+        // 补充缺失的 project_path
+        if (!existingRow.project_path && projectPath) {
+          existing.projectPath = projectPath;
           updated = true;
         }
 
@@ -269,6 +393,177 @@ export class SessionSyncService {
       return 'skipped';
     }
   }
+
+  // ==================== Title 生成 ====================
+
+  /**
+   * 从 JSONL 文件提取第一条用户消息文本
+   *
+   * 读取前 32KB，找第一个 type='user' 且非 tool_result 的事件。
+   */
+  extractFirstUserMessage(jsonlPath: string): string | null {
+    let fd: number | null = null;
+    try {
+      fd = openSync(jsonlPath, 'r');
+      const buffer = Buffer.alloc(FIRST_MSG_BUFFER_SIZE);
+      const bytesRead = readSync(fd, buffer, 0, FIRST_MSG_BUFFER_SIZE, 0);
+      if (bytesRead === 0) return null;
+
+      const content = buffer.toString('utf8', 0, bytesRead);
+      const lines = content.split('\n');
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        try {
+          const event = JSON.parse(trimmed);
+
+          // 跳过非 user 事件
+          if (event.type !== 'user') continue;
+
+          // 排除 tool_result（内部消息）
+          if (event.parent_tool_use_id || event.userType === 'internal') continue;
+
+          // 提取文本内容
+          const msgContent = event.message?.content;
+          if (!msgContent) continue;
+
+          let text: string | null = null;
+
+          if (typeof msgContent === 'string') {
+            text = msgContent;
+          } else if (Array.isArray(msgContent)) {
+            // 找第一个 text block
+            for (const block of msgContent) {
+              if (block.type === 'text' && block.text) {
+                text = block.text;
+                break;
+              }
+            }
+          }
+
+          if (text && text.trim()) {
+            const trimmed = text.trim();
+            // 跳过系统注入的消息（local-command-caveat 等）
+            if (trimmed.startsWith('<local-command-caveat>') || trimmed.startsWith('<system-reminder>')) {
+              continue;
+            }
+            return trimmed.slice(0, FIRST_MSG_MAX_CHARS);
+          }
+        } catch {
+          continue;
+        }
+      }
+      return null;
+    } catch {
+      return null;
+    } finally {
+      if (fd !== null) {
+        try { closeSync(fd); } catch { /* ignore */ }
+      }
+    }
+  }
+
+  /**
+   * 用 LLM 生成 session title
+   *
+   * @returns 生成的 title，失败时用消息前 30 字符作 fallback
+   */
+  async generateSessionTitle(jsonlPath: string): Promise<string | null> {
+    const firstMessage = this.extractFirstUserMessage(jsonlPath);
+    if (!firstMessage) return null;
+
+    // 尝试用 PromptConfigService 渲染 prompt
+    let prompt: string;
+    if (this.promptService) {
+      const rendered = this.promptService.tryRender('session.title_generate', {
+        FIRST_MESSAGE: firstMessage,
+      });
+      prompt = rendered ?? `根据以下用户消息生成一个简短的中文标题（≤30字），只输出标题：\n${firstMessage}`;
+    } else {
+      prompt = `根据以下用户消息生成一个简短的中文标题（≤30字），只输出标题：\n${firstMessage}`;
+    }
+
+    const result = await chatCompletion(prompt);
+    if (result) {
+      return result.slice(0, TITLE_MAX_CHARS);
+    }
+
+    // fallback: 截取消息前 30 字符
+    return firstMessage.slice(0, TITLE_MAX_CHARS);
+  }
+
+  /** 生成 title 并保存到数据库 */
+  private async generateAndSaveTitle(sessionId: string, jsonlPath: string): Promise<void> {
+    try {
+      const title = await this.generateSessionTitle(jsonlPath);
+      if (!title) return;
+
+      // 直接 SQL 更新 title（避免覆盖其他字段）
+      this.db.prepare('UPDATE claude_sessions SET title = ? WHERE id = ?').run(title, sessionId);
+      logger.debug(`Session title generated: "${title}" (${sessionId.slice(0, 8)}...)`);
+    } catch (e: any) {
+      logger.warn(`Failed to generate title for ${sessionId}: ${e.message}`);
+    }
+  }
+
+  /** 批量补充缺失的 title */
+  async backfillTitles(): Promise<void> {
+    if (!this.promptService) {
+      logger.debug('PromptService not available, skipping title backfill');
+      return;
+    }
+
+    try {
+      const rows = this.db.prepare(
+        'SELECT id, claude_session_id FROM claude_sessions WHERE title IS NULL AND claude_session_id IS NOT NULL',
+      ).all() as Array<{ id: string; claude_session_id: string }>;
+
+      if (rows.length === 0) return;
+
+      logger.info(`Backfilling titles for ${rows.length} sessions...`);
+      let filled = 0;
+
+      for (const row of rows) {
+        // 在所有项目目录中查找对应的 JSONL 文件
+        const jsonlPath = this.findJsonlFile(row.claude_session_id);
+        if (!jsonlPath) continue;
+
+        const title = await this.generateSessionTitle(jsonlPath);
+        if (title) {
+          this.db.prepare('UPDATE claude_sessions SET title = ? WHERE id = ?').run(title, row.id);
+          filled++;
+        }
+
+        // 间隔 200ms 避免 rate limit
+        await new Promise(resolve => setTimeout(resolve, 200));
+      }
+
+      if (filled > 0) {
+        logger.info(`Title backfill completed: ${filled}/${rows.length} sessions`);
+      }
+    } catch (e: any) {
+      logger.warn(`Title backfill failed: ${e.message}`);
+    }
+  }
+
+  /** 在项目目录中查找指定 session ID 的 JSONL 文件 */
+  private findJsonlFile(claudeSessionId: string): string | null {
+    const projectDirs = this.listProjectDirs();
+    for (const dir of projectDirs) {
+      const filePath = join(dir, `${claudeSessionId}.jsonl`);
+      try {
+        if (statSync(filePath).isFile()) {
+          return filePath;
+        }
+      } catch {
+        continue;
+      }
+    }
+    return null;
+  }
+
+  // ==================== 文件系统工具 ====================
 
   /** 列出所有项目目录 */
   private listProjectDirs(): string[] {

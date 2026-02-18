@@ -87,9 +87,19 @@ export default function SessionDetail() {
     model: null,
     status: 'unknown',
     purpose: null,
+    title: null,
     created_at: 0,
     closed_at: null,
     last_activity_at: null,
+    task_id: null,
+    goal_id: null,
+    task_description: null,
+    pipeline_phase: null,
+    goal_name: null,
+    goal_project: null,
+    cwd: null,
+    git_branch: null,
+    project_path: null,
   };
 
   const conversationMap = new Map<string, SessionEvent[]>();
@@ -117,9 +127,28 @@ export default function SessionDetail() {
                 {session.model}
               </Descriptions.Item>
             )}
+            {session.goal_name && (
+              <Descriptions.Item label="Goal">
+                {session.goal_project && <Tag>{session.goal_project}</Tag>}
+                {session.goal_name}
+              </Descriptions.Item>
+            )}
             {session.channel_name && (
               <Descriptions.Item label="Task">
                 <Link to={`/tasks/${session.channel_id}`}>{session.channel_name}</Link>
+                {session.pipeline_phase && (
+                  <Tag style={{ marginLeft: 8 }}>{session.pipeline_phase}</Tag>
+                )}
+              </Descriptions.Item>
+            )}
+            {(session.project_path || session.cwd) && (
+              <Descriptions.Item label="项目路径">
+                <Text copyable style={{ fontSize: 12 }}>{session.project_path || session.cwd}</Text>
+              </Descriptions.Item>
+            )}
+            {session.git_branch && (
+              <Descriptions.Item label="Branch">
+                <Tag>{session.git_branch}</Tag>
               </Descriptions.Item>
             )}
             <Descriptions.Item label={<><ClockCircleOutlined /> 创建时间</>}>

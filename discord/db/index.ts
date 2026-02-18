@@ -14,9 +14,17 @@ import type { Migration } from './migrate.js';
 
 // Migration 注册表 — 新增 migration 只需在此追加导入
 import migration001 from './migrations/001_create_schema.js';
+import migration002 from './migrations/002_add_session_title.js';
+import migration003 from './migrations/003_add_session_context.js';
+import migration004 from './migrations/004_add_session_project_path.js';
+import migration005 from './migrations/005_unique_claude_session_id.js';
 
 const allMigrations: Migration[] = [
   migration001,
+  migration002,
+  migration003,
+  migration004,
+  migration005,
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

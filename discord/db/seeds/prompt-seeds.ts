@@ -78,6 +78,25 @@ export function seedPromptConfigs(db: Database.Database): void {
   }
 
   // ================================================================
+  // Session 层 — LLM 辅助功能
+  // ================================================================
+
+  entries.push({
+    key: 'session.title_generate',
+    category: 'skill',
+    name: 'Session 标题生成',
+    description: '根据用户第一条消息自动生成会话标题',
+    template: `根据用户发送给 AI 编程助手的第一条消息，生成一个简短的中文标题（≤30字）。
+标题应概括用户的意图或要做的事情。只输出标题，不要任何其他内容。
+
+用户消息：
+{{FIRST_MESSAGE}}`,
+    variables: ['FIRST_MESSAGE'],
+    parentKey: null,
+    sortOrder: 0,
+  });
+
+  // ================================================================
   // Orchestrator 层 — 内联模板
   // ================================================================
 

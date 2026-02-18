@@ -76,7 +76,7 @@ export class DiscordBot {
     const syncCursorRepo = new SyncCursorRepository(db);
 
     this.channelService = new ChannelService(channelRepo, claudeSessionRepo, syncCursorRepo);
-    this.stateManager = new StateManager(config.defaultWorkDir, sessionRepo, guildRepo, channelRepo, claudeSessionRepo);
+    this.stateManager = new StateManager(config.defaultWorkDir, sessionRepo, guildRepo, channelRepo, claudeSessionRepo, db);
     this.interactionRegistry = new InteractionRegistry();
     this.claudeClient = new ClaudeClient(
       config.claudeCliPath,
@@ -91,6 +91,7 @@ export class DiscordBot {
     // 初始化 SessionSyncService
     const claudeProjectsDir = join(process.env.HOME || '/tmp', '.claude', 'projects');
     this.sessionSyncService = new SessionSyncService(db, claudeProjectsDir);
+    this.sessionSyncService.setPromptService(promptService);
 
     // 注入 executor 回调
     this.claudeClient.setSessionSyncCallback((sessionId, channelId, model) => {

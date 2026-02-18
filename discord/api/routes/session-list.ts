@@ -1,14 +1,38 @@
 /**
  * Session List API
  *
- * GET /api/sessions           — 列出所有 claude sessions（支持分页和状态过滤）
- * GET /api/sessions/:id/meta  — 获取单个 session 元数据
+ * GET /api/sessions           — 列出所有 claude sessions（支持分页、状态和 goal 过滤）
+ * GET /api/sessions/:id/meta  — 获取单个 session 元数据（含 context）
  */
 
 import type { RouteHandler } from '../types.js';
 import { sendJson, requireAuth } from '../middleware.js';
-import { ClaudeSessionRepository } from '../../db/repo/claude-session-repo.js';
-import { ChannelRepository } from '../../db/repo/channel-repo.js';
+
+// JOIN 查询结果行类型
+interface SessionListRow {
+  id: string;
+  claude_session_id: string | null;
+  channel_id: string | null;
+  model: string | null;
+  plan_mode: number;
+  status: string;
+  purpose: string | null;
+  title: string | null;
+  created_at: number;
+  closed_at: number | null;
+  last_activity_at: number | null;
+  task_id: string | null;
+  goal_id: string | null;
+  cwd: string | null;
+  git_branch: string | null;
+  project_path: string | null;
+  // JOIN 字段
+  channel_name: string | null;
+  task_description: string | null;
+  pipeline_phase: string | null;
+  goal_name: string | null;
+  goal_project: string | null;
+}
 
 export const listSessions: RouteHandler = async (req, res, _params, deps) => {
   const guildId = requireAuth(res);
@@ -16,48 +40,78 @@ export const listSessions: RouteHandler = async (req, res, _params, deps) => {
 
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
   const statusFilter = url.searchParams.get('status') || 'all';
-  const limit = Math.min(parseInt(url.searchParams.get('limit') || '50', 10) || 50, 200);
+  const goalIdFilter = url.searchParams.get('goal_id') || null;
+  const limit = Math.min(parseInt(url.searchParams.get('limit') || '50', 10) || 50, 2000);
   const offset = parseInt(url.searchParams.get('offset') || '0', 10) || 0;
 
-  const sessionRepo = new ClaudeSessionRepository(deps.db);
-  const channelRepo = new ChannelRepository(deps.db);
+  // 构建动态 WHERE 子句
+  const conditions: string[] = [];
+  const params: unknown[] = [];
 
-  // Load all sessions and filter/paginate in memory
-  // (claude_sessions table is typically not huge)
-  let allSessions = sessionRepo.loadAll();
-
-  // Sort by created_at DESC
-  allSessions.sort((a, b) => b.createdAt - a.createdAt);
-
-  // Filter by status
   if (statusFilter === 'active') {
-    allSessions = allSessions.filter(s => s.status === 'active');
+    conditions.push('cs.status = ?');
+    params.push('active');
   } else if (statusFilter === 'closed') {
-    allSessions = allSessions.filter(s => s.status === 'closed');
+    conditions.push('cs.status = ?');
+    params.push('closed');
   }
 
-  const total = allSessions.length;
-  const paginated = allSessions.slice(offset, offset + limit);
-
-  // Build channel name map for the sessions in this page
-  const channelIds = [...new Set(paginated.map(s => s.channelId).filter(Boolean))] as string[];
-  const channelNameMap = new Map<string, string>();
-  for (const cid of channelIds) {
-    const ch = await channelRepo.get(cid);
-    if (ch) channelNameMap.set(cid, ch.name);
+  if (goalIdFilter) {
+    conditions.push('cs.goal_id = ?');
+    params.push(goalIdFilter);
   }
 
-  const data = paginated.map(s => ({
-    id: s.id,
-    claude_session_id: s.claudeSessionId || null,
-    channel_id: s.channelId || null,
-    channel_name: (s.channelId && channelNameMap.get(s.channelId)) || null,
-    model: s.model || null,
-    status: s.status,
-    purpose: s.purpose || null,
-    created_at: s.createdAt,
-    closed_at: s.closedAt || null,
-    last_activity_at: s.lastActivityAt || null,
+  const whereClause = conditions.length > 0
+    ? 'WHERE ' + conditions.join(' AND ')
+    : '';
+
+  // COUNT 查询
+  const countSql = `SELECT COUNT(*) as total FROM claude_sessions cs ${whereClause}`;
+  const countRow = deps.db.prepare(countSql).get(...params) as { total: number };
+  const total = countRow.total;
+
+  // 数据查询（JOIN task/goal/channel）
+  const dataSql = `
+    SELECT cs.id, cs.claude_session_id, cs.channel_id, cs.model, cs.plan_mode,
+           cs.status, cs.purpose, cs.title, cs.created_at, cs.closed_at,
+           cs.last_activity_at, cs.task_id, cs.goal_id, cs.cwd, cs.git_branch, cs.project_path,
+           ch.name AS channel_name,
+           t.description AS task_description,
+           t.pipeline_phase,
+           g.name AS goal_name,
+           g.project AS goal_project
+    FROM claude_sessions cs
+    LEFT JOIN channels ch ON cs.channel_id = ch.id
+    LEFT JOIN tasks t ON cs.task_id = t.id
+    LEFT JOIN goals g ON cs.goal_id = g.id
+    ${whereClause}
+    ORDER BY COALESCE(cs.last_activity_at, cs.created_at) DESC
+    LIMIT ? OFFSET ?
+  `;
+
+  const rows = deps.db.prepare(dataSql).all(...params, limit, offset) as SessionListRow[];
+
+  const data = rows.map(r => ({
+    id: r.id,
+    claude_session_id: r.claude_session_id,
+    channel_id: r.channel_id,
+    channel_name: r.channel_name,
+    model: r.model,
+    status: r.status,
+    purpose: r.purpose,
+    title: r.title,
+    created_at: r.created_at,
+    closed_at: r.closed_at,
+    last_activity_at: r.last_activity_at,
+    task_id: r.task_id,
+    goal_id: r.goal_id,
+    task_description: r.task_description,
+    pipeline_phase: r.pipeline_phase,
+    goal_name: r.goal_name,
+    goal_project: r.goal_project,
+    cwd: r.cwd,
+    git_branch: r.git_branch,
+    project_path: r.project_path,
   }));
 
   sendJson(res, 200, { ok: true, data, total, limit, offset });
@@ -74,34 +128,51 @@ export const getSessionMeta: RouteHandler = async (_req, res, params, deps) => {
     return;
   }
 
-  const sessionRepo = new ClaudeSessionRepository(deps.db);
-  const channelRepo = new ChannelRepository(deps.db);
+  const sql = `
+    SELECT cs.id, cs.claude_session_id, cs.channel_id, cs.model, cs.plan_mode,
+           cs.status, cs.purpose, cs.title, cs.created_at, cs.closed_at,
+           cs.last_activity_at, cs.task_id, cs.goal_id, cs.cwd, cs.git_branch, cs.project_path,
+           ch.name AS channel_name,
+           t.description AS task_description,
+           t.pipeline_phase,
+           g.name AS goal_name,
+           g.project AS goal_project
+    FROM claude_sessions cs
+    LEFT JOIN channels ch ON cs.channel_id = ch.id
+    LEFT JOIN tasks t ON cs.task_id = t.id
+    LEFT JOIN goals g ON cs.goal_id = g.id
+    WHERE cs.id = ?
+  `;
 
-  const session = await sessionRepo.get(sessionId);
-  if (!session) {
+  const row = deps.db.prepare(sql).get(sessionId) as SessionListRow | undefined;
+  if (!row) {
     sendJson(res, 404, { ok: false, error: 'Session not found' });
     return;
-  }
-
-  let channelName: string | null = null;
-  if (session.channelId) {
-    const ch = await channelRepo.get(session.channelId);
-    if (ch) channelName = ch.name;
   }
 
   sendJson(res, 200, {
     ok: true,
     data: {
-      id: session.id,
-      claude_session_id: session.claudeSessionId || null,
-      channel_id: session.channelId || null,
-      channel_name: channelName,
-      model: session.model || null,
-      status: session.status,
-      purpose: session.purpose || null,
-      created_at: session.createdAt,
-      closed_at: session.closedAt || null,
-      last_activity_at: session.lastActivityAt || null,
+      id: row.id,
+      claude_session_id: row.claude_session_id,
+      channel_id: row.channel_id,
+      channel_name: row.channel_name,
+      model: row.model,
+      status: row.status,
+      purpose: row.purpose,
+      title: row.title,
+      created_at: row.created_at,
+      closed_at: row.closed_at,
+      last_activity_at: row.last_activity_at,
+      task_id: row.task_id,
+      goal_id: row.goal_id,
+      task_description: row.task_description,
+      pipeline_phase: row.pipeline_phase,
+      goal_name: row.goal_name,
+      goal_project: row.goal_project,
+      cwd: row.cwd,
+      git_branch: row.git_branch,
+      project_path: row.project_path,
     },
   });
 };

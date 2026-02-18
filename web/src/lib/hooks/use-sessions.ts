@@ -10,9 +10,19 @@ export interface SessionSummary {
   model: string | null;
   status: string;
   purpose: string | null;
+  title: string | null;
   created_at: number;
   closed_at: number | null;
   last_activity_at: number | null;
+  task_id: string | null;
+  goal_id: string | null;
+  task_description: string | null;
+  pipeline_phase: string | null;
+  goal_name: string | null;
+  goal_project: string | null;
+  cwd: string | null;
+  git_branch: string | null;
+  project_path: string | null;
 }
 
 // ========== JSONL Event Types (matching Claude Code format) ==========
@@ -87,9 +97,10 @@ export function useTaskSessions(channelId: string | null) {
   );
 }
 
-export function useSessions(status?: 'active' | 'closed' | 'all', limit = 50, offset = 0) {
+export function useSessions(status?: 'active' | 'closed' | 'all', limit = 1000, offset = 0, goalId?: string) {
   const query = new URLSearchParams();
   if (status && status !== 'all') query.set('status', status);
+  if (goalId) query.set('goal_id', goalId);
   query.set('limit', String(limit));
   query.set('offset', String(offset));
   const qs = query.toString();

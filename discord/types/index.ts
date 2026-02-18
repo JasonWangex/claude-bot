@@ -456,4 +456,10 @@ export interface ClaudeSession {
   lastActivityAt?: number;   // 最后活动时间（用于超时监控）
   lastUsageJson?: string;    // 最后一次 token/cost 数据（JSON string）
   lastStopAt?: number;       // 最后一次 Stop 事件时间（幂等窗口）
+  title?: string;            // LLM 自动生成的标题
+  taskId?: string;           // 关联 Task ID
+  goalId?: string;           // 关联 Goal ID
+  cwd?: string;              // 工作目录
+  gitBranch?: string;        // Git 分支
+  projectPath?: string;      // Claude 项目路径（从 JSONL 文件目录还原）
 }

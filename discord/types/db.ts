@@ -365,6 +365,12 @@ export interface ClaudeSessionRow {
   last_activity_at: number | null;   // 最后活动时间
   last_usage_json: string | null;    // 最后一次 token/cost 数据（JSON）
   last_stop_at: number | null;       // 最后一次 Stop 事件时间（幂等窗口）
+  title: string | null;              // LLM 自动生成的标题
+  task_id: string | null;            // 关联 Task ID
+  goal_id: string | null;            // 关联 Goal ID
+  cwd: string | null;                // 工作目录
+  git_branch: string | null;         // Git 分支
+  project_path: string | null;       // Claude 项目路径（从 JSONL 文件目录还原）
 }
 
 // ================================================================

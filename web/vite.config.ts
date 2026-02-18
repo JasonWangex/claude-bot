@@ -15,6 +15,11 @@ export default defineConfig({
       '/api': 'http://localhost:3456',
     },
   },
+  preview: {
+    proxy: {
+      '/api': 'http://localhost:3456',
+    },
+  },
   build: {
     chunkSizeWarningLimit: 800,
     rollupOptions: {
