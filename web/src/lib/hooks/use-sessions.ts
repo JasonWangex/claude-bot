@@ -7,6 +7,7 @@ export interface SessionSummary {
   claude_session_id: string | null;
   channel_id: string | null;
   channel_name: string | null;
+  title: string | null;
   model: string | null;
   status: string;
   purpose: string | null;

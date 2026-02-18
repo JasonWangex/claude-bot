@@ -99,11 +99,11 @@ export default function SessionDetail() {
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
       <Breadcrumb items={[
         { title: <Link to="/sessions">Sessions</Link> },
-        { title: `Session ${sessionId.slice(0, 8)}...` },
+        { title: session?.title || session?.channel_name || `Session ${sessionId.slice(0, 8)}...` },
       ]} />
 
       <Title level={3} style={{ margin: 0 }}>
-        Session {sessionId.slice(0, 8)}...
+        {session?.title || session?.channel_name || `Session ${sessionId.slice(0, 8)}...`}
       </Title>
 
       {session && (

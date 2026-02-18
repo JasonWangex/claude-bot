@@ -8,6 +8,7 @@ import { SyncCursorRepository } from '../db/repo/sync-cursor-repo.js';
 import { ChannelRepository } from '../db/repo/channel-repo.js';
 import type { ClaudeSession } from '../types/index.js';
 import { logger } from '../utils/logger.js';
+import { generateSessionTitle } from '../utils/llm.js';
 
 const SCAN_INTERVAL_MS = 60_000; // 60 seconds
 const CURSOR_SOURCE = 'claude_session_scan';
@@ -17,6 +18,10 @@ export class SessionSyncService {
   private claudeSessionRepo: ClaudeSessionRepository;
   private syncCursorRepo: SyncCursorRepository;
   private channelRepo: ChannelRepository;
+
+  /** 待 LLM 生成 title 的队列 */
+  private pendingTitles: Array<{ sessionId: string; firstUserMessage: string }> = [];
+  private titleGenerationRunning = false;
 
   constructor(
     private db: Database.Database,
@@ -147,6 +152,9 @@ export class SessionSyncService {
       this.syncCursorRepo.set(CURSOR_SOURCE, String(Date.now()));
 
       logger.info(`Full sync completed: ${stats.discovered} files, ${stats.created} created, ${stats.updated} updated`);
+
+      // 异步生成缺失的 title（fire-and-forget）
+      this.processPendingTitles();
     } catch (e: any) {
       logger.error(`Full sync failed: ${e.message}`);
     }
@@ -189,6 +197,9 @@ export class SessionSyncService {
       if (processedCount > 0) {
         logger.info(`Incremental scan: ${processedCount} files processed`);
       }
+
+      // 异步生成缺失的 title（fire-and-forget）
+      this.processPendingTitles();
     } catch (e: any) {
       logger.error(`Scan failed: ${e.message}`);
     }
@@ -219,8 +230,9 @@ export class SessionSyncService {
 
       if (!existingRow) {
         // 创建新记录
+        const id = randomUUID();
         const newSession: ClaudeSession = {
-          id: randomUUID(),
+          id,
           claudeSessionId,
           channelId,
           model: metadata.model,
@@ -230,6 +242,11 @@ export class SessionSyncService {
           purpose: channelId ? 'channel' : 'temp',
         };
         this.claudeSessionRepo.save(newSession);
+
+        // 收集到待生成 title 队列
+        if (metadata.firstUserMessage) {
+          this.pendingTitles.push({ sessionId: id, firstUserMessage: metadata.firstUserMessage });
+        }
         return 'created';
       } else {
         // 检查是否需要更新
@@ -245,6 +262,7 @@ export class SessionSyncService {
           createdAt: existingRow.created_at,
           closedAt: existingRow.closed_at ?? undefined,
           parentSessionId: existingRow.parent_session_id ?? undefined,
+          title: existingRow.title ?? undefined,
         };
 
         if (metadata.model && metadata.model !== existing.model) {
@@ -259,10 +277,14 @@ export class SessionSyncService {
 
         if (updated) {
           this.claudeSessionRepo.save(existing);
-          return 'updated';
         }
 
-        return 'skipped';
+        // 补填缺失的 title
+        if (!existing.title && metadata.firstUserMessage) {
+          this.pendingTitles.push({ sessionId: existing.id, firstUserMessage: metadata.firstUserMessage });
+        }
+
+        return updated ? 'updated' : 'skipped';
       }
     } catch (e: any) {
       logger.warn(`Failed to process ${jsonlPath}: ${e.message}`);
@@ -323,6 +345,35 @@ export class SessionSyncService {
     } catch (e: any) {
       logger.warn(`Failed to list JSONL files in ${projectDir}: ${e.message}`);
       return [];
+    }
+  }
+
+  /** 异步批量生成缺失的 session title（通过 LLM） */
+  private async processPendingTitles(): Promise<void> {
+    if (this.titleGenerationRunning || this.pendingTitles.length === 0) return;
+
+    this.titleGenerationRunning = true;
+    const batch = this.pendingTitles.splice(0);
+    let generated = 0;
+
+    try {
+      for (const { sessionId, firstUserMessage } of batch) {
+        try {
+          const title = await generateSessionTitle(firstUserMessage);
+          // 直接用 SQL 更新 title（仅当 title 为 null 时）
+          this.db.prepare(
+            `UPDATE claude_sessions SET title = ? WHERE id = ? AND title IS NULL`,
+          ).run(title, sessionId);
+          generated++;
+        } catch (e: any) {
+          logger.warn(`Failed to generate title for session ${sessionId}: ${e.message}`);
+        }
+      }
+      if (generated > 0) {
+        logger.info(`Generated ${generated} session titles`);
+      }
+    } finally {
+      this.titleGenerationRunning = false;
     }
   }
 }

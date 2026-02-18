@@ -28,6 +28,7 @@ function rowToClaudeSession(row: ClaudeSessionRow): ClaudeSession {
     lastActivityAt: row.last_activity_at ?? undefined,
     lastUsageJson: row.last_usage_json ?? undefined,
     lastStopAt: row.last_stop_at ?? undefined,
+    title: row.title ?? undefined,
   };
 }
 
@@ -47,6 +48,7 @@ function claudeSessionToParams(session: ClaudeSession): Record<string, unknown> 
     last_activity_at: session.lastActivityAt ?? null,
     last_usage_json: session.lastUsageJson ?? null,
     last_stop_at: session.lastStopAt ?? null,
+    title: session.title ?? null,
   };
 }
 
@@ -91,11 +93,11 @@ export class ClaudeSessionRepository implements IClaudeSessionRepo {
         INSERT INTO claude_sessions (
           id, claude_session_id, prev_claude_session_id,
           channel_id, model, plan_mode, status, created_at, closed_at,
-          purpose, parent_session_id, last_activity_at, last_usage_json, last_stop_at
+          purpose, parent_session_id, last_activity_at, last_usage_json, last_stop_at, title
         ) VALUES (
           @id, @claude_session_id, @prev_claude_session_id,
           @channel_id, @model, @plan_mode, @status, @created_at, @closed_at,
-          @purpose, @parent_session_id, @last_activity_at, @last_usage_json, @last_stop_at
+          @purpose, @parent_session_id, @last_activity_at, @last_usage_json, @last_stop_at, @title
         )
         ON CONFLICT(id) DO UPDATE SET
           claude_session_id = @claude_session_id,
@@ -109,7 +111,8 @@ export class ClaudeSessionRepository implements IClaudeSessionRepo {
           parent_session_id = @parent_session_id,
           last_activity_at = @last_activity_at,
           last_usage_json = @last_usage_json,
-          last_stop_at = @last_stop_at
+          last_stop_at = @last_stop_at,
+          title = COALESCE(@title, title)
       `),
 
       close: this.db.prepare(`

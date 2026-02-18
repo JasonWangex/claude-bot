@@ -365,6 +365,7 @@ export interface ClaudeSessionRow {
   last_activity_at: number | null;   // 最后活动时间
   last_usage_json: string | null;    // 最后一次 token/cost 数据（JSON）
   last_stop_at: number | null;       // 最后一次 Stop 事件时间（幂等窗口）
+  title: string | null;              // 会话标题（从第一条 user message 生成）
 }
 
 // ================================================================

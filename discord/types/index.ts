@@ -456,4 +456,5 @@ export interface ClaudeSession {
   lastActivityAt?: number;   // 最后活动时间（用于超时监控）
   lastUsageJson?: string;    // 最后一次 token/cost 数据（JSON string）
   lastStopAt?: number;       // 最后一次 Stop 事件时间（幂等窗口）
+  title?: string;            // 会话标题（从第一条 user message 生成）
 }

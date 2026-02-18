@@ -27,6 +27,17 @@ function formatDuration(createdAt: number, closedAt: number | null): string {
 
 const columns = [
   {
+    title: 'Title',
+    key: 'title',
+    ellipsis: true,
+    render: (_: unknown, record: SessionSummary) => {
+      const displayTitle = record.title || record.channel_name;
+      return displayTitle
+        ? <Link to={`/sessions/${record.id}`}>{displayTitle}</Link>
+        : <Link to={`/sessions/${record.id}`}><Text type="secondary">{record.id.slice(0, 8)}...</Text></Link>;
+    },
+  },
+  {
     title: 'Model',
     dataIndex: 'model',
     key: 'model',

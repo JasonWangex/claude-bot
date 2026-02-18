@@ -221,8 +221,8 @@ export class StateManager {
       };
       this.channelRepo.save(channel);
 
-      // 写入 claude_sessions 表（如果有 claudeSessionId）
-      if (session.claudeSessionId || session.id) {
+      // 写入 claude_sessions 表（仅当 claudeSessionId 存在时，避免空壳记录）
+      if (session.claudeSessionId) {
         const claudeSession: ClaudeSession = {
           id: session.id,
           claudeSessionId: session.claudeSessionId,

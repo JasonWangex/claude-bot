@@ -88,3 +88,41 @@ export async function generateTopicTitle(description: string): Promise<string> {
   );
   return result?.slice(0, 20) || fallback;
 }
+
+/**
+ * 从会话的第一条用户消息生成 session title
+ *
+ * 格式: [type] 简短中文描述
+ * type: fix / feat / chat / explore / plan / refactor / debug / docs / config
+ *
+ * 失败时 fallback 为截取消息前 40 字符
+ */
+export async function generateSessionTitle(firstUserMessage: string): Promise<string> {
+  const fallback = `[chat] ${firstUserMessage.replace(/^#\s+/, '').slice(0, 40)}`;
+  const result = await chatCompletion(
+    `根据以下用户消息，生成一个简短的会话标题。
+
+格式要求：[type] 简短中文描述（描述部分不超过20字）
+type 必须是以下之一：fix, feat, chat, explore, plan, refactor, debug, docs, config
+- fix: 修复bug
+- feat: 新功能开发
+- chat: 普通对话/问答
+- explore: 代码探索/调研
+- plan: 规划/设计
+- refactor: 重构
+- debug: 调试排查
+- docs: 文档相关
+- config: 配置/环境相关
+
+只输出标题，不要任何其他内容。
+
+用户消息:
+${firstUserMessage.slice(0, 500)}`,
+  );
+  if (result) {
+    // 验证格式 [type] xxx
+    const match = result.match(/^\[(\w+)\]\s+(.+)/);
+    if (match) return result.slice(0, 50);
+  }
+  return fallback;
+}
