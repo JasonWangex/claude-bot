@@ -343,6 +343,7 @@ async function handleSessionEnd(
 
     try {
       const tasks = await taskRepo.findByChannelId(channelId);
+      if (!tasks) return;
       for (const task of tasks.filter((t: any) => t.status === 'running')) {
         logger.warn(`[Hook] Marking task ${task.id} as failed due to session termination`);
         await deps.orchestrator.onTaskFailed(
@@ -374,6 +375,7 @@ async function checkGoalTaskCompletion(
 
   try {
     const tasks = await taskRepo.findByChannelId(channelId);
+    if (!tasks) return;
     const runningTask = tasks.find((t: any) => t.status === 'running' && t.goalId);
 
     if (!runningTask) {

@@ -9,6 +9,7 @@ import type Database from 'better-sqlite3';
 import type { IClaudeSessionRepo } from '../../types/repository.js';
 import type { ClaudeSession } from '../../types/index.js';
 import type { ClaudeSessionRow } from '../../types/db.js';
+import { logger } from '../../utils/logger.js';
 
 // ==================== 转换函数 ====================
 
@@ -28,6 +29,12 @@ function rowToClaudeSession(row: ClaudeSessionRow): ClaudeSession {
     lastActivityAt: row.last_activity_at ?? undefined,
     lastUsageJson: row.last_usage_json ?? undefined,
     lastStopAt: row.last_stop_at ?? undefined,
+    title: row.title ?? undefined,
+    taskId: row.task_id ?? undefined,
+    goalId: row.goal_id ?? undefined,
+    cwd: row.cwd ?? undefined,
+    gitBranch: row.git_branch ?? undefined,
+    projectPath: row.project_path ?? undefined,
   };
 }
 
@@ -47,6 +54,12 @@ function claudeSessionToParams(session: ClaudeSession): Record<string, unknown> 
     last_activity_at: session.lastActivityAt ?? null,
     last_usage_json: session.lastUsageJson ?? null,
     last_stop_at: session.lastStopAt ?? null,
+    title: session.title ?? null,
+    task_id: session.taskId ?? null,
+    goal_id: session.goalId ?? null,
+    cwd: session.cwd ?? null,
+    git_branch: session.gitBranch ?? null,
+    project_path: session.projectPath ?? null,
   };
 }
 
@@ -91,11 +104,13 @@ export class ClaudeSessionRepository implements IClaudeSessionRepo {
         INSERT INTO claude_sessions (
           id, claude_session_id, prev_claude_session_id,
           channel_id, model, plan_mode, status, created_at, closed_at,
-          purpose, parent_session_id, last_activity_at, last_usage_json, last_stop_at
+          purpose, parent_session_id, last_activity_at, last_usage_json, last_stop_at, title,
+          task_id, goal_id, cwd, git_branch, project_path
         ) VALUES (
           @id, @claude_session_id, @prev_claude_session_id,
           @channel_id, @model, @plan_mode, @status, @created_at, @closed_at,
-          @purpose, @parent_session_id, @last_activity_at, @last_usage_json, @last_stop_at
+          @purpose, @parent_session_id, @last_activity_at, @last_usage_json, @last_stop_at, @title,
+          @task_id, @goal_id, @cwd, @git_branch, @project_path
         )
         ON CONFLICT(id) DO UPDATE SET
           claude_session_id = @claude_session_id,
@@ -109,7 +124,13 @@ export class ClaudeSessionRepository implements IClaudeSessionRepo {
           parent_session_id = @parent_session_id,
           last_activity_at = @last_activity_at,
           last_usage_json = @last_usage_json,
-          last_stop_at = @last_stop_at
+          last_stop_at = @last_stop_at,
+          title = COALESCE(@title, title),
+          task_id = COALESCE(@task_id, task_id),
+          goal_id = COALESCE(@goal_id, goal_id),
+          cwd = COALESCE(@cwd, cwd),
+          git_branch = COALESCE(@git_branch, git_branch),
+          project_path = COALESCE(@project_path, project_path)
       `),
 
       close: this.db.prepare(`
@@ -147,7 +168,11 @@ export class ClaudeSessionRepository implements IClaudeSessionRepo {
   }
 
   async save(session: ClaudeSession): Promise<void> {
-    this.stmts.upsert.run(claudeSessionToParams(session));
+    try {
+      this.stmts.upsert.run(claudeSessionToParams(session));
+    } catch (err: any) {
+      logger.error(`[ClaudeSessionRepo] save failed: id=${session.id}, claude_session_id=${session.claudeSessionId}, code=${err.code}`, err.message);
+    }
   }
 
   async close(id: string): Promise<boolean> {

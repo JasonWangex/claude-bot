@@ -17,6 +17,8 @@ import type { SessionRepository } from '../db/repo/session-repo.js';
 import type { GuildRepository } from '../db/repo/guild-repo.js';
 import type { ChannelRepository } from '../db/repo/channel-repo.js';
 import type { ClaudeSessionRepository } from '../db/repo/claude-session-repo.js';
+import type Database from 'better-sqlite3';
+import { resolveSessionContext } from '../sync/session-context.js';
 
 const MAX_HISTORY = 50;
 
@@ -48,6 +50,7 @@ export class StateManager {
     private guildRepo?: GuildRepository,
     private channelRepo?: ChannelRepository,
     private claudeSessionRepo?: ClaudeSessionRepository,
+    private db?: Database.Database,
   ) {
     this.defaultWorkDir = defaultWorkDir;
   }
@@ -221,8 +224,9 @@ export class StateManager {
       };
       this.channelRepo.save(channel);
 
-      // 写入 claude_sessions 表（如果有 claudeSessionId）
-      if (session.claudeSessionId || session.id) {
+      // 写入 claude_sessions 表（仅在已有 claudeSessionId 时写入，避免产生空壳记录）
+      if (session.claudeSessionId) {
+        const ctx = this.db ? resolveSessionContext(this.db, session.channelId) : null;
         const claudeSession: ClaudeSession = {
           id: session.id,
           claudeSessionId: session.claudeSessionId,
@@ -233,6 +237,10 @@ export class StateManager {
           status: 'active',
           createdAt: session.createdAt,
           purpose: 'channel',  // 默认为 channel 用途
+          taskId: ctx?.taskId ?? undefined,
+          goalId: ctx?.goalId ?? undefined,
+          cwd: ctx?.cwd ?? session.cwd,
+          gitBranch: ctx?.gitBranch ?? session.worktreeBranch,
         };
         this.claudeSessionRepo.save(claudeSession);
       }
@@ -335,16 +343,7 @@ export class StateManager {
     }
     session.claudeSessionId = claudeSessionId;
     this.persistSession(guildId, channelId);
-
-    // 同步更新 claude_sessions 表
-    if (this.claudeSessionRepo) {
-      this.claudeSessionRepo.getActiveByChannel(channelId).then((activeSession) => {
-        if (activeSession) {
-          activeSession.claudeSessionId = claudeSessionId;
-          this.claudeSessionRepo!.save(activeSession);
-        }
-      });
-    }
+    // 注意：不再单独更新 claude_sessions 表，persistSession 已经处理了双写
   }
 
   setSessionCwd(guildId: string, channelId: string, cwd: string): void {
