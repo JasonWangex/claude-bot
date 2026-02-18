@@ -30,16 +30,6 @@ export interface Session {
   claudeSessionId?: string;  // Claude CLI session_id (当前活跃)
   prevClaudeSessionId?: string; // 上一轮 session_id（用于 rewind）
 
-  // 按模型分槽的 session 管理（Goal Fix 流程优化）
-  sessionIds?: {
-    sonnet?: string;  // Sonnet session（execute + fix 复用）
-    opus?: string;    // Opus session（audit 独立）
-  };
-  prevSessionIds?: {  // 用于 rewind 功能
-    sonnet?: string;
-    opus?: string;
-  };
-
   cwd: string;
   createdAt: number;
   lastMessage?: string;      // 最近一条 Claude 回复

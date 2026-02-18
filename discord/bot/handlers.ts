@@ -93,10 +93,47 @@ export class MessageHandler {
 
     const threadName = message.channel && 'name' in message.channel ? (message.channel as any).name : `thread-${channelId}`;
 
-    const session = this.stateManager.getOrCreateSession(guildId, channelId, {
+    let session = this.stateManager.getOrCreateSession(guildId, channelId, {
       name: threadName,
       cwd: this.stateManager.getGuildDefaultCwd(guildId),
     });
+
+    // Reply 路由：多 link 时必须 reply 指定目标 session
+    const activeLinks = this.stateManager.getActiveLinks(channelId);
+    if (activeLinks.length > 1) {
+      const replyToId = message.reference?.messageId;
+      if (!replyToId) {
+        await this.mq.send(channelId,
+          `This channel has ${activeLinks.length} active sessions. Please **reply** to a message from the session you want to talk to.`,
+          { silent: true, priority: 'high' }
+        );
+        return;
+      }
+      // 通过被 reply 的消息 ID 找到对应 link → claudeSessionId
+      const link = this.stateManager.findLinkByDiscordMessageId(replyToId);
+      if (!link) {
+        // 该消息不属于任何活跃 link（如 reply 到进度消息或非 Done 消息）
+        await this.mq.send(channelId,
+          'Cannot route: please **reply** to a **Done** message from the target session.',
+          { silent: true, priority: 'high' }
+        );
+        return;
+      }
+      if (link.claudeSessionUuid !== session.id) {
+        // 目标是另一个 session，切换本次调用的 claudeSessionId 和 id（不持久化，仅本次路由）
+        const targetLink = activeLinks.find(l => l.claudeSessionUuid === link.claudeSessionUuid);
+        if (targetLink?.claudeSessionId) {
+          session = { ...session, claudeSessionId: targetLink.claudeSessionId, id: targetLink.claudeSessionUuid };
+        } else if (targetLink) {
+          // link 存在但 claudeSessionId 尚未初始化（session 还未和 Claude 建立过对话）
+          await this.mq.send(channelId,
+            'Target session is not ready yet (no CLI session established). Please send a message first to initialize it.',
+            { silent: true, priority: 'high' }
+          );
+          return;
+        }
+      }
+    }
 
     // Plan mode 确认
     if (session.planMode) {
@@ -478,13 +515,7 @@ export class MessageHandler {
       }, onProgress);
       images = undefined;
 
-      this.stateManager.setSessionClaudeId(guildId, channelId, response.sessionId);
-
-      // 根据当前模型保存到对应槽位（Goal Fix 流程优化）
-      if (effectiveModel) {
-        const modelSlot = effectiveModel.toLowerCase().includes('opus') ? 'opus' : 'sonnet';
-        this.stateManager.setModelSessionId(guildId, channelId, modelSlot, response.sessionId);
-      }
+      this.stateManager.setSessionClaudeId(guildId, channelId, response.sessionId, session.id);
 
       this.stateManager.updateSessionMessage(guildId, channelId, response.result, 'assistant');
       logger.info(`[${session.name}] Response length:`, response.result.length);
@@ -560,7 +591,10 @@ export class MessageHandler {
 
         const latestSession = this.stateManager.getSession(guildId, channelId);
         text = followUpText;
-        if (latestSession) session = latestSession;
+        if (latestSession) {
+          // 保留 reply 路由后的 claudeSessionId 和 id，防止 interactive 循环丢失路由结果
+          session = { ...latestSession, claudeSessionId: session.claudeSessionId, id: session.id };
+        }
         mode = undefined;
         continue;
       }
@@ -612,16 +646,32 @@ export class MessageHandler {
           `${fileChanges.length} file(s) changed`, { silent: true });
       }
 
+      // 多 link 时消息标头（让用户知道是哪个 session 发的）
+      const allActiveLinks = this.stateManager.getActiveLinks(channelId);
+      const modelName = session.model?.match(/sonnet|opus|haiku/i)?.[0]?.toLowerCase() ?? 'claude';
+      const sessionPrefix = allActiveLinks.length > 1
+        ? `[${modelName} | ${session.id.slice(0, 8)}] `
+        : '';
+
+      let doneMsgId: string;
       if (mode === 'plan') {
         this.stateManager.setSessionPlanMode(guildId, channelId, true);
-        await mq.send(channelId,
-          `@everyone Plan generated${summary}\n\n` +
+        doneMsgId = await mq.send(channelId,
+          `${sessionPrefix}@everyone Plan generated${summary}\n\n` +
           `Reply "ok" to compact context and execute.\n` +
           `Reply with anything else to continue discussing.`,
           { priority: 'high', embedColor: EmbedColors.GREEN }
         );
       } else {
-        await mq.send(channelId, `@everyone Done${summary}`, { priority: 'high', embedColor: EmbedColors.GREEN });
+        doneMsgId = await mq.send(channelId, `${sessionPrefix}@everyone Done${summary}`, { priority: 'high', embedColor: EmbedColors.GREEN });
+      }
+
+      // 记录最新 Discord 消息 ID 到 link（reply 路由用）
+      // 通过 claudeSessionId 查找对应 link 的 UUID（兼容 reply 路由后 session.id 已被替换的情况）
+      if (doneMsgId) {
+        const senderLink = allActiveLinks.find(l => l.claudeSessionId != null && l.claudeSessionId === session.claudeSessionId);
+        const claudeSessionUuid = senderLink?.claudeSessionUuid ?? session.id;
+        this.stateManager.updateLinkLastMessageId(channelId, claudeSessionUuid, doneMsgId);
       }
 
     } catch (error: any) {

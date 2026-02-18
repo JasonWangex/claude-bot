@@ -29,6 +29,7 @@ import { SessionRepository } from '../db/repo/session-repo.js';
 import { GuildRepository } from '../db/repo/guild-repo.js';
 import { ChannelRepository } from '../db/repo/channel-repo.js';
 import { ClaudeSessionRepository } from '../db/repo/claude-session-repo.js';
+import { ChannelSessionLinkRepository } from '../db/repo/channel-session-link-repo.js';
 import { SyncCursorRepository } from '../db/repo/sync-cursor-repo.js';
 import { ChannelService } from '../services/channel-service.js';
 import { getAuthorizedGuildId, getGeneralChannelId } from '../utils/env.js';
@@ -73,10 +74,11 @@ export class DiscordBot {
     const guildRepo = new GuildRepository(db);
     const channelRepo = new ChannelRepository(db);
     const claudeSessionRepo = new ClaudeSessionRepository(db);
+    const linkRepo = new ChannelSessionLinkRepository(db);
     const syncCursorRepo = new SyncCursorRepository(db);
 
     this.channelService = new ChannelService(channelRepo, claudeSessionRepo, syncCursorRepo);
-    this.stateManager = new StateManager(config.defaultWorkDir, sessionRepo, guildRepo, channelRepo, claudeSessionRepo, db);
+    this.stateManager = new StateManager(config.defaultWorkDir, sessionRepo, guildRepo, channelRepo, claudeSessionRepo, db, linkRepo);
     this.interactionRegistry = new InteractionRegistry();
     this.claudeClient = new ClaudeClient(
       config.claudeCliPath,

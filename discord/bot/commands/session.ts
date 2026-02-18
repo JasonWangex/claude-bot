@@ -252,14 +252,15 @@ async function handleAttach(
     return;
   }
 
-  // 检查是否有其他 thread 持有该 session
-  const holder = stateManager.findSessionHolder(guildId, targetSessionId);
-  if (holder && holder.channelId === channelId) {
+  // 检查当前 channel 是否已 link 到该 session
+  if (session.claudeSessionId === targetSessionId) {
     await interaction.reply({ content: 'Already linked to this session.', ephemeral: true });
     return;
   }
 
-  if (holder) {
+  // 检查旧持有者是否正在运行
+  const holder = stateManager.findSessionHolder(guildId, targetSessionId);
+  if (holder && holder.channelId !== channelId) {
     const holderLockKey = StateManager.channelLockKey(guildId, holder.channelId);
     if (claudeClient.isRunning(holderLockKey)) {
       await interaction.reply({
@@ -268,7 +269,6 @@ async function handleAttach(
       });
       return;
     }
-    stateManager.clearSessionClaudeId(guildId, holder.channelId);
   }
 
   const currentLockKey = StateManager.channelLockKey(guildId, channelId);
@@ -280,11 +280,12 @@ async function handleAttach(
     return;
   }
 
-  stateManager.setSessionClaudeId(guildId, channelId, targetSessionId);
+  // 执行 attach（link 转移 + claudeSessionId 更新）
+  const result = stateManager.attachSession(guildId, channelId, targetSessionId);
 
   let msg = `Linked to Claude Session: \`${targetSessionId.slice(0, 8)}...\``;
-  if (holder) {
-    msg += `\n(Disconnected from thread "${holder.name}")`;
+  if (result.prevHolder && result.prevHolder.channelId !== channelId) {
+    msg += `\n(Disconnected from thread "${result.prevHolder.name}")`;
   }
   await interaction.reply(msg);
 }

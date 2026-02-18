@@ -11,4 +11,6 @@ export { TaskRepo as GoalTaskRepo } from './task-repo.js';
 export { CheckpointRepo } from './checkpoint-repo.js';
 export { ChannelRepository } from './channel-repo.js';
 export { ClaudeSessionRepository } from './claude-session-repo.js';
+export { ChannelSessionLinkRepository } from './channel-session-link-repo.js';
+export type { ChannelSessionLink } from './channel-session-link-repo.js';
 export { SyncCursorRepository } from './sync-cursor-repo.js';

@@ -1,12 +1,11 @@
 /**
- * IClaudeSessionRepo 的 SQLite 实现
+ * ClaudeSessionRepository
  *
- * 管理 Claude CLI 会话实体的 CRUD。
+ * 管理 Claude CLI 会话实体的 CRUD（同步接口，基于 better-sqlite3）。
  * 主键: id (UUID)
  */
 
 import type Database from 'better-sqlite3';
-import type { IClaudeSessionRepo } from '../../types/repository.js';
 import type { ClaudeSession } from '../../types/index.js';
 import type { ClaudeSessionRow } from '../../types/db.js';
 import { logger } from '../../utils/logger.js';
@@ -20,7 +19,7 @@ function rowToClaudeSession(row: ClaudeSessionRow): ClaudeSession {
     prevClaudeSessionId: row.prev_claude_session_id ?? undefined,
     channelId: row.channel_id ?? undefined,
     model: row.model ?? undefined,
-    planMode: row.plan_mode === 1 ? true : false,
+    planMode: row.plan_mode === 1,
     status: row.status,
     createdAt: row.created_at,
     closedAt: row.closed_at ?? undefined,
@@ -65,7 +64,7 @@ function claudeSessionToParams(session: ClaudeSession): Record<string, unknown> 
 
 // ==================== Repository 实现 ====================
 
-export class ClaudeSessionRepository implements IClaudeSessionRepo {
+export class ClaudeSessionRepository {
   private stmts!: {
     get: Database.Statement;
     getByChannel: Database.Statement;
@@ -135,39 +134,35 @@ export class ClaudeSessionRepository implements IClaudeSessionRepo {
 
       close: this.db.prepare(`
         UPDATE claude_sessions
-        SET status = 'closed',
-            closed_at = ?
+        SET status = 'closed', closed_at = ?
         WHERE id = ?
       `),
     };
   }
 
-  // ==================== IClaudeSessionRepo CRUD ====================
+  // ==================== 同步 CRUD ====================
 
-  async get(id: string): Promise<ClaudeSession | null> {
+  get(id: string): ClaudeSession | null {
     const row = this.stmts.get.get(id) as ClaudeSessionRow | undefined;
-    if (!row) return null;
-    return rowToClaudeSession(row);
+    return row ? rowToClaudeSession(row) : null;
   }
 
-  async getByChannel(channelId: string): Promise<ClaudeSession[]> {
+  getByChannel(channelId: string): ClaudeSession[] {
     const rows = this.stmts.getByChannel.all(channelId) as ClaudeSessionRow[];
-    return rows.map((row) => rowToClaudeSession(row));
+    return rows.map(rowToClaudeSession);
   }
 
-  async getActiveByChannel(channelId: string): Promise<ClaudeSession | null> {
+  getActiveByChannel(channelId: string): ClaudeSession | null {
     const row = this.stmts.getActiveByChannel.get(channelId) as ClaudeSessionRow | undefined;
-    if (!row) return null;
-    return rowToClaudeSession(row);
+    return row ? rowToClaudeSession(row) : null;
   }
 
-  async findByClaudeSessionId(claudeSessionId: string): Promise<ClaudeSession | null> {
+  findByClaudeSessionId(claudeSessionId: string): ClaudeSession | null {
     const row = this.stmts.findByClaudeSessionId.get(claudeSessionId) as ClaudeSessionRow | undefined;
-    if (!row) return null;
-    return rowToClaudeSession(row);
+    return row ? rowToClaudeSession(row) : null;
   }
 
-  async save(session: ClaudeSession): Promise<void> {
+  save(session: ClaudeSession): void {
     try {
       this.stmts.upsert.run(claudeSessionToParams(session));
     } catch (err: any) {
@@ -175,16 +170,14 @@ export class ClaudeSessionRepository implements IClaudeSessionRepo {
     }
   }
 
-  async close(id: string): Promise<boolean> {
+  close(id: string): boolean {
     const result = this.stmts.close.run(Date.now(), id);
     return result.changes > 0;
   }
 
-  // ==================== 额外公开方法（启动时批量加载用）====================
-
   /** 加载所有 claude_sessions，用于启动时填充内存 */
   loadAll(): ClaudeSession[] {
     const rows = this.stmts.getAll.all() as ClaudeSessionRow[];
-    return rows.map((row) => rowToClaudeSession(row));
+    return rows.map(rowToClaudeSession);
   }
 }

@@ -382,6 +382,8 @@ export interface ChannelSessionLinkRow {
   claude_session_id: string;
   linked_at: number;
   unlinked_at: number | null;
+  /** 该 link 最近一次发出的 Discord 消息 ID（reply 路由用） */
+  last_message_discord_id: string | null;
 }
 
 // ================================================================

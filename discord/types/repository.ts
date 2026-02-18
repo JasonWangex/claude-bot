@@ -308,12 +308,12 @@ export interface IChannelRepo {
  * 主键: id (UUID)
  */
 export interface IClaudeSessionRepo {
-  get(id: string): Promise<ClaudeSession | null>;
-  getByChannel(channelId: string): Promise<ClaudeSession[]>;
-  getActiveByChannel(channelId: string): Promise<ClaudeSession | null>;
-  findByClaudeSessionId(claudeSessionId: string): Promise<ClaudeSession | null>;
-  save(session: ClaudeSession): Promise<void>;
-  close(id: string): Promise<boolean>;
+  get(id: string): ClaudeSession | null;
+  getByChannel(channelId: string): ClaudeSession[];
+  getActiveByChannel(channelId: string): ClaudeSession | null;
+  findByClaudeSessionId(claudeSessionId: string): ClaudeSession | null;
+  save(session: ClaudeSession): void;
+  close(id: string): boolean;
 }
 
 /**

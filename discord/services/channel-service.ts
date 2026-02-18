@@ -168,7 +168,7 @@ export class ChannelService {
    * - 返回 ClaudeSession
    */
   async getOrCreateClaudeSession(channelId: string): Promise<ClaudeSession> {
-    const existing = await this.claudeSessionRepo.getActiveByChannel(channelId);
+    const existing = this.claudeSessionRepo.getActiveByChannel(channelId);
     if (existing) return existing;
 
     // 创建新 session
@@ -181,7 +181,7 @@ export class ChannelService {
       purpose: 'channel',  // 明确标记为 channel 用途
     };
 
-    await this.claudeSessionRepo.save(newSession);
+    this.claudeSessionRepo.save(newSession);
     return newSession;
   }
 
@@ -189,7 +189,7 @@ export class ChannelService {
    * 关闭 Channel 当前活跃 session
    */
   async closeActiveSession(channelId: string): Promise<boolean> {
-    const activeSession = await this.claudeSessionRepo.getActiveByChannel(channelId);
+    const activeSession = this.claudeSessionRepo.getActiveByChannel(channelId);
     if (!activeSession) return false;
 
     return this.claudeSessionRepo.close(activeSession.id);
@@ -199,10 +199,10 @@ export class ChannelService {
    * Claude CLI 返回后更新 claude_session_id
    */
   async updateClaudeSessionId(localSessionId: string, claudeSessionId: string): Promise<void> {
-    const session = await this.claudeSessionRepo.get(localSessionId);
+    const session = this.claudeSessionRepo.get(localSessionId);
     if (!session) return;
 
     session.claudeSessionId = claudeSessionId;
-    await this.claudeSessionRepo.save(session);
+    this.claudeSessionRepo.save(session);
   }
 }

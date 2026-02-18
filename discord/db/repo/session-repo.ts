@@ -13,26 +13,6 @@ import type { SessionRow, ArchivedSessionRow } from '../../types/db.js';
 // ==================== 转换函数 ====================
 
 function rowToSession(row: SessionRow): Session {
-  // 反序列化模型槽 JSON
-  let sessionIds: { sonnet?: string; opus?: string } | undefined;
-  let prevSessionIds: { sonnet?: string; opus?: string } | undefined;
-
-  if (row.session_ids_json) {
-    try {
-      sessionIds = JSON.parse(row.session_ids_json);
-    } catch {
-      /* ignore parse errors */
-    }
-  }
-
-  if (row.prev_session_ids_json) {
-    try {
-      prevSessionIds = JSON.parse(row.prev_session_ids_json);
-    } catch {
-      /* ignore parse errors */
-    }
-  }
-
   return {
     id: row.id,
     name: row.name,
@@ -40,8 +20,6 @@ function rowToSession(row: SessionRow): Session {
     guildId: row.guild_id,
     claudeSessionId: row.claude_session_id ?? undefined,
     prevClaudeSessionId: row.prev_claude_session_id ?? undefined,
-    sessionIds,
-    prevSessionIds,
     cwd: row.cwd,
     createdAt: row.created_at,
     lastMessage: row.last_message ?? undefined,
@@ -71,8 +49,8 @@ function sessionToParams(session: Session): Record<string, unknown> {
     guild_id: session.guildId,
     claude_session_id: session.claudeSessionId ?? null,
     prev_claude_session_id: session.prevClaudeSessionId ?? null,
-    session_ids_json: session.sessionIds ? JSON.stringify(session.sessionIds) : null,
-    prev_session_ids_json: session.prevSessionIds ? JSON.stringify(session.prevSessionIds) : null,
+    session_ids_json: null,
+    prev_session_ids_json: null,
     cwd: session.cwd,
     created_at: session.createdAt,
     last_message: session.lastMessage ?? null,

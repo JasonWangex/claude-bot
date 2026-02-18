@@ -1078,12 +1078,14 @@ export class GoalOrchestrator {
     const modelSlot: 'sonnet' | 'opus' =
       model.toLowerCase().includes('opus') ? 'opus' : 'sonnet';
 
-    // Fix 阶段：复用 execute 阶段的 sonnet session
+    // Fix 阶段：复用 execute 阶段的 sonnet session（通过 link 查找）
     if (phase === 'fix' && modelSlot === 'sonnet') {
-      const existingSessionId = this.deps.stateManager.getModelSessionId(guildId, channelId, 'sonnet');
+      const activeLinks = this.deps.stateManager.getActiveLinks(channelId);
+      const sonnetLink = activeLinks.find(l => l.model && !l.model.toLowerCase().includes('opus'));
+      const existingSessionId = sonnetLink?.claudeSessionId;
       if (existingSessionId) {
         // 恢复到已有的 sonnet session
-        this.deps.stateManager.setSessionClaudeId(guildId, channelId, existingSessionId);
+        this.deps.stateManager.setSessionClaudeId(guildId, channelId, existingSessionId, sonnetLink!.claudeSessionUuid);
         this.deps.stateManager.setSessionModel(guildId, channelId, model);
         logger.info(`[Orchestrator] Reusing Sonnet session for fix: ${existingSessionId.slice(0, 8)}`);
         return;
