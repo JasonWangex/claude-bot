@@ -3,7 +3,6 @@ name: review
 description: >
   自动生成开发日报/周报。从 SQLite 数据库（通过 MCP 工具）和 Git 收集数据，
   生成结构化回顾，输出到当前对话。支持 daily（默认）和 weekly 模式。
-version: 3.0.0
 ---
 
 # Review - 开发回顾报告
@@ -12,9 +11,9 @@ version: 3.0.0
 
 ## 模式判断
 
-- `{{SKILL_ARGS}}` 为空或包含 "today"/"daily"/"日报" → **日报模式**（默认）
-- `{{SKILL_ARGS}}` 包含 "week"/"weekly"/"周报" → **周报模式**
-- `{{SKILL_ARGS}}` 包含日期（如 "2026-02-10"）→ 查询指定日期
+- `$ARGUMENTS` 为空或包含 "today"/"daily"/"日报" → **日报模式**（默认）
+- `$ARGUMENTS` 包含 "week"/"weekly"/"周报" → **周报模式**
+- `$ARGUMENTS` 包含日期（如 "2026-02-10"）→ 查询指定日期
 
 ## 第一步：收集数据
 
@@ -100,5 +99,3 @@ git log --since="last monday" --pretty=format:"- %h %s (%ar)" --all
 ## 输出
 
 直接在当前对话中输出报告内容。不写入数据库。
-
-**立即执行。参数：{{SKILL_ARGS}}**

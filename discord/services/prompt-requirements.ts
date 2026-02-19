@@ -9,17 +9,6 @@ import type { PromptRequirement } from './prompt-config-service.js';
 
 export const PROMPT_REQUIREMENTS: PromptRequirement[] = [
   // ================================================================
-  // Skill 层
-  // ================================================================
-  { key: 'skill.goal',   variables: ['SKILL_ARGS', 'THREAD_ID'] },
-  { key: 'skill.commit', variables: ['SKILL_ARGS'] },
-  { key: 'skill.review', variables: ['SKILL_ARGS'] },
-  { key: 'skill.devlog', variables: ['DEVLOG_COMMIT_COUNT', 'DEVLOG_COMMIT_MESSAGES', 'DEVLOG_DIFF_STAT'] },
-  { key: 'skill.idea',   variables: ['SKILL_ARGS'] },
-  { key: 'skill.kb',     variables: ['SKILL_ARGS'] },
-  { key: 'skill.merge',  variables: ['TARGET_TOPIC_ID', 'TARGET_BRANCH', 'TARGET_CWD', 'MAIN_CWD'] },
-
-  // ================================================================
   // Orchestrator 层 — 主模板
   // ================================================================
   { key: 'orchestrator.task',                   variables: ['GOAL_NAME', 'TASK_LABEL', 'TASK_TYPE', 'TASK_DESCRIPTION'] },

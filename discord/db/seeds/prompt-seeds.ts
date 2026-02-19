@@ -1,13 +1,11 @@
 /**
  * Prompt 配置种子数据
  *
- * 在 migration 011 中调用，将 Skill 文件和 Orchestrator prompt 模板写入数据库。
+ * 在 migration 011 中调用，将 Session 辅助 prompt 和 Orchestrator 模板写入数据库。
+ * Skill prompt 已迁移到 ~/.claude/skills/ 直读文件，不再经 DB 中转。
  */
 
 import type Database from 'better-sqlite3';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { logger } from '../../utils/logger.js';
 
 interface SeedEntry {
@@ -21,22 +19,6 @@ interface SeedEntry {
   sortOrder: number;
 }
 
-function stripFrontmatter(content: string): string {
-  const match = content.match(/^---[\s\S]*?---\s*([\s\S]*)$/);
-  return match ? match[1] : content;
-}
-
-function readSkillFile(skillName: string): string | null {
-  try {
-    const skillPath = join(homedir(), '.claude/skills', skillName, 'SKILL.md');
-    const raw = readFileSync(skillPath, 'utf-8');
-    return stripFrontmatter(raw);
-  } catch {
-    logger.warn(`[Seed] Skill file not found: ${skillName}/SKILL.md, skipping`);
-    return null;
-  }
-}
-
 export function seedPromptConfigs(db: Database.Database): void {
   const now = Date.now();
 
@@ -46,36 +28,6 @@ export function seedPromptConfigs(db: Database.Database): void {
   `);
 
   const entries: SeedEntry[] = [];
-
-  // ================================================================
-  // Skill 层 — 从文件读取
-  // ================================================================
-
-  const skills: Array<{ key: string; name: string; file: string; vars: string[]; desc: string }> = [
-    { key: 'skill.goal',   name: 'Goal 管理',   file: 'goal',   vars: ['SKILL_ARGS', 'THREAD_ID'],  desc: 'Goal 全生命周期管理' },
-    { key: 'skill.commit', name: '代码审查提交', file: 'commit', vars: ['SKILL_ARGS'],               desc: '代码审查和自动提交' },
-    { key: 'skill.review', name: '开发回顾',     file: 'review', vars: ['SKILL_ARGS'],               desc: '生成开发日报/周报' },
-    { key: 'skill.devlog', name: '开发日志',     file: 'devlog', vars: ['DEVLOG_COMMIT_COUNT', 'DEVLOG_COMMIT_MESSAGES', 'DEVLOG_DIFF_STAT'], desc: '记录开发日志到 SQLite' },
-    { key: 'skill.idea',   name: '想法管理',     file: 'idea',   vars: ['SKILL_ARGS'],               desc: '快速记录想法或推进已有想法' },
-    { key: 'skill.kb',     name: '知识库管理',   file: 'kb',     vars: ['SKILL_ARGS'],               desc: '知识库条目管理' },
-    { key: 'skill.merge',  name: '分支合并',     file: 'merge',  vars: ['TARGET_TOPIC_ID', 'TARGET_BRANCH', 'TARGET_CWD', 'MAIN_CWD'], desc: '合并 worktree 分支到主分支并清理' },
-  ];
-
-  for (const skill of skills) {
-    const template = readSkillFile(skill.file);
-    if (template) {
-      entries.push({
-        key: skill.key,
-        category: 'skill',
-        name: skill.name,
-        description: skill.desc,
-        template,
-        variables: skill.vars,
-        parentKey: null,
-        sortOrder: 0,
-      });
-    }
-  }
 
   // ================================================================
   // Session 层 — LLM 辅助功能

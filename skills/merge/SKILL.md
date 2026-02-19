@@ -3,7 +3,7 @@ name: merge
 description: >
   合并 worktree 分支到主分支并清理。检查未提交代码、合并分支、删除 worktree、
   删除 Discord Thread。合并成功后自动写入 Dev Log 到 SQLite。
-version: 4.0.0
+disable-model-invocation: true
 ---
 
 # Merge & Cleanup - 分支合并与清理

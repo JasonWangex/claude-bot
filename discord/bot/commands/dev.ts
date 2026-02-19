@@ -5,7 +5,6 @@
 
 import { randomUUID } from 'crypto';
 import { basename } from 'path';
-import { spawn } from 'child_process';
 import {
   SlashCommandBuilder,
   ChannelType,
@@ -366,73 +365,4 @@ function projectFromCwd(cwd: string): string {
   return basename(cwd);
 }
 
-// ========== spawnSkillProcess ==========
-
-/**
- * 启动独立 claude -p 进程执行 skill
- * 不占用 session/lock，进程结束自动销毁
- */
-const SKILL_PROCESS_TIMEOUT = 30 * 60 * 1000; // 30 minutes
-
-function spawnSkillProcess(
-  skillName: string,
-  prompt: string,
-  cwd: string,
-  replyChannelId: string,
-  messageQueue: import('../message-queue.js').MessageQueue,
-  options?: { maxTurns?: number; allowedTools?: string },
-): void {
-  const child = spawn('claude', [
-    '-p', prompt,
-    '--output-format', 'json',
-    '--dangerously-skip-permissions',
-    '--allowedTools', options?.allowedTools ?? 'Bash',
-    '--max-turns', String(options?.maxTurns ?? 15),
-    '--no-session-persistence',
-  ], {
-    cwd,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-
-  let stdout = '';
-  let stderr = '';
-  let killed = false;
-  child.stdout!.on('data', (chunk: Buffer) => { stdout += chunk.toString(); });
-  child.stderr!.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
-
-  const timeout = setTimeout(() => {
-    killed = true;
-    child.kill('SIGTERM');
-    logger.warn(`${skillName} process timed out after ${SKILL_PROCESS_TIMEOUT / 1000}s, killing`);
-  }, SKILL_PROCESS_TIMEOUT);
-
-  child.on('exit', async (code: number | null) => {
-    clearTimeout(timeout);
-    try {
-      if (killed) {
-        await messageQueue.sendLong(replyChannelId, `${skillName} timed out after ${SKILL_PROCESS_TIMEOUT / 60000} minutes`);
-      } else if (code === 0) {
-        let result: string;
-        try {
-          result = JSON.parse(stdout).result || stdout;
-        } catch {
-          result = stdout.trim();
-        }
-        if (result) {
-          await messageQueue.sendLong(replyChannelId, result);
-        }
-      } else {
-        const errMsg = stderr.trim() || `exit code ${code}`;
-        await messageQueue.sendLong(replyChannelId, `${skillName} failed: ${errMsg}`);
-      }
-    } catch (e: any) {
-      logger.error(`${skillName} result delivery failed:`, e.message);
-    }
-  });
-
-  child.on('error', (err: Error) => {
-    clearTimeout(timeout);
-    messageQueue.sendLong(replyChannelId, `${skillName} launch failed: ${err.message}`).catch(() => {});
-  });
-}
 

@@ -3,14 +3,13 @@ name: idea
 description: >
   快速记录想法或推进已有想法到开发。有参数时直接记录到 SQLite（Status=Idea）；
   无参数时列出当前项目的未开发 Ideas，选中后标记 Processing 并走 qdev 流程。
-version: 5.0.0
 ---
 
 # Idea - 想法管理
 
 ## 模式判断
 
-根据 `{{SKILL_ARGS}}` 决定模式：
+根据 `$ARGUMENTS` 决定模式：
 
 - **不为空** → 记录模式（写入新 Idea）
 - **为空** → 列表模式（查看并推进已有 Idea）
@@ -24,7 +23,7 @@ version: 5.0.0
 **不讨论、不确认、不追问**，直接调用 MCP 工具：
 
 ```
-bot_create_idea(name="{{SKILL_ARGS}}", project="<项目名>")
+bot_create_idea(name="$ARGUMENTS", project="<项目名>")
 ```
 
 写入成功后，简短确认：`已记录: <想法标题>`
@@ -106,6 +105,3 @@ Idea 已推进到开发
 - **所有操作通过 MCP 工具完成**（bot_create_idea, bot_list_ideas, bot_update_idea, bot_list_tasks, bot_qdev）
 - **如果 MCP 工具不可用**: 提示用户检查 Bot 和 MCP Server 是否运行
 
----
-
-**现在请立即执行。用户输入：{{SKILL_ARGS}}**

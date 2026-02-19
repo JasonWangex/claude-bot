@@ -3,14 +3,13 @@ name: kb
 description: >
   知识库管理。无参数列出当前项目的条目；有参数时记录新的经验/教训。
   支持 Markdown 格式，可记录架构决策、排障经验、API 设计要点等。
-version: 1.0.0
 ---
 
 # KB - Knowledge Base 知识库
 
 ## 模式判断
 
-根据 `{{SKILL_ARGS}}` 决定模式：
+根据 `$ARGUMENTS` 决定模式：
 
 - **为空** → 列表模式
 - **不为空** → 记录模式
@@ -54,7 +53,7 @@ Troubleshooting
 
 ## 记录模式（有参数）
 
-`{{SKILL_ARGS}}` 作为初始描述，与用户快速确认以下信息：
+`$ARGUMENTS` 作为初始描述，与用户快速确认以下信息：
 
 ### 1. 收集信息
 
@@ -103,6 +102,3 @@ bot_create_kb(
 - 所有操作通过 MCP 工具完成（bot_list_kb, bot_get_kb, bot_create_kb, bot_update_kb, bot_delete_kb）
 - 如果 MCP 工具不可用，提示用户检查 Bot 和 MCP Server 是否运行
 
----
-
-**现在请立即执行。用户输入：{{SKILL_ARGS}}**

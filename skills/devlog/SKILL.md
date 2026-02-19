@@ -3,7 +3,6 @@ name: devlog
 description: >
   记录开发日志到 SQLite 数据库（通过 MCP 工具）。可独立调用，也可被 /merge 等 skill 调用。
   自动收集 git 信息，生成功能摘要，写入数据库。用 git tag 追踪进度，避免重复记录。
-version: 4.0.0
 ---
 
 # Dev Log - 开发日志记录
