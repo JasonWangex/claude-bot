@@ -21,7 +21,7 @@ description: >
 ### 1. 查询当前项目的知识库条目
 
 ```
-bot_list_kb(project="<项目名>")
+bot_kb(action="list", project="<项目名>")
 ```
 
 ### 2. 展示列表
@@ -47,7 +47,7 @@ Troubleshooting
 
 ### 3. 用户选择后
 
-调用 `bot_get_kb(kb_id="<id>")` 获取完整内容并展示。
+调用 `bot_kb(action="get", kb_id="<id>")` 获取完整内容并展示。
 
 ---
 
@@ -69,7 +69,7 @@ Troubleshooting
 ### 2. 写入 SQLite
 
 ```
-bot_create_kb(
+bot_kb(action="create",
   title="<标题>",
   content="<Markdown 内容>",
   project="<项目名>",
@@ -99,6 +99,6 @@ bot_create_kb(
 
 ## 重要提示
 
-- 所有操作通过 MCP 工具完成（bot_list_kb, bot_get_kb, bot_create_kb, bot_update_kb, bot_delete_kb）
+- 所有操作通过 MCP 工具 `bot_kb` 完成（action: list/get/create/update/delete）
 - 如果 MCP 工具不可用，提示用户检查 Bot 和 MCP Server 是否运行
 

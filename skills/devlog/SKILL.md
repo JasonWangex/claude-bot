@@ -72,7 +72,7 @@ git log ${BASE}..HEAD --pretty=format:"%h %s (%ai)"
 如果需要查询 Active Goals：
 
 ```
-bot_list_goals(status="Active")
+bot_goals(action="list", status="Processing")
 ```
 
 ## 写入 SQLite
@@ -80,7 +80,7 @@ bot_list_goals(status="Active")
 通过 MCP 工具写入 DevLog：
 
 ```
-bot_create_devlog(
+bot_devlogs(action="create",
   name="<功能标题（中文，10字以内）>",
   date="<今天日期 yyyy-MM-dd>",
   project="<项目名>",

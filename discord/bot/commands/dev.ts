@@ -21,7 +21,6 @@ import { getDb } from '../../db/index.js';
 import { IdeaRepository } from '../../db/idea-repo.js';
 import { buildIdeaPromoteButtons } from '../idea-buttons.js';
 import type { Idea } from '../../types/repository.js';
-import { renderSkill } from '../../services/skill-reader.js';
 import type { CommandDeps } from './types.js';
 import { requireAuth, requireThread } from './utils.js';
 
@@ -323,13 +322,8 @@ async function handleMerge(
     return;
   }
 
-  // 加载 skill（直读文件 + 模板替换）
-  const prompt = renderSkill('merge', {
-    TARGET_TOPIC_ID: targetSession.channelId,
-    TARGET_BRANCH: targetSession.worktreeBranch,
-    TARGET_CWD: targetSession.cwd,
-    MAIN_CWD: mainCwd,
-  });
+  // 使用原生 skill：/merge <branch>
+  const prompt = `/merge ${targetSession.worktreeBranch}`;
 
   // Step 1: 停止 target session 正在运行的 Claude 进程
   const targetLockKey = StateManager.channelLockKey(guildId, targetSession.channelId);
@@ -349,7 +343,7 @@ async function handleMerge(
   );
 
   // Step 3: 在 target session 中用全新 Claude 执行 merge
-  // merge skill 最后会 DELETE /api/tasks/$TASK_ID，删除 channel 和 session
+  // merge skill 最后会通过 MCP bot_tasks(action="delete") 删除 channel 和 session
   messageHandler.handleBackgroundChat(guildId, targetSession.channelId, prompt).catch((err) => {
     logger.error('merge failed:', err.message);
     messageQueue.sendLong(targetSession.channelId, `merge failed: ${err.message}`).catch(() => {});

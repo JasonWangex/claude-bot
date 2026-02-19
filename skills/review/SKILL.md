@@ -21,10 +21,10 @@ description: >
 
 ```
 # 日报：查询今天的 DevLog
-bot_list_devlogs(date="<今天 yyyy-MM-dd>")
+bot_devlogs(action="list", date="<今天 yyyy-MM-dd>")
 
 # 周报：查询本周的 DevLog
-bot_list_devlogs(start="<本周一 yyyy-MM-dd>", end="<今天 yyyy-MM-dd>")
+bot_devlogs(action="list", start="<本周一 yyyy-MM-dd>", end="<今天 yyyy-MM-dd>")
 ```
 
 对每条 DevLog 记录，提取：name、project、branch、summary、commits、lines_changed、goal、content
@@ -32,10 +32,10 @@ bot_list_devlogs(start="<本周一 yyyy-MM-dd>", end="<今天 yyyy-MM-dd>")
 ### 1.2 从 Goals 收集
 
 ```
-bot_list_goals(status="Active")
+bot_goals(action="list", status="Processing")
 ```
 
-对每个 Active Goal 提取：name、progress、next、blocked_by
+对每个 Processing Goal 提取：name、progress、next、blocked_by
 
 ### 1.3 从 Git 补充
 
