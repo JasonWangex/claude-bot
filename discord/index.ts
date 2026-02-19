@@ -3,6 +3,15 @@
  */
 
 import 'dotenv/config';
+
+// 全局兜底：任何未捕获的错误只记录日志，不崩溃进程
+process.on('uncaughtException', (err) => {
+  console.error('[FATAL] uncaughtException:', err);
+});
+process.on('unhandledRejection', (reason) => {
+  console.error('[FATAL] unhandledRejection:', reason);
+});
+
 import { DiscordBot } from './bot/discord.js';
 import { loadDiscordConfig } from './utils/config.js';
 import { logger } from './utils/logger.js';

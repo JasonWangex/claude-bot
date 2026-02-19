@@ -3,7 +3,7 @@ set -euo pipefail
 cd "$(dirname "$0")"
 
 PROJECT_DIR="$(pwd)"
-SERVICES="claude-discord claude-monitor claude-mcp claude-web"
+SERVICES="claude-discord claude-monitor claude-web"
 
 if [ ! -f .env ]; then
   echo "Missing .env file. Please create it from example.env."
@@ -151,7 +151,7 @@ do_status() {
 }
 
 do_logs() {
-  journalctl --user -u claude-discord -u claude-monitor -u claude-mcp -u claude-web -f
+  journalctl --user -u claude-discord -u claude-monitor -u claude-web -f
 }
 
 case "${1:-}" in
@@ -169,7 +169,7 @@ case "${1:-}" in
     echo "  stop     Stop services"
     echo "  restart  Restart services"
     echo "  status   Show service status"
-    echo "  logs     Follow logs (discord + monitor + mcp)"
+    echo "  logs     Follow logs (discord + monitor + web)"
     exit 1
     ;;
 esac

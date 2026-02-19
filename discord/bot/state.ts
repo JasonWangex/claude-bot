@@ -586,7 +586,7 @@ export class StateManager {
       this.sessions.delete(key);
       this.clearChildParentRefs(guildId, channelId);
       if (this.channelRepo) {
-        this.channelRepo.delete(channelId);
+        this.channelRepo.archive(channelId).catch(() => {});
       }
       if (this.linkRepo) {
         this.linkRepo.unlinkAllForChannel(channelId);

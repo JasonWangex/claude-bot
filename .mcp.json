@@ -1,8 +1,10 @@
 {
   "mcpServers": {
     "claude-bot": {
-      "type": "http",
-      "url": "http://127.0.0.1:3457/mcp"
+      "type": "stdio",
+      "command": "node",
+      "args": ["dist-server/mcp/server.js"],
+      "cwd": "/home/jason/projects/claude-bot"
     }
   }
 }
