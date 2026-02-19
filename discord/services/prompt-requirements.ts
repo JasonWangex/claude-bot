@@ -41,7 +41,7 @@ export const PROMPT_REQUIREMENTS: PromptRequirement[] = [
   { key: 'orchestrator.task.requirements',      variables: [],                     optional: true },
   { key: 'orchestrator.task.feedback_protocol', variables: ['TASK_ID'],            optional: true },
   { key: 'orchestrator.task.research_rules',    variables: ['TASK_ID'],            optional: true },
-  { key: 'orchestrator.task.when_to_feedback',  variables: [],                     optional: true },
+  // when_to_feedback 已合并入 feedback_protocol
   { key: 'orchestrator.task.placeholder_rules', variables: [],                     optional: true },
 
   // plan sections
@@ -61,7 +61,6 @@ export const PROMPT_REQUIREMENTS: PromptRequirement[] = [
   { key: 'orchestrator.fix.detail_plan',        variables: ['DETAIL_PLAN_TEXT'],   optional: true },
   { key: 'orchestrator.fix.audit_summary',      variables: ['AUDIT_SUMMARY'],      optional: true },
   { key: 'orchestrator.fix.instructions',       variables: ['ISSUE_LIST'],         optional: true },
-  { key: 'orchestrator.fix.verify_section',     variables: ['VERIFY_COMMANDS'],    optional: true },
-  { key: 'orchestrator.fix.verify_fallback',    variables: [],                     optional: true },
-  { key: 'orchestrator.fix.critical_rules',     variables: [],                     optional: true },
+  // verify_section + verify_fallback + critical_rules 合并为 fix.verify
+  { key: 'orchestrator.fix.verify',             variables: ['VERIFY_TEXT'],         optional: true },
 ];

@@ -2044,19 +2044,12 @@ export class GoalOrchestrator {
     const instr = ps.tryRender('orchestrator.fix.instructions', { ISSUE_LIST: issueList });
     if (instr) parts.push(instr);
 
-    // 条件 section：验证命令
-    if (verifyCommands.length > 0) {
-      const cmds = verifyCommands.map(cmd => `   - \`${cmd}\``).join('\n');
-      const s = ps.tryRender('orchestrator.fix.verify_section', { VERIFY_COMMANDS: cmds });
-      if (s) parts.push(s);
-    } else {
-      const s = ps.tryRender('orchestrator.fix.verify_fallback', {});
-      if (s) parts.push(s);
-    }
-
-    // 固定 section：关键规则
-    const rules = ps.tryRender('orchestrator.fix.critical_rules', {});
-    if (rules) parts.push(rules);
+    // 合并的验证 + 规则 section
+    const verifyText = verifyCommands.length > 0
+      ? `After all fixes, run these verification commands:\n${verifyCommands.map(cmd => `- \`${cmd}\``).join('\n')}\nFix any failures before committing.`
+      : `After all fixes, run the project's build and test commands to verify. Fix any failures before committing.`;
+    const verify = ps.tryRender('orchestrator.fix.verify', { VERIFY_TEXT: verifyText });
+    if (verify) parts.push(verify);
 
     return parts.join('\n\n');
   }
@@ -3178,9 +3171,6 @@ export class GoalOrchestrator {
       const s = ps.tryRender('orchestrator.task.research_rules', { TASK_ID: task.id });
       if (s) parts.push(s);
     }
-
-    const wf = ps.tryRender('orchestrator.task.when_to_feedback', {});
-    if (wf) parts.push(wf);
 
     // 条件 section：占位任务
     if (task.type === '占位') {

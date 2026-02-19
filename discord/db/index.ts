@@ -23,6 +23,8 @@ import migration007 from './migrations/007_session_pk_refactor.js';
 import migration008 from './migrations/008_drop_deprecated_sessions.js';
 import migration009 from './migrations/009_add_brain_channel.js';
 import migration010 from './migrations/010_add_task_detail_plan.js';
+import migration011 from './migrations/011_update_prompts.js';
+import migration012 from './migrations/012_remove_skill_prompts.js';
 
 const allMigrations: Migration[] = [
   migration001,
@@ -35,6 +37,8 @@ const allMigrations: Migration[] = [
   migration008,
   migration009,
   migration010,
+  migration011,
+  migration012,
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

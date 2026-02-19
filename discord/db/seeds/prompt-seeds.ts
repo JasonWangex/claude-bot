@@ -1,8 +1,11 @@
 /**
  * Prompt 配置种子数据
  *
- * 在 migration 011 中调用，将 Session 辅助 prompt 和 Orchestrator 模板写入数据库。
- * Skill prompt 已迁移到 ~/.claude/skills/ 直读文件，不再经 DB 中转。
+ * 在 migration 001/009 中调用，将 Orchestrator 模板写入数据库。
+ * Skill prompt 已全部迁移到 ~/.claude/skills/ 直读文件，不再经 DB 中转。
+ *
+ * 注意：seed 使用 INSERT OR IGNORE，已有记录不会被覆盖。
+ * 内容变更通过 migration（如 011_update_prompts）的 UPDATE 语句应用。
  */
 
 import type Database from 'better-sqlite3';
@@ -10,7 +13,7 @@ import { logger } from '../../utils/logger.js';
 
 interface SeedEntry {
   key: string;
-  category: 'skill' | 'orchestrator';
+  category: 'orchestrator';
   name: string;
   description: string;
   template: string;
@@ -18,6 +21,9 @@ interface SeedEntry {
   parentKey: string | null;
   sortOrder: number;
 }
+
+// 统一的 detail_plan NOTE 措辞（5 个 section 共用）
+const DETAIL_PLAN_NOTE = `**NOTE**: This detailed plan is from the goal planning phase. Follow it where applicable, but adapt to actual codebase constraints.`;
 
 export function seedPromptConfigs(db: Database.Database): void {
   const now = Date.now();
@@ -30,25 +36,6 @@ export function seedPromptConfigs(db: Database.Database): void {
   const entries: SeedEntry[] = [];
 
   // ================================================================
-  // Session 层 — LLM 辅助功能
-  // ================================================================
-
-  entries.push({
-    key: 'session.title_generate',
-    category: 'skill',
-    name: 'Session 标题生成',
-    description: '根据用户第一条消息自动生成会话标题',
-    template: `根据用户发送给 AI 编程助手的第一条消息，生成一个简短的中文标题（≤30字）。
-标题应概括用户的意图或要做的事情。只输出标题，不要任何其他内容。
-
-用户消息：
-{{FIRST_MESSAGE}}`,
-    variables: ['FIRST_MESSAGE'],
-    parentKey: null,
-    sortOrder: 0,
-  });
-
-  // ================================================================
   // Orchestrator 层 — 内联模板
   // ================================================================
 
@@ -59,6 +46,10 @@ export function seedPromptConfigs(db: Database.Database): void {
     name: '简单任务执行',
     description: '简单代码任务的直接执行（无 plan 阶段）',
     template: `You are a subtask executor for Goal "{{GOAL_NAME}}".
+
+## Environment
+- You are working in a **git worktree** dedicated to this task
+- Commit with descriptive messages: \`<type>(<scope>): <summary>\` (e.g. \`feat(auth): add login endpoint\`, \`fix(db): handle null input\`)
 
 ## Current Task
 ID: {{TASK_LABEL}}
@@ -76,7 +67,7 @@ Description: {{TASK_DESCRIPTION}}`,
     description: '注入来自 Goal body 的详细计划',
     template: `{{DETAIL_PLAN_TEXT}}
 
-**IMPORTANT**: The detailed plan above comes from the goal planning phase. Follow it where applicable, but adapt to actual codebase constraints if needed.`,
+${DETAIL_PLAN_NOTE}`,
     variables: ['DETAIL_PLAN_TEXT'],
     parentKey: 'orchestrator.task',
     sortOrder: 1,
@@ -100,35 +91,39 @@ Description: {{TASK_DESCRIPTION}}`,
     name: '通用要求 section',
     description: '任务执行的通用要求',
     template: `## Requirements
-1. Focus on completing the task above
-2. After implementation, **verify the code works** — detect the project's build system (package.json, Makefile, pyproject.toml, Cargo.toml, etc.) and run the appropriate build and test commands
-3. Fix any build or test failures before committing
-4. If you need user decisions, ask clearly
-5. Do not modify code unrelated to this task`,
+1. After implementation, run the project's build and test commands to verify correctness
+2. Fix any build or test failures before committing
+3. If you need user decisions or encounter blockers, write a feedback file (see Feedback Protocol)
+4. Do not modify code unrelated to this task`,
     variables: [],
     parentKey: 'orchestrator.task',
     sortOrder: 3,
   });
 
+  // feedback_protocol 已合并 when_to_feedback 的触发场景
   entries.push({
     key: 'orchestrator.task.feedback_protocol',
     category: 'orchestrator',
     name: 'Feedback 协议 section',
-    description: '任务遇到问题时的反馈机制',
+    description: '任务遇到问题时的反馈机制（含触发场景）',
     template: `## Feedback Protocol
-When you encounter situations described below, write a feedback file and then **end your session**.
+When you encounter any of these situations, write a feedback file and **end your session**:
+- **Blocked:** Technical blocker you cannot resolve (missing API, wrong architecture, external dependency). Use \`type: "blocked"\`.
+- **Needs Clarification:** Ambiguous task or conflicting requirements. Use \`type: "clarify"\`, list questions in \`details.questions\`.
+- **Scope Mismatch:** Task requires changes far beyond its description, or should be split. Use \`type: "replan"\`.
+- **Dependency Issue:** A completed dependency is incorrect or insufficient. Use \`type: "blocked"\`, reference in \`details.dependencyId\`.
 
-**File path:** \`feedback/{{TASK_ID}}.json\` (relative to working directory)
+**File path:** \`feedback/{{TASK_ID}}.json\`
 **Format:**
 \`\`\`json
 {
   "type": "replan" | "blocked" | "clarify",
-  "reason": "brief summary of why",
-  "details": {}  // optional, structured data depending on type
+  "reason": "brief summary",
+  "details": {}
 }
 \`\`\`
 
-After writing the feedback file, you MUST \`git add\` and \`git commit\` it, then **stop working**. The orchestrator will read your feedback and decide the next action.`,
+After writing the feedback file, \`git add\` and \`git commit\` it, then **stop working**.`,
     variables: ['TASK_ID'],
     parentKey: 'orchestrator.task',
     sortOrder: 4,
@@ -161,21 +156,7 @@ This is a **research task**. When you finish your research:
     sortOrder: 5,
   });
 
-  entries.push({
-    key: 'orchestrator.task.when_to_feedback',
-    category: 'orchestrator',
-    name: '何时写 feedback section',
-    description: '触发 feedback 的场景列表',
-    template: `## When to Write Feedback
-Write a feedback file (and stop) if any of these occur:
-- **Blocked:** You hit a technical blocker you cannot resolve (missing API, wrong architecture, external dependency). Use \`type: "blocked"\`, describe the blocker in \`reason\`, and include attempted solutions in \`details\`.
-- **Needs Clarification:** The task description is ambiguous or you discover conflicting requirements. Use \`type: "clarify"\`, list your questions in \`details.questions\`.
-- **Scope Mismatch:** You realize the task requires changes far beyond its description, or should be split into multiple tasks. Use \`type: "replan"\`, describe the discovered scope in \`details\`.
-- **Dependency Issue:** A completed dependency task is incorrect or insufficient for your work. Use \`type: "blocked"\`, reference the dependency in \`details.dependencyId\`.`,
-    variables: [],
-    parentKey: 'orchestrator.task',
-    sortOrder: 6,
-  });
+  // when_to_feedback 已合并入 feedback_protocol，不再单独存在
 
   entries.push({
     key: 'orchestrator.task.placeholder_rules',
@@ -198,7 +179,10 @@ This is a **placeholder task**. It exists as a structural marker in the task gra
     category: 'orchestrator',
     name: 'Opus 计划阶段',
     description: '高级架构师规划子任务实现（复杂代码）',
-    template: `You are a senior architect planning the implementation of a subtask for Goal "{{GOAL_NAME}}".
+    template: `You are a senior architect planning a subtask implementation for Goal "{{GOAL_NAME}}".
+
+## Environment
+- You are working in a **git worktree** dedicated to this task
 
 ## Task to Plan
 ID: {{TASK_LABEL}}
@@ -215,7 +199,7 @@ Description: {{TASK_DESCRIPTION}}`,
     description: '注入来自 Goal body 的设计意图',
     template: `{{DETAIL_PLAN_TEXT}}
 
-**NOTE**: The detailed plan above is from the goal planning phase. Use it as a **reference** to understand the design intent, but verify against the actual codebase and adapt as needed. Your .task-plan.md should be grounded in actual code structure.`,
+${DETAIL_PLAN_NOTE}`,
     variables: ['DETAIL_PLAN_TEXT'],
     parentKey: 'orchestrator.plan',
     sortOrder: 1,
@@ -237,42 +221,21 @@ Description: {{TASK_DESCRIPTION}}`,
     key: 'orchestrator.plan.instructions',
     category: 'orchestrator',
     name: '计划指令 section',
-    description: '计划阶段的具体指令和输出格式',
+    description: '计划阶段的具体指令',
     template: `## Your Job
-1. Analyze the existing codebase relevant to this task
-2. Identify all files that need to be modified or created
-3. Design the implementation approach with specific steps
-4. Write a detailed plan to \`.task-plan.md\` in the working directory
-5. \`git add .task-plan.md && git commit -m "plan: {{TASK_LABEL}} implementation plan"\`
+Analyze the codebase and write a detailed implementation plan to \`.task-plan.md\`.
 
-## Plan File Format (.task-plan.md)
-\`\`\`markdown
-# Implementation Plan: {{TASK_LABEL}}
+The plan should cover:
+- Which files need to be modified or created, and why
+- Step-by-step implementation approach with specific details
+- Key design decisions and rationale
+- Edge cases and risks
 
-## Overview
-<Brief summary of what needs to be done>
-
-## Files to Modify
-- \`path/to/file1.ts\` — <what changes and why>
-- \`path/to/file2.ts\` — <what changes and why>
-
-## Implementation Steps
-1. <Step 1 with specific details>
-2. <Step 2 with specific details>
-...
-
-## Key Decisions
-- <Decision 1 and rationale>
-
-## Edge Cases / Risks
-- <Risk 1 and mitigation>
-\`\`\`
-
-## CRITICAL Rules
-- Do NOT write any implementation code — only the plan
-- The plan must be specific enough that a different developer can implement it without ambiguity
-- Focus on the "what" and "why", include code snippets only as examples/references
-- After writing and committing the plan file, STOP`,
+## Rules
+- Do NOT write implementation code — only the plan
+- The plan must be specific enough for a different developer to implement without ambiguity
+- After writing: \`git add .task-plan.md && git commit -m "plan: {{TASK_LABEL}} implementation plan"\`
+- Then STOP`,
     variables: ['TASK_LABEL'],
     parentKey: 'orchestrator.plan',
     sortOrder: 3,
@@ -284,8 +247,12 @@ Description: {{TASK_DESCRIPTION}}`,
     category: 'orchestrator',
     name: 'Sonnet 执行阶段',
     description: '按计划实施代码（复杂代码）',
-    template: `You are a code executor implementing a subtask for Goal "{{GOAL_NAME}}".
+    template: `You are implementing a subtask for Goal "{{GOAL_NAME}}".
 A senior architect has already created a detailed plan for you.
+
+## Environment
+- You are working in a **git worktree** dedicated to this task
+- Commit with descriptive messages: \`<type>(<scope>): <summary>\`
 
 ## Current Task
 ID: {{TASK_LABEL}}
@@ -302,7 +269,7 @@ Description: {{TASK_DESCRIPTION}}`,
     description: '执行阶段的设计意图参考',
     template: `{{DETAIL_PLAN_TEXT}}
 
-**NOTE**: The detailed plan above is from the goal planning phase. It provides design intent and context. However, **your primary guide is the .task-plan.md file** created by the architect, which is grounded in the actual codebase.`,
+${DETAIL_PLAN_NOTE} However, **your primary guide is the .task-plan.md file** created by the architect.`,
     variables: ['DETAIL_PLAN_TEXT'],
     parentKey: 'orchestrator.execute_with_plan',
     sortOrder: 1,
@@ -314,28 +281,15 @@ Description: {{TASK_DESCRIPTION}}`,
     name: '执行指令 section',
     description: '执行阶段的具体指令',
     template: `## Instructions
-1. **First**, read the plan file: \`cat .task-plan.md\`
-2. Follow the plan step by step — implement each step in order
-3. After implementation, **verify the code works**:
-   - Detect the project's build system (package.json, Makefile, pyproject.toml, Cargo.toml, etc.)
-   - Run the appropriate build/compile command and fix any errors
-   - Run the appropriate test command and fix any failures
-4. Commit your changes only when build and tests pass
+1. Read the plan: \`cat .task-plan.md\`
+2. Implement each step in order
+3. Run the project's build and test commands — fix any failures
+4. Commit when build and tests pass
+5. If blocked, write \`feedback/{{TASK_ID}}.json\` with \`{"type": "blocked", "reason": "..."}\`, commit, and stop
 
-## CRITICAL Rules
-- Follow the plan exactly — do not deviate or add features not in the plan
-- If a plan step is unclear, make the simplest reasonable interpretation
-- Do not modify files not mentioned in the plan unless absolutely necessary
-- If you encounter a blocker that prevents following the plan, write a feedback file:
-  \`feedback/{{TASK_ID}}.json\` with \`{"type": "blocked", "reason": "..."}\`
-  then \`git add && git commit\` and stop
-
-## Feedback Protocol
-If blocked, write \`feedback/{{TASK_ID}}.json\`:
-\`\`\`json
-{"type": "blocked", "reason": "brief description", "details": "..."}
-\`\`\`
-Then \`git add && git commit\` and stop.`,
+## Rules
+- Follow the plan — do not add features not in the plan
+- Do not modify files not mentioned unless absolutely necessary`,
     variables: ['TASK_ID'],
     parentKey: 'orchestrator.execute_with_plan',
     sortOrder: 2,
@@ -364,7 +318,7 @@ Description: {{TASK_DESCRIPTION}}`,
     description: '审查阶段的设计意图基准',
     template: `{{DETAIL_PLAN_TEXT}}
 
-**NOTE**: The detailed plan above is from the goal planning phase. Use it as a **baseline** to verify whether the implementation matches the original design intent.`,
+${DETAIL_PLAN_NOTE}`,
     variables: ['DETAIL_PLAN_TEXT'],
     parentKey: 'orchestrator.audit',
     sortOrder: 1,
@@ -376,19 +330,17 @@ Description: {{TASK_DESCRIPTION}}`,
     name: '审查指令 section',
     description: '审查阶段的具体指令和输出格式',
     template: `## Instructions
-1. Run \`git log --oneline\` to see all commits, then \`git diff {{GOAL_BRANCH}}...HEAD\` to see all changes since branching from the goal branch
-2. **Verify the code builds and tests pass** before reviewing:
-   - Detect the project's build system by looking for config files: \`package.json\`, \`Makefile\`, \`pyproject.toml\`, \`Cargo.toml\`, \`pom.xml\`, \`build.gradle\`, \`CMakeLists.txt\`, etc.
-   - Run the appropriate **build/compile** command (e.g. \`npm run build\`, \`tsc --noEmit\`, \`make\`, \`cargo build\`, \`mvn compile\`, \`go build ./...\`)
-   - Run the appropriate **test** command (e.g. \`npm test\`, \`pytest\`, \`cargo test\`, \`mvn test\`, \`go test ./...\`)
-   - Build failures and test failures are **always "error" severity** issues
-   - If no build/test configuration is found, note this in the summary and proceed with code review only
-3. Review the changes for:
-   - **Correctness**: Does the code do what the task description requires?
-   - **Completeness**: Are all aspects of the task addressed?
-   - **Bugs**: Are there obvious bugs, edge cases, or runtime errors?
-   - **Security**: Any security vulnerabilities (injection, XSS, etc.)?
-4. Write your verdict to \`feedback/{{TASK_ID}}-audit.json\`
+1. Run \`git log --oneline\` to see commits, then \`git diff {{GOAL_BRANCH}}...HEAD\` to see all changes
+2. **Verify build and tests pass**:
+   - Detect the project's build system and run the appropriate build and test commands
+   - Build/test failures are **always "error" severity**
+   - If no build/test config found, note it and proceed with code review only
+3. Review changes for:
+   - **Correctness**: Does the code fulfill the task description?
+   - **Completeness**: Are all aspects addressed?
+   - **Bugs**: Obvious bugs, edge cases, runtime errors?
+   - **Security**: Injection, XSS, etc.?
+4. Write verdict to \`feedback/{{TASK_ID}}-audit.json\`
 5. \`git add feedback/{{TASK_ID}}-audit.json && git commit -m "audit: {{TASK_LABEL}}"\`
 
 ## Verdict File Format (feedback/{{TASK_ID}}-audit.json)
@@ -430,6 +382,9 @@ Description: {{TASK_DESCRIPTION}}`,
     description: '修复审查发现的问题',
     template: `You are fixing audit issues found in a code review for Goal "{{GOAL_NAME}}".
 
+## Environment
+- You are working in a **git worktree** dedicated to this task
+
 ## Task
 ID: {{TASK_LABEL}}
 Description: {{TASK_DESCRIPTION}}`,
@@ -445,7 +400,7 @@ Description: {{TASK_DESCRIPTION}}`,
     description: '修复阶段的设计意图参考',
     template: `{{DETAIL_PLAN_TEXT}}
 
-**NOTE**: The detailed plan above is from the goal planning phase. It can help you understand the original design intent while fixing the issues.`,
+${DETAIL_PLAN_NOTE}`,
     variables: ['DETAIL_PLAN_TEXT'],
     parentKey: 'orchestrator.fix',
     sortOrder: 1,
@@ -484,50 +439,26 @@ Based on this assessment, the following specific issues need to be fixed:`,
     sortOrder: 3,
   });
 
+  // verify_section + verify_fallback + critical_rules 合并为单一 fix.verify
   entries.push({
-    key: 'orchestrator.fix.verify_section',
+    key: 'orchestrator.fix.verify',
     category: 'orchestrator',
-    name: '修复验证命令 section',
-    description: '审查员提供的验证命令',
-    template: `4. **After all fixes, run these verification commands** to ensure nothing is broken:
-{{VERIFY_COMMANDS}}
-5. If any verification command fails, fix the new errors before committing
-6. Commit your fixes only when all verification commands pass`,
-    variables: ['VERIFY_COMMANDS'],
+    name: '修复验证 section',
+    description: '修复后的验证指令和规则（合并原 verify_section/verify_fallback/critical_rules）',
+    template: `## Verification
+{{VERIFY_TEXT}}
+
+## Rules
+- Only fix "error" severity issues — ignore warnings
+- Do not modify code unrelated to the listed issues
+- You MUST run build/test commands to verify — do not assume the code compiles
+- After fixing, the code should pass the same audit`,
+    variables: ['VERIFY_TEXT'],
     parentKey: 'orchestrator.fix',
     sortOrder: 4,
   });
 
-  entries.push({
-    key: 'orchestrator.fix.verify_fallback',
-    category: 'orchestrator',
-    name: '修复验证回退 section',
-    description: '没有验证命令时的回退指令',
-    template: `4. **Verify the code works** — detect the project's build system (package.json, Makefile, pyproject.toml, etc.) and run the appropriate build and test commands
-5. If any build or test fails after your fix, fix those errors too before committing
-6. Commit your fixes only when build and tests pass`,
-    variables: [],
-    parentKey: 'orchestrator.fix',
-    sortOrder: 5,
-  });
-
-  entries.push({
-    key: 'orchestrator.fix.critical_rules',
-    category: 'orchestrator',
-    name: '修复规则 section',
-    description: '修复阶段的关键规则',
-    template: `## CRITICAL Rules
-- Only fix "error" severity issues — ignore warnings
-- Do not modify code unrelated to the listed issues
-- If an issue is unclear or unfixable, skip it and note why in a comment
-- **You MUST run build and test commands to verify your fixes** — do not just assume the code compiles
-- After fixing, the code should be in a state that would pass the same audit`,
-    variables: [],
-    parentKey: 'orchestrator.fix',
-    sortOrder: 6,
-  });
-
-  // ---- orchestrator.feedback_investigation (单模板) ----
+  // ---- orchestrator.feedback_investigation (单模板) — 不改动 ----
   entries.push({
     key: 'orchestrator.feedback_investigation',
     category: 'orchestrator',
@@ -582,42 +513,42 @@ Reason: {{FEEDBACK_REASON}}
     sortOrder: 0,
   });
 
-  // ---- orchestrator.self_review (单模板) ----
+  // ---- orchestrator.self_review (单模板) — 改进：允许修复小问题 ----
   entries.push({
     key: 'orchestrator.self_review',
     category: 'orchestrator',
     name: 'Self-review 自查',
-    description: 'Fix 阶段后的自查机制',
-    template: `You just finished fixing audit issues. Now perform a **self-review** to catch remaining problems before the senior reviewer checks.
+    description: 'Fix 阶段后的自查机制（可修复小问题）',
+    template: `You just finished fixing audit issues. Perform a **self-review** before the senior reviewer checks again.
 
 ## Task
 ID: {{TASK_LABEL}}
 Description: {{TASK_DESCRIPTION}}
 
-## Original Issues You Fixed
+## Issues You Fixed
 {{ISSUE_LIST}}
 
-## Self-Review Instructions
-1. Read your recent changes (\`git diff HEAD~1\`)
+## Instructions
+1. Read your changes (\`git diff HEAD~1\`)
 2. Verify each original issue is actually fixed
 {{VERIFY_COMMANDS_SECTION}}
-4. Check for new errors (typos, missing imports, logic errors)
+4. If you spot small remaining problems (typos, missing imports, logic errors), **fix them now** and commit
 5. Write self-review result to \`feedback/{{TASK_ID}}-self-review.json\`:
 \`\`\`json
 { "allIssuesFixed": true|false, "remainingIssues": [...], "notes": "..." }
 \`\`\`
-6. Commit the file: \`git add feedback/{{TASK_ID}}-self-review.json && git commit -m "Self-review"\`
+6. Commit: \`git add feedback/{{TASK_ID}}-self-review.json && git commit -m "self-review: {{TASK_LABEL}}"\`
 
 ## Rules
-- Be **honest** — better to catch issues now than fail Opus audit
+- Be **honest** — better to catch issues now than fail the audit again
 - If verify commands fail, set \`allIssuesFixed: false\`
-- Do NOT re-fix issues — just report what you find`,
+- Fix small issues directly; only report issues you truly cannot resolve`,
     variables: ['TASK_LABEL', 'TASK_DESCRIPTION', 'ISSUE_LIST', 'VERIFY_COMMANDS_SECTION', 'TASK_ID'],
     parentKey: null,
     sortOrder: 0,
   });
 
-  // ---- orchestrator.replan (单模板) ----
+  // ---- orchestrator.replan (单模板) — 不改动 ----
   entries.push({
     key: 'orchestrator.replan',
     category: 'orchestrator',
@@ -679,7 +610,7 @@ If no changes are needed, return: { "changes": [], "reasoning": "...", "impactLe
     sortOrder: 0,
   });
 
-  // ---- orchestrator.conflict_resolver (单模板) ----
+  // ---- orchestrator.conflict_resolver (单模板) — 不改动 ----
   entries.push({
     key: 'orchestrator.conflict_resolver',
     category: 'orchestrator',
@@ -714,7 +645,7 @@ Rules:
     sortOrder: 0,
   });
 
-  // ---- orchestrator.brain_init (Brain 初始化) ----
+  // ---- orchestrator.brain_init (Brain 初始化) — 不改动 ----
   entries.push({
     key: 'orchestrator.brain_init',
     category: 'orchestrator',
@@ -749,7 +680,7 @@ Key principles:
     sortOrder: 0,
   });
 
-  // ---- orchestrator.brain_post_eval (任务完成评估) ----
+  // ---- orchestrator.brain_post_eval (任务完成评估) — 不改动 ----
   entries.push({
     key: 'orchestrator.brain_post_eval',
     category: 'orchestrator',
@@ -785,7 +716,7 @@ Set \`needsReplan: true\` ONLY if the task outcome reveals that remaining tasks 
     sortOrder: 0,
   });
 
-  // ---- orchestrator.brain_failure (失败分析) ----
+  // ---- orchestrator.brain_failure (失败分析) — 不改动 ----
   entries.push({
     key: 'orchestrator.brain_failure',
     category: 'orchestrator',
@@ -826,7 +757,7 @@ Confidence guide:
     sortOrder: 0,
   });
 
-  // ---- orchestrator.brain_replan (重规划) ----
+  // ---- orchestrator.brain_replan (重规划) — 不改动 ----
   entries.push({
     key: 'orchestrator.brain_replan',
     category: 'orchestrator',
@@ -877,6 +808,57 @@ Valid actions: add, modify, remove, reorder
 
 If no changes are needed: \`{ "changes": [], "reasoning": "...", "impactLevel": "low" }\``,
     variables: ['TRIGGER_TASK_ID', 'FEEDBACK_TYPE', 'FEEDBACK_REASON', 'FEEDBACK_DETAILS', 'CURRENT_TASKS', 'IMMUTABLE_COMPLETED', 'IMMUTABLE_RUNNING'],
+    parentKey: null,
+    sortOrder: 0,
+  });
+
+  // ---- task_readiness_check (新增) ----
+  entries.push({
+    key: 'orchestrator.task_readiness_check.execute',
+    category: 'orchestrator',
+    name: '执行完成检查',
+    description: '检查子任务是否已完成实现',
+    template: `You are checking whether a subtask has been fully implemented.
+
+Task: {{TASK_LABEL}} — {{TASK_DESCRIPTION}}
+Pipeline phase: {{PIPELINE_PHASE}}
+
+Check the worktree for:
+1. Are there meaningful code changes committed? (\`git log --oneline\`, \`git diff HEAD~1 --stat\`)
+2. Does the code build successfully? (run the project's build command)
+3. Are there any uncommitted changes that should be committed?
+
+Write your assessment to \`feedback/{{TASK_ID}}-readiness.json\`:
+\`\`\`json
+{ "completed": true|false, "audited": false, "committed": true|false, "reason": "..." }
+\`\`\`
+Commit the file and stop.`,
+    variables: ['TASK_DESCRIPTION', 'TASK_ID', 'TASK_LABEL', 'PIPELINE_PHASE'],
+    parentKey: null,
+    sortOrder: 0,
+  });
+
+  entries.push({
+    key: 'orchestrator.task_readiness_check.audit',
+    category: 'orchestrator',
+    name: '审查完成检查',
+    description: '检查子任务是否已通过审查',
+    template: `You are checking whether a subtask has passed code review.
+
+Task: {{TASK_LABEL}} — {{TASK_DESCRIPTION}}
+Pipeline phase: {{PIPELINE_PHASE}}
+
+Check:
+1. Does an audit verdict file exist? (\`feedback/{{TASK_ID}}-audit.json\`)
+2. If yes, is the verdict "pass"?
+3. Does the code build successfully?
+
+Write your assessment to \`feedback/{{TASK_ID}}-readiness.json\`:
+\`\`\`json
+{ "completed": true, "audited": true|false, "committed": true|false, "reason": "..." }
+\`\`\`
+Commit the file and stop.`,
+    variables: ['TASK_DESCRIPTION', 'TASK_ID', 'TASK_LABEL', 'PIPELINE_PHASE'],
     parentKey: null,
     sortOrder: 0,
   });
