@@ -8,19 +8,17 @@ import { apiGet } from '../api-client.js';
 export function registerSystemTools(server: McpServer) {
   server.registerTool('bot_status', {
     title: 'Bot Status',
-    description: 'Get Discord Bot global status: active tasks, default cwd, default model.',
+    description: 'Bot global status: active tasks, default cwd/model, available models.',
     inputSchema: {},
   }, async () => {
-    const r = await apiGet('/api/status');
-    return { content: [{ type: 'text', text: JSON.stringify(r.data ?? r, null, 2) }] };
-  });
-
-  server.registerTool('bot_list_models', {
-    title: 'List Models',
-    description: 'List available Claude models and the current global default model.',
-    inputSchema: {},
-  }, async () => {
-    const r = await apiGet('/api/models');
-    return { content: [{ type: 'text', text: JSON.stringify(r.data ?? r, null, 2) }] };
+    const [status, models] = await Promise.all([
+      apiGet('/api/status'),
+      apiGet('/api/models'),
+    ]);
+    const result = {
+      ...(status.data ?? status),
+      models: models.data ?? models,
+    };
+    return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }] };
   });
 }
