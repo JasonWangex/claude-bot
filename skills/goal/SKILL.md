@@ -72,9 +72,9 @@ bot_goals(action="create", name="<10字以内>", project="<项目名>", status="
 
 所有需要启动 Drive 的地方统一使用此流程：
 
-1. 构建 tasks：优先用 API 返回的 `tasks`，为空则从 body 解析 `[代码]`/`[调研]` 类型，过滤已完成
+1. 构建 tasks：优先用 API 返回的 `tasks`，为空则从 body 解析 `[代码]`/`[调研]` 类型，过滤已完成。ID 必须用 `g<seq>t<N>` 格式（seq = API 返回的 Goal `seq` 字段），防止跨 goal 串号。
    ```json
-   [{"id":"t1","name":"描述","type":"code|research","complexity":"simple|complex","depends":[],"status":"pending"}]
+   [{"id":"g2t1","name":"描述","type":"code|research","complexity":"simple|complex","depends":[],"status":"pending"}]
    ```
 2. 获取当前 thread ID：`bot_tasks(action="list")` → 用当前 cwd 匹配 task 的 `cwd` 字段 → 取 `channel_id`
 3. 调用：

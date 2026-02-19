@@ -13,7 +13,7 @@
 | `[调研]` | 自动执行 |
 | `[手动]` | 不传入 Drive，用户自行完成 |
 
-依赖：`— depends: t1, t2`。可选 Phase 分组。
+依赖：`— depends: g2t1, g2t2`（ID 带 goal seq 前缀，防止跨 goal 串号）。可选 Phase 分组。
 
 ## 每个子任务须包含
 
