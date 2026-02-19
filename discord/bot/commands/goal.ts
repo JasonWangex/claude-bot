@@ -20,7 +20,6 @@ import { logger } from '../../utils/logger.js';
 import { EmbedColors } from '../message-queue.js';
 import { getDb } from '../../db/index.js';
 import { GoalMetaRepo } from '../../db/goal-meta-repo.js';
-import { renderSkill } from '../../services/skill-reader.js';
 import type { CommandDeps } from './types.js';
 import { requireAuth, requireThread } from './utils.js';
 
@@ -132,10 +131,9 @@ async function handleGoal(
     return;
   }
 
-  // 以下路径需要加载 goal skill（直读文件 + 模板替换）
   if (!newSession) {
-    // 有参数，当前 session：转发给 Claude
-    const prompt = renderSkill('goal', { SKILL_ARGS: text, THREAD_ID: channelId });
+    // 有参数，当前 session：通过原生 skill 转发给 Claude
+    const prompt = text ? `/goal ${text}` : '/goal';
     await interaction.reply(`Goal: ${text}...`);
     messageHandler.handleBackgroundChat(guildId, channelId, prompt).catch((err) => {
       logger.error('goal failed:', err.message);
@@ -194,9 +192,9 @@ async function handleGoal(
       await (newChannel as any).send({ embeds: [descEmbed] });
     }
 
-    // 6. 在新 session 中触发 goal skill（注入新 channel 的 thread ID）
-    const prompt = renderSkill('goal', { SKILL_ARGS: text, THREAD_ID: forkResult.channelId });
-    messageHandler.handleBackgroundChat(guildId, forkResult.channelId, prompt).catch((err) => {
+    // 6. 在新 session 中触发 goal skill
+    const goalPrompt = text ? `/goal ${text}` : '/goal';
+    messageHandler.handleBackgroundChat(guildId, forkResult.channelId, goalPrompt).catch((err) => {
       logger.error('goal (new session) background chat failed:', err.message);
     });
 

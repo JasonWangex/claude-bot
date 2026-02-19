@@ -11,7 +11,7 @@ description: 管理大型开发目标，支持子任务拆解、进度跟踪和 
 
 ## 模式分发
 
-根据 `{{SKILL_ARGS}}`：
+根据 `$ARGUMENTS`：
 
 | 输入 | 模式 |
 |------|------|
@@ -76,14 +76,12 @@ bot_create_goal(name="<10字以内>", project="<项目名>", status="Collecting"
    ```json
    [{"id":"t1","name":"描述","type":"code|research","complexity":"simple|complex","depends":[],"status":"pending"}]
    ```
-2. 调用：
+2. 获取当前 thread ID：`bot_list_tasks()` → 用当前 cwd 匹配 task 的 `cwd` 字段 → 取 `channel_id`
+3. 调用：
    ```bash
    curl -s -X POST -H 'Content-Type: application/json' \
-     -d '{"goalName":"<n>","goalThreadId":"{{THREAD_ID}}","baseCwd":"<cwd>","tasks":<数组>,"maxConcurrent":3}' \
+     -d '{"goalName":"<n>","goalThreadId":"<channel_id>","baseCwd":"<cwd>","tasks":<数组>,"maxConcurrent":3}' \
      "http://127.0.0.1:3456/api/goals/<goal-id>/drive"
    ```
-3. 成功 → `bot_update_goal(status="Processing")`；失败 → 输出错误，保持原状态，提示重试
+4. 成功 → `bot_update_goal(status="Processing")`；失败 → 输出错误，保持原状态，提示重试
 
----
-
-**现在请立即执行。用户输入：{{SKILL_ARGS}}**

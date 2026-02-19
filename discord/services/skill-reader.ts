@@ -11,14 +11,22 @@ export function readSkill(skillName: string): string {
   return match ? match[1] : raw;
 }
 
-/** 替换 {{VAR}} 占位符 */
+/**
+ * 替换模板变量。
+ * - {{KEY}} — bot 专用模板语法（如 {{THREAD_ID}}）
+ * - $KEY — Claude Code 原生 skill 语法（如 $ARGUMENTS），仅在模板中无 {{KEY}} 时使用
+ */
 export function renderSkill(
   skillName: string,
   vars: Record<string, string>,
 ): string {
   let template = readSkill(skillName);
   for (const [key, value] of Object.entries(vars)) {
-    template = template.replaceAll(`{{${key}}}`, value);
+    if (template.includes(`{{${key}}}`)) {
+      template = template.replaceAll(`{{${key}}}`, value);
+    } else {
+      template = template.replaceAll(`$${key}`, value);
+    }
   }
   return template;
 }
