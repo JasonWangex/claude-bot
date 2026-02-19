@@ -372,6 +372,11 @@ export class SessionSyncService {
           updated = true;
         }
 
+        // 补充缺失的 title（executor 回调先创建记录时不带 title）
+        if (!existingRow.title) {
+          void this.generateAndSaveTitle(claudeSessionId, jsonlPath);
+        }
+
         if (updated) {
           this.claudeSessionRepo.save(existing);
           return 'updated';
