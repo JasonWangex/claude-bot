@@ -10,10 +10,10 @@ import { registerSystemTools } from './system.js';
 import { registerKnowledgeBaseTools } from './knowledge-base.js';
 
 export function registerAllTools(server: McpServer) {
-  registerTaskTools(server);          // 5 tools
-  registerGoalTools(server);          // 4 tools
-  registerDataTools(server);          // 5 tools
-  registerSystemTools(server);        // 2 tools
-  registerKnowledgeBaseTools(server); // 5 tools
-  // Total: 21 tools
+  registerTaskTools(server);          // 3 tools: bot_tasks, bot_send_message, bot_qdev
+  registerGoalTools(server);          // 1 tool:  bot_goals
+  registerDataTools(server);          // 2 tools: bot_devlogs, bot_ideas
+  registerSystemTools(server);        // 1 tool:  bot_status
+  registerKnowledgeBaseTools(server); // 1 tool:  bot_kb
+  // Total: 8 tools (consolidated from 21)
 }
