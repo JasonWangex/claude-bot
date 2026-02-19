@@ -41,7 +41,7 @@ export function parseTaskDetailPlans(body: string | null): Map<string, TaskDetai
 
   // 匹配 ### tX: 标题 到下一个 ### 或 ## 或文件末尾
   // 使用 dotAll (s flag) 让 . 匹配换行符
-  const sectionRegex = /###\s+(t\d+):\s*[^\n]*\n([\s\S]*?)(?=\n###|\n##|$)/g;
+  const sectionRegex = /###\s+((?:g\d+)?t\d+):\s*[^\n]*\n([\s\S]*?)(?=\n###|\n##|$)/g;
 
   let match;
   while ((match = sectionRegex.exec(body)) !== null) {

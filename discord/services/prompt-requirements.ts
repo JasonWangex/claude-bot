@@ -21,6 +21,12 @@ export const PROMPT_REQUIREMENTS: PromptRequirement[] = [
   { key: 'orchestrator.replan',                 variables: ['GOAL_NAME', 'GOAL_BODY', 'COMPLETION_CRITERIA', 'CURRENT_TASKS', 'TRIGGER_TASK_ID', 'FEEDBACK_TYPE', 'FEEDBACK_REASON', 'FEEDBACK_DETAILS', 'COMPLETED_DIFF_STATS', 'IMMUTABLE_COMPLETED', 'IMMUTABLE_RUNNING'] },
   { key: 'orchestrator.conflict_resolver',      variables: ['SUBTASK_BRANCH', 'TASK_DESCRIPTION', 'CONFLICT_FILES'] },
 
+  // Brain prompts（optional — brain 是增量功能，无 brain 时 fallback to DeepSeek）
+  { key: 'orchestrator.brain_init',              variables: ['GOAL_NAME', 'GOAL_BODY', 'COMPLETION_CRITERIA', 'CURRENT_TASKS'], optional: true },
+  { key: 'orchestrator.brain_post_eval',         variables: ['TASK_LABEL', 'TASK_DESCRIPTION', 'DIFF_STATS', 'TASK_ID'], optional: true },
+  { key: 'orchestrator.brain_failure',           variables: ['TASK_LABEL', 'TASK_DESCRIPTION', 'ERROR_MESSAGE', 'PIPELINE_PHASE', 'AUDIT_RETRIES', 'TASK_CONTEXT', 'TASK_ID'], optional: true },
+  { key: 'orchestrator.brain_replan',            variables: ['TRIGGER_TASK_ID', 'FEEDBACK_TYPE', 'FEEDBACK_REASON', 'FEEDBACK_DETAILS', 'CURRENT_TASKS', 'IMMUTABLE_COMPLETED', 'IMMUTABLE_RUNNING'], optional: true },
+
   // Task readiness check (自动检查任务完成状态)
   { key: 'orchestrator.task_readiness_check.execute', variables: ['TASK_DESCRIPTION', 'TASK_ID', 'TASK_LABEL', 'PIPELINE_PHASE'], optional: true },
   { key: 'orchestrator.task_readiness_check.audit',   variables: ['TASK_DESCRIPTION', 'TASK_ID', 'TASK_LABEL', 'PIPELINE_PHASE'], optional: true },

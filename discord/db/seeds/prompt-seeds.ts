@@ -714,6 +714,173 @@ Rules:
     sortOrder: 0,
   });
 
+  // ---- orchestrator.brain_init (Brain 初始化) ----
+  entries.push({
+    key: 'orchestrator.brain_init',
+    category: 'orchestrator',
+    name: 'Brain 初始化',
+    description: 'Goal Brain 的角色定义和上下文初始化',
+    template: `You are the **strategic brain** for Goal "{{GOAL_NAME}}".
+
+## Your Role
+You are a persistent Opus session that serves as the strategic advisor for this goal's execution. You will receive event messages as subtasks complete or fail, and you must make strategic decisions.
+
+## Goal Context
+{{GOAL_BODY}}
+
+## Completion Criteria
+{{COMPLETION_CRITERIA}}
+
+## Task Plan
+{{CURRENT_TASKS}}
+
+## Decision Output Rules
+When asked to evaluate or analyze, you MUST write your decision as a JSON file to the specified path. Use the Write tool or shell commands to create the file.
+
+**Always write the JSON file FIRST, then provide your reasoning as a text response.**
+
+Key principles:
+- You accumulate context across all events — use previous task outcomes to inform decisions
+- Be concise in reasoning but precise in JSON output
+- When in doubt, prefer conservative actions (continue > retry > replan)
+- Your decisions directly drive the orchestrator — inaccurate output causes real damage`,
+    variables: ['GOAL_NAME', 'GOAL_BODY', 'COMPLETION_CRITERIA', 'CURRENT_TASKS'],
+    parentKey: null,
+    sortOrder: 0,
+  });
+
+  // ---- orchestrator.brain_post_eval (任务完成评估) ----
+  entries.push({
+    key: 'orchestrator.brain_post_eval',
+    category: 'orchestrator',
+    name: 'Brain 任务完成评估',
+    description: 'Brain 评估已完成任务是否偏离计划',
+    template: `[EVENT] Task completed: {{TASK_LABEL}}
+Description: {{TASK_DESCRIPTION}}
+Status: completed and merged
+
+## Diff Stats
+{{DIFF_STATS}}
+
+## Your Job
+Evaluate whether this task's completion changes the strategic picture:
+1. Does the implementation match what was planned?
+2. Are remaining tasks still valid, or does this completion reveal needed changes?
+3. Is a replan necessary?
+
+## Output
+Write your evaluation to \`feedback/eval-{{TASK_ID}}.json\`:
+\`\`\`json
+{
+  "needsReplan": false,
+  "reason": "Brief assessment of task outcome and impact on remaining plan",
+  "taskQuality": "good" | "acceptable" | "concerning",
+  "observations": "Any notable patterns or concerns"
+}
+\`\`\`
+
+Set \`needsReplan: true\` ONLY if the task outcome reveals that remaining tasks need structural changes (not just minor adjustments).`,
+    variables: ['TASK_LABEL', 'TASK_DESCRIPTION', 'DIFF_STATS', 'TASK_ID'],
+    parentKey: null,
+    sortOrder: 0,
+  });
+
+  // ---- orchestrator.brain_failure (失败分析) ----
+  entries.push({
+    key: 'orchestrator.brain_failure',
+    category: 'orchestrator',
+    name: 'Brain 失败分析',
+    description: 'Brain 分析任务失败原因并给出建议',
+    template: `[EVENT] Task failed: {{TASK_LABEL}}
+Description: {{TASK_DESCRIPTION}}
+Error: {{ERROR_MESSAGE}}
+Pipeline phase: {{PIPELINE_PHASE}}
+Audit retries so far: {{AUDIT_RETRIES}}
+
+{{TASK_CONTEXT}}
+
+## Your Job
+Analyze the failure and recommend the best recovery action:
+- **retry**: The failure is transient or environmental — a fresh attempt should work
+- **refix**: The code has partial progress worth preserving — fix in-place
+- **skip**: This task is non-critical and can be skipped without blocking the goal
+- **replan**: The failure reveals a fundamental issue — the task needs to be redesigned
+- **escalate**: Cannot determine the right action — needs human judgment
+
+## Output
+Write your analysis to \`feedback/failure-{{TASK_ID}}.json\`:
+\`\`\`json
+{
+  "recommendation": "retry" | "refix" | "skip" | "replan" | "escalate",
+  "reason": "Concise explanation of the failure cause and why this action is recommended",
+  "confidence": "high" | "medium" | "low"
+}
+\`\`\`
+
+Confidence guide:
+- **high**: Clear root cause, strong evidence for the recommendation
+- **medium**: Likely root cause, recommendation is reasonable but uncertain
+- **low**: Ambiguous failure, recommendation is a best guess`,
+    variables: ['TASK_LABEL', 'TASK_DESCRIPTION', 'ERROR_MESSAGE', 'PIPELINE_PHASE', 'AUDIT_RETRIES', 'TASK_CONTEXT', 'TASK_ID'],
+    parentKey: null,
+    sortOrder: 0,
+  });
+
+  // ---- orchestrator.brain_replan (重规划) ----
+  entries.push({
+    key: 'orchestrator.brain_replan',
+    category: 'orchestrator',
+    name: 'Brain 重规划',
+    description: 'Brain 生成结构化重规划结果（替代 DeepSeek）',
+    template: `[EVENT] Replan requested
+Trigger task: {{TRIGGER_TASK_ID}}
+Feedback type: {{FEEDBACK_TYPE}}
+Reason: {{FEEDBACK_REASON}}
+{{FEEDBACK_DETAILS}}
+
+## Current Tasks
+{{CURRENT_TASKS}}
+
+(You have already seen the diff stats for completed tasks in previous [EVENT] messages. Use that accumulated context for your analysis.)
+
+## Constraints
+1. **NEVER modify completed or skipped tasks** — their IDs: {{IMMUTABLE_COMPLETED}}
+2. **NEVER modify running or dispatched tasks** — their IDs: {{IMMUTABLE_RUNNING}}
+3. New task IDs must not collide with existing IDs
+4. Dependencies must reference valid task IDs (existing or newly added)
+5. Keep changes minimal — only modify what the feedback necessitates
+6. Preserve the overall goal direction
+
+## Output
+Write your replan result to \`feedback/replan-result.json\`:
+\`\`\`json
+{
+  "changes": [
+    { "action": "add", "task": { "id": "t8", "description": "...", "type": "代码", "depends": ["t3"], "phase": 3, "complexity": "simple" } },
+    { "action": "modify", "taskId": "t5", "updates": { "description": "new desc", "depends": ["t3", "t8"], "complexity": "complex" } },
+    { "action": "remove", "taskId": "t7", "reason": "superseded by t8" },
+    { "action": "reorder", "taskId": "t6", "newDepends": ["t8"], "newPhase": 3 }
+  ],
+  "reasoning": "Explanation of why these changes are needed",
+  "impactLevel": "low" | "medium" | "high"
+}
+\`\`\`
+
+Impact levels (assessed by affected pending tasks):
+- low: affects ≤1 pending task
+- medium: affects 2-3 pending tasks
+- high: affects ≥4 pending tasks, OR significant restructuring
+
+Valid task types: 代码, 手动, 调研, 占位
+Valid complexity: "simple" or "complex" (default: "simple")
+Valid actions: add, modify, remove, reorder
+
+If no changes are needed: \`{ "changes": [], "reasoning": "...", "impactLevel": "low" }\``,
+    variables: ['TRIGGER_TASK_ID', 'FEEDBACK_TYPE', 'FEEDBACK_REASON', 'FEEDBACK_DETAILS', 'CURRENT_TASKS', 'IMMUTABLE_COMPLETED', 'IMMUTABLE_RUNNING'],
+    parentKey: null,
+    sortOrder: 0,
+  });
+
   // ================================================================
   // 批量写入
   // ================================================================

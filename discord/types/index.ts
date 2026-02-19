@@ -321,6 +321,9 @@ export interface Task {
   costUsd?: number;
   durationMs?: number;
 
+  // 详细计划（从 Goal body 解析后存储）
+  detailPlan?: string;
+
   // 元数据（用于存储扩展信息）
   metadata?: Record<string, any>;
 }
@@ -384,6 +387,9 @@ export interface GoalDriveState {
 
   /** 待用户确认的回滚操作 */
   pendingRollback?: PendingRollback;
+
+  /** Brain 专属 Discord channel ID（持久化 Opus 战略大脑） */
+  brainChannelId?: string;
 }
 
 // Goal 快照检查点

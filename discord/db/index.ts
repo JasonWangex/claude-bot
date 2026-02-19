@@ -21,6 +21,8 @@ import migration005 from './migrations/005_unique_claude_session_id.js';
 import migration006 from './migrations/006_channel_session_links.js';
 import migration007 from './migrations/007_session_pk_refactor.js';
 import migration008 from './migrations/008_drop_deprecated_sessions.js';
+import migration009 from './migrations/009_add_brain_channel.js';
+import migration010 from './migrations/010_add_task_detail_plan.js';
 
 const allMigrations: Migration[] = [
   migration001,
@@ -31,6 +33,8 @@ const allMigrations: Migration[] = [
   migration006,
   migration007,
   migration008,
+  migration009,
+  migration010,
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

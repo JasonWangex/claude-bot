@@ -549,6 +549,26 @@ export class DiscordBot {
           break;
         }
 
+        case 'skip_task': {
+          if (!extra) return;
+          await interaction.update({ content: '⏭ 正在跳过任务...', components: [] }).catch(() => {});
+          const ok = await this.orchestrator.skipTask(goalId, extra);
+          if (!ok) {
+            await interaction.followUp({ content: '任务不在可跳过状态', ephemeral: true }).catch(() => {});
+          }
+          break;
+        }
+
+        case 'replan_task': {
+          if (!extra) return;
+          await interaction.update({ content: '📋 正在触发重规划...', components: [] }).catch(() => {});
+          const ok = await this.orchestrator.replanFromTask(goalId, extra);
+          if (!ok) {
+            await interaction.followUp({ content: '无法触发重规划', ephemeral: true }).catch(() => {});
+          }
+          break;
+        }
+
         default:
           await interaction.reply({ content: `Unknown goal action: ${action}`, ephemeral: true }).catch(() => {});
       }

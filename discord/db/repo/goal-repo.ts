@@ -41,12 +41,12 @@ export class GoalRepo implements IGoalRepo {
           id, name, status,
           drive_status, drive_branch, drive_thread_id, drive_base_cwd,
           drive_max_concurrent, drive_created_at, drive_updated_at,
-          drive_pending_json
+          drive_pending_json, drive_brain_channel_id
         ) VALUES (
           @id, @name, COALESCE((SELECT status FROM goals WHERE id = @id), 'Processing'),
           @drive_status, @drive_branch, @drive_thread_id, @drive_base_cwd,
           @drive_max_concurrent, @drive_created_at, @drive_updated_at,
-          @drive_pending_json
+          @drive_pending_json, @drive_brain_channel_id
         )
         ON CONFLICT(id) DO UPDATE SET
           name = @name,
@@ -57,7 +57,8 @@ export class GoalRepo implements IGoalRepo {
           drive_max_concurrent = @drive_max_concurrent,
           drive_created_at = @drive_created_at,
           drive_updated_at = @drive_updated_at,
-          drive_pending_json = @drive_pending_json
+          drive_pending_json = @drive_pending_json,
+          drive_brain_channel_id = @drive_brain_channel_id
       `),
 
       deleteGoal: this.db.prepare(`DELETE FROM goals WHERE id = ?`),
@@ -106,13 +107,15 @@ export class GoalRepo implements IGoalRepo {
             branch_name, channel_id, dispatched_at, completed_at,
             error, merged, notified_blocked, feedback_json,
             complexity, pipeline_phase, audit_retries,
-            tokens_in, tokens_out, cache_read_in, cache_write_in, cost_usd, duration_ms
+            tokens_in, tokens_out, cache_read_in, cache_write_in, cost_usd, duration_ms,
+            detail_plan
           ) VALUES (
             @id, @goal_id, @description, @type, @phase, @status,
             @branch_name, @channel_id, @dispatched_at, @completed_at,
             @error, @merged, @notified_blocked, @feedback_json,
             @complexity, @pipeline_phase, @audit_retries,
-            @tokens_in, @tokens_out, @cache_read_in, @cache_write_in, @cost_usd, @duration_ms
+            @tokens_in, @tokens_out, @cache_read_in, @cache_write_in, @cost_usd, @duration_ms,
+            @detail_plan
           )
         `);
 
@@ -146,6 +149,7 @@ export class GoalRepo implements IGoalRepo {
             cache_write_in: task.cacheWriteIn ?? null,
             cost_usd: task.costUsd ?? null,
             duration_ms: task.durationMs ?? null,
+            detail_plan: task.detailPlan ?? null,
           });
 
           for (const dep of task.depends) {
@@ -198,6 +202,7 @@ function goalDriveStateToGoalRow(state: GoalDriveState): Record<string, unknown>
     drive_created_at: state.createdAt,
     drive_updated_at: state.updatedAt,
     drive_pending_json: pendingJson,
+    drive_brain_channel_id: state.brainChannelId ?? null,
   };
 }
 
@@ -238,6 +243,7 @@ function rowsToGoalDriveState(
     maxConcurrent: goal.drive_max_concurrent ?? 2,
     pendingReplan,
     pendingRollback,
+    brainChannelId: goal.drive_brain_channel_id ?? undefined,
     tasks: tasks.map((t) => ({
       id: t.id,
       goalId: t.goal_id ?? undefined,
@@ -263,6 +269,7 @@ function rowsToGoalDriveState(
       cacheWriteIn: t.cache_write_in ?? undefined,
       costUsd: t.cost_usd ?? undefined,
       durationMs: t.duration_ms ?? undefined,
+      detailPlan: t.detail_plan ?? undefined,
     })),
   };
 }

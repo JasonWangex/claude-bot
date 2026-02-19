@@ -22,7 +22,7 @@ import { generateTopicTitle } from '../utils/llm.js';
 import { execGit, resolveMainWorktree } from './git-ops.js';
 import { parseTasks, goalNameToBranch, translateToBranchName } from './goal-state.js';
 import { getNextBatch, isGoalComplete, isGoalStuck, getProgressSummary } from './task-scheduler.js';
-import { parseTaskDetailPlans, formatDetailPlanForPrompt, type TaskDetailPlan } from './goal-body-parser.js';
+import { parseTaskDetailPlans, formatDetailPlanForPrompt } from './goal-body-parser.js';
 import {
   createGoalBranch,
   createSubtaskBranch,
@@ -41,12 +41,14 @@ import {
   updateGoalBodyWithTasks,
   type ReplanContext,
   type ReplanChange,
+  type ReplanResult,
 } from './replanner.js';
 import {
   buildReplanApprovalButtons,
   buildReplanRollbackButton,
   buildRollbackConfirmButtons,
   buildTaskFailedButtons,
+  buildFailureButtons,
 } from './goal-buttons.js';
 import type { IGoalMetaRepo, ITaskRepo, IGoalCheckpointRepo } from '../types/repository.js';
 import type { PromptConfigService } from '../services/prompt-config-service.js';
@@ -158,12 +160,9 @@ export class GoalOrchestrator {
       throw err;
     }
 
-    // 获取 goal seq（短序号），用于子任务命名前缀
-    let goalSeq = 0;
-    try {
-      const goalMeta = await this.deps.goalMetaRepo.get(goalId);
-      goalSeq = goalMeta?.seq ?? 0;
-    } catch { /* fallback to 0 */ }
+    // 获取 goalMeta（seq + body），全方法共用
+    const goalMeta = await this.deps.goalMetaRepo.get(goalId);
+    const goalSeq = goalMeta?.seq ?? 0;
 
     const state: GoalDriveState = {
       goalId,
@@ -179,6 +178,17 @@ export class GoalOrchestrator {
       tasks: parseTasks(rawTasks),
     };
 
+    // 从 Goal body 解析详细计划，一次性附加到 task 上
+    if (goalMeta?.body) {
+      const plans = parseTaskDetailPlans(goalMeta.body);
+      for (const task of state.tasks) {
+        const plan = plans.get(task.id);
+        if (plan) {
+          task.detailPlan = formatDetailPlanForPrompt(plan);
+        }
+      }
+    }
+
     await this.saveState(state);
     this.activeDrives.set(goalId, state);
     await this.syncGoalMetaStatus(goalId, 'Processing');
@@ -190,6 +200,9 @@ export class GoalOrchestrator {
       `Max concurrent: ${maxConcurrent}`,
       'success'
     );
+
+    // 创建 Brain（持久化 Opus 战略大脑）
+    await this.createBrain(state, goalMeta);
 
     await this.reviewAndDispatch(state);
     return state;
@@ -328,6 +341,34 @@ export class GoalOrchestrator {
   }
 
   /**
+   * 从失败任务触发重规划
+   */
+  async replanFromTask(goalId: string, taskId: string): Promise<boolean> {
+    const state = await this.getState(goalId);
+    if (!state) return false;
+    const task = state.tasks.find(t => t.id === taskId);
+    if (!task || task.status !== 'failed') return false;
+
+    await this.notify(state.goalChannelId,
+      `Triggering replan from task ${this.getTaskLabel(state, task.id)}...`,
+      'info',
+    );
+
+    // 跳过失败任务
+    task.status = 'skipped';
+    await this.saveState(state);
+
+    await this.triggerReplan(state, taskId, {
+      type: 'replan',
+      reason: `User requested replan after task ${task.id} failed: ${task.error ?? 'unknown error'}`,
+    });
+
+    const refreshed = await this.getState(goalId);
+    if (refreshed?.status === 'running') await this.reviewAndDispatch(refreshed, taskId);
+    return true;
+  }
+
+  /**
    * refix 流水线：在已有 thread 上重新 audit → fix 循环
    */
   private startRefixPipeline(
@@ -347,26 +388,14 @@ export class GoalOrchestrator {
           duration_ms: 0,
         };
 
-        // 获取并解析 Goal body 中的子任务详细计划
-        let taskDetailPlan: TaskDetailPlan | undefined;
-        try {
-          const goalMeta = await this.deps.goalMetaRepo.get(state.goalId);
-          if (goalMeta?.body) {
-            const plans = parseTaskDetailPlans(goalMeta.body);
-            taskDetailPlan = plans.get(task.id);
-          }
-        } catch (err: any) {
-          logger.warn(`[Orchestrator] Failed to parse task detail plan for ${taskId}: ${err.message}`);
-        }
-
         // 先跑一次 audit，拿到最新 issues
-        const auditResult = await this.runAudit(goalId, taskId, guildId, channelId, task, state, usage, taskDetailPlan);
+        const auditResult = await this.runAudit(goalId, taskId, guildId, channelId, task, state, usage);
         if (auditResult.verdict === 'pass') {
           await this.onTaskCompleted(goalId, taskId, usage);
           return;
         }
         // 进入标准 fix 循环
-        await this.auditFixLoop(goalId, taskId, guildId, channelId, task, state, auditResult.summary, auditResult.issues, auditResult.verifyCommands, usage, taskDetailPlan);
+        await this.auditFixLoop(goalId, taskId, guildId, channelId, task, state, auditResult.summary, auditResult.issues, auditResult.verifyCommands, usage);
       } catch (err: any) {
         const stillRunning = await this.isTaskStillRunning(goalId, taskId);
         if (!stillRunning) return;
@@ -597,6 +626,175 @@ export class GoalOrchestrator {
     }
   }
 
+  // ========== Brain 战略大脑 ==========
+
+  /**
+   * 向 Brain channel 发送事件消息
+   */
+  private async sendToBrain(
+    state: GoalDriveState,
+    message: string,
+  ): Promise<void> {
+    if (!state.brainChannelId) return;
+    const guildId = this.getGuildId();
+    if (!guildId) return;
+    try {
+      await this.deps.messageHandler.handleBackgroundChat(
+        guildId, state.brainChannelId, message,
+      );
+    } catch (err: any) {
+      logger.warn(`[Orchestrator] sendToBrain failed: ${err.message}`);
+    }
+  }
+
+  /**
+   * 读取 Brain 写入的决策 JSON 文件
+   *
+   * Brain 将决策写入 goal worktree 的 feedback/ 目录。
+   */
+  private async readBrainDecision<T>(
+    state: GoalDriveState,
+    filename: string,
+  ): Promise<T | null> {
+    try {
+      const stdout = await execGit(
+        ['worktree', 'list', '--porcelain'],
+        state.baseCwd,
+        `readBrainDecision(${filename}): list worktrees`,
+      );
+      const goalWorktreeDir = this.findWorktreeDir(stdout, state.goalBranch);
+      if (!goalWorktreeDir) {
+        logger.warn(`[Orchestrator] readBrainDecision: goal worktree not found`);
+        return null;
+      }
+
+      const resultPath = join(goalWorktreeDir, 'feedback', filename);
+      const content = await readFile(resultPath, 'utf-8');
+      return JSON.parse(content) as T;
+    } catch (err: any) {
+      logger.warn(`[Orchestrator] readBrainDecision(${filename}): ${err.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * 获取 goal channel 所在的 Category ID（从 channel 向上查找）
+   */
+  private async findCategoryId(goalChannelId: string): Promise<string | null> {
+    try {
+      let channel = await this.deps.client.channels.fetch(goalChannelId);
+      for (let i = 0; i < 3 && channel; i++) {
+        if (channel.type === ChannelType.GuildCategory) {
+          return channel.id;
+        }
+        if ('parentId' in channel && channel.parentId) {
+          channel = await this.deps.client.channels.fetch(channel.parentId);
+        } else {
+          break;
+        }
+      }
+    } catch { /* ignore */ }
+    return null;
+  }
+
+  /**
+   * 创建 Brain channel + session 并发送初始化消息
+   */
+  private async createBrain(
+    state: GoalDriveState,
+    goalMeta: { body?: string | null; completion?: string | null } | null,
+  ): Promise<void> {
+    const guildId = this.getGuildId();
+    if (!guildId) return;
+
+    const categoryId = await this.findCategoryId(state.goalChannelId);
+    if (!categoryId) {
+      logger.warn(`[Orchestrator] createBrain: cannot find category, skipping brain creation`);
+      return;
+    }
+
+    try {
+      const guild = await this.deps.client.guilds.fetch(guildId);
+      const brainChannel = await guild.channels.create({
+        name: `brain-${state.goalName}`.slice(0, 100),
+        type: ChannelType.GuildText,
+        parent: categoryId,
+        reason: `Goal brain: ${state.goalName}`,
+      });
+
+      // 创建 Opus session
+      const goalWorktreeDir = await this.getGoalWorktreeDir(state);
+      const cwd = goalWorktreeDir ?? state.baseCwd;
+      this.deps.stateManager.getOrCreateSession(guildId, brainChannel.id, {
+        name: `brain-${state.goalName}`,
+        cwd,
+      });
+      this.switchSessionModel(guildId, brainChannel.id, this.deps.config.pipelineOpusModel);
+
+      state.brainChannelId = brainChannel.id;
+      await this.saveState(state);
+
+      // 发送初始化消息
+      const ps = this.deps.promptService;
+      const tasksSummary = state.tasks.map(t =>
+        `- ${this.getTaskLabel(state, t.id)}: [${t.type}] ${t.description} (${t.status})`,
+      ).join('\n');
+
+      const initPrompt = ps.render('orchestrator.brain_init', {
+        GOAL_NAME: state.goalName,
+        GOAL_BODY: goalMeta?.body || '(no body)',
+        COMPLETION_CRITERIA: goalMeta?.completion || '(not specified)',
+        CURRENT_TASKS: tasksSummary,
+      });
+
+      await this.sendToBrain(state, initPrompt);
+
+      await this.notify(state.goalChannelId,
+        `Brain created for "${state.goalName}"`,
+        'info',
+      );
+    } catch (err: any) {
+      logger.error(`[Orchestrator] createBrain failed: ${err.message}`);
+    }
+  }
+
+  /**
+   * 获取 goal worktree 目录
+   */
+  private async getGoalWorktreeDir(state: GoalDriveState): Promise<string | null> {
+    try {
+      const stdout = await execGit(
+        ['worktree', 'list', '--porcelain'],
+        state.baseCwd,
+        `getGoalWorktreeDir: list worktrees`,
+      );
+      return this.findWorktreeDir(stdout, state.goalBranch);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 归档 Brain channel（goal 完成时调用）
+   */
+  private async archiveBrainChannel(state: GoalDriveState): Promise<void> {
+    if (!state.brainChannelId) return;
+    const guildId = this.getGuildId();
+    if (!guildId) return;
+
+    try {
+      this.deps.stateManager.archiveSession(guildId, state.brainChannelId, undefined, 'completed');
+      const channel = await this.deps.client.channels.fetch(state.brainChannelId);
+      if (channel && 'delete' in channel) {
+        await (channel as any).delete('Goal completed — brain archived');
+      }
+    } catch (err: any) {
+      logger.warn(`[Orchestrator] archiveBrainChannel: ${err.message}`);
+    }
+    state.brainChannelId = undefined;
+    await this.saveState(state);
+  }
+
   /**
    * 暂停正在运行的任务：中止 Claude 子进程，保留 branch/thread/session 上下文
    */
@@ -717,6 +915,19 @@ export class GoalOrchestrator {
           }
         }
       }
+      // Brain channel 恢复检查
+      if (state.brainChannelId) {
+        try {
+          const ch = await this.deps.client.channels.fetch(state.brainChannelId);
+          if (!ch) throw new Error('Channel not found');
+          logger.info(`[Orchestrator] Brain channel restored: ${state.brainChannelId}`);
+        } catch {
+          logger.warn(`[Orchestrator] Brain channel ${state.brainChannelId} missing, clearing`);
+          state.brainChannelId = undefined;
+          stateModified = true;
+        }
+      }
+
       if (stateModified) await this.saveState(state);
 
       this.activeDrives.set(state.goalId, state);
@@ -878,6 +1089,7 @@ export class GoalOrchestrator {
       state.status = 'completed';
       await this.saveState(state);
       await this.syncGoalMetaStatus(state.goalId, 'Completed');
+      await this.archiveBrainChannel(state);
       await this.notify(state.goalChannelId,
         `**Goal "${state.goalName}" completed!**\n` +
         `Review branch \`${state.goalBranch}\` and merge to main.`,
@@ -945,22 +1157,7 @@ export class GoalOrchestrator {
       const guildId = this.getGuildId();
       if (!guildId) throw new Error('Bot not authorized');
 
-      // 从 goal channel 向上查找 Category（支持 Thread → Channel → Category）
-      let categoryId: string | null = null;
-      try {
-        let channel = await this.deps.client.channels.fetch(state.goalChannelId);
-        for (let i = 0; i < 3 && channel; i++) {
-          if (channel.type === ChannelType.GuildCategory) {
-            categoryId = channel.id;
-            break;
-          }
-          if ('parentId' in channel && channel.parentId) {
-            channel = await this.deps.client.channels.fetch(channel.parentId);
-          } else {
-            break;
-          }
-        }
-      } catch { /* ignore */ }
+      const categoryId = await this.findCategoryId(state.goalChannelId);
 
       if (!categoryId) {
         throw new Error('Cannot find Category for goal channel');
@@ -1152,25 +1349,13 @@ export class GoalOrchestrator {
     const usage = this.emptyUsage();
     (async () => {
       try {
-        // 获取并解析 Goal body 中的子任务详细计划
-        let taskDetailPlan: TaskDetailPlan | undefined;
-        try {
-          const goalMeta = await this.deps.goalMetaRepo.get(state.goalId);
-          if (goalMeta?.body) {
-            const plans = parseTaskDetailPlans(goalMeta.body);
-            taskDetailPlan = plans.get(task.id);
-          }
-        } catch (err: any) {
-          logger.warn(`[Orchestrator] Failed to parse task detail plan for ${taskId}: ${err.message}`);
-        }
-
         if (task.type === '调研') {
-          await this.pipelineResearch(goalId, taskId, guildId, channelId, task, state, usage, taskDetailPlan);
+          await this.pipelineResearch(goalId, taskId, guildId, channelId, task, state, usage);
         } else if (task.type === '代码' && task.complexity === 'complex') {
-          await this.pipelineComplexCode(goalId, taskId, guildId, channelId, task, state, usage, taskDetailPlan);
+          await this.pipelineComplexCode(goalId, taskId, guildId, channelId, task, state, usage);
         } else {
           // 默认路径：代码(simple/无标注) 和其他类型
-          await this.pipelineSimpleCode(goalId, taskId, guildId, channelId, task, state, usage, taskDetailPlan);
+          await this.pipelineSimpleCode(goalId, taskId, guildId, channelId, task, state, usage);
         }
       } catch (err: any) {
         logger.error(`[Orchestrator] Pipeline ${taskId} failed:`, err.message);
@@ -1201,7 +1386,6 @@ export class GoalOrchestrator {
     task: GoalTask,
     state: GoalDriveState,
     usage: ChatUsageResult,
-    taskDetailPlan?: TaskDetailPlan,
   ): Promise<void> {
     const opusModel = this.deps.config.pipelineOpusModel;
     this.switchSessionModel(guildId, channelId, opusModel, 'execute');
@@ -1212,7 +1396,7 @@ export class GoalOrchestrator {
       'pipeline',
     );
 
-    const taskPrompt = this.buildTaskPrompt(task, state, taskDetailPlan);
+    const taskPrompt = this.buildTaskPrompt(task, state);
     logger.info(`[Orchestrator] Pipeline ${taskId}: research → Opus execute`);
     const u = await this.deps.messageHandler.handleBackgroundChat(guildId, channelId, taskPrompt);
     this.accumulateUsage(usage, u);
@@ -1235,7 +1419,6 @@ export class GoalOrchestrator {
     task: GoalTask,
     state: GoalDriveState,
     usage: ChatUsageResult,
-    taskDetailPlan?: TaskDetailPlan,
   ): Promise<void> {
     const { pipelineSonnetModel: sonnetModel } = this.deps.config;
 
@@ -1248,7 +1431,7 @@ export class GoalOrchestrator {
       'pipeline',
     );
 
-    const taskPrompt = this.buildTaskPrompt(task, state, taskDetailPlan);
+    const taskPrompt = this.buildTaskPrompt(task, state);
     logger.info(`[Orchestrator] Pipeline ${taskId}: simple code → Sonnet execute`);
     const execUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, channelId, taskPrompt);
     this.accumulateUsage(usage, execUsage);
@@ -1268,7 +1451,7 @@ export class GoalOrchestrator {
     }
 
     // Phase 2: Opus audit
-    const auditResult = await this.runAudit(goalId, taskId, guildId, channelId, task, state, usage, taskDetailPlan);
+    const auditResult = await this.runAudit(goalId, taskId, guildId, channelId, task, state, usage);
 
     if (auditResult.verdict === 'pass') {
       await this.onTaskCompleted(goalId, taskId, usage);
@@ -1276,7 +1459,7 @@ export class GoalOrchestrator {
     }
 
     // Audit 失败 → Sonnet 修复（最多 2 次）
-    await this.auditFixLoop(goalId, taskId, guildId, channelId, task, state, auditResult.summary, auditResult.issues, auditResult.verifyCommands, usage, taskDetailPlan);
+    await this.auditFixLoop(goalId, taskId, guildId, channelId, task, state, auditResult.summary, auditResult.issues, auditResult.verifyCommands, usage);
   }
 
   /**
@@ -1290,7 +1473,6 @@ export class GoalOrchestrator {
     task: GoalTask,
     state: GoalDriveState,
     usage: ChatUsageResult,
-    taskDetailPlan?: TaskDetailPlan,
   ): Promise<void> {
     const { pipelineOpusModel: opusModel, pipelineSonnetModel: sonnetModel } = this.deps.config;
 
@@ -1303,7 +1485,7 @@ export class GoalOrchestrator {
       'pipeline',
     );
 
-    const planPrompt = this.buildPlanPrompt(task, state, taskDetailPlan);
+    const planPrompt = this.buildPlanPrompt(task, state);
     logger.info(`[Orchestrator] Pipeline ${taskId}: complex code → Opus plan`);
     const planUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, channelId, planPrompt);
     this.accumulateUsage(usage, planUsage);
@@ -1334,8 +1516,8 @@ export class GoalOrchestrator {
 
     // 根据 plan 是否存在选择不同的 prompt
     const executePrompt = planExists
-      ? this.buildExecuteWithPlanPrompt(task, state, taskDetailPlan)
-      : this.buildTaskPrompt(task, state, taskDetailPlan);
+      ? this.buildExecuteWithPlanPrompt(task, state)
+      : this.buildTaskPrompt(task, state);
     logger.info(`[Orchestrator] Pipeline ${taskId}: complex code → Sonnet execute with plan`);
     const execUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, channelId, executePrompt);
     this.accumulateUsage(usage, execUsage);
@@ -1354,7 +1536,7 @@ export class GoalOrchestrator {
     }
 
     // Phase 3: Opus audit
-    const auditResult = await this.runAudit(goalId, taskId, guildId, channelId, task, state, usage, taskDetailPlan);
+    const auditResult = await this.runAudit(goalId, taskId, guildId, channelId, task, state, usage);
 
     if (auditResult.verdict === 'pass') {
       await this.onTaskCompleted(goalId, taskId, usage);
@@ -1362,7 +1544,7 @@ export class GoalOrchestrator {
     }
 
     // Audit 失败 → Sonnet 修复
-    await this.auditFixLoop(goalId, taskId, guildId, channelId, task, state, auditResult.summary, auditResult.issues, auditResult.verifyCommands, usage, taskDetailPlan);
+    await this.auditFixLoop(goalId, taskId, guildId, channelId, task, state, auditResult.summary, auditResult.issues, auditResult.verifyCommands, usage);
   }
 
   /**
@@ -1379,7 +1561,6 @@ export class GoalOrchestrator {
     issues: string[],
     verifyCommands: string[] = [],
     usage: ChatUsageResult,
-    taskDetailPlan?: TaskDetailPlan,
   ): Promise<void> {
     const { pipelineSonnetModel: sonnetModel } = this.deps.config;
     const maxRetries = 2;
@@ -1402,7 +1583,7 @@ export class GoalOrchestrator {
         'pipeline',
       );
 
-      const fixPrompt = this.buildFixPrompt(task, state, auditSummary, issues, verifyCommands, taskDetailPlan);
+      const fixPrompt = this.buildFixPrompt(task, state, auditSummary, issues, verifyCommands);
       logger.info(`[Orchestrator] Pipeline ${taskId}: Sonnet fix attempt ${retry}`);
       const fixUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, channelId, fixPrompt);
       this.accumulateUsage(usage, fixUsage);
@@ -1432,7 +1613,7 @@ export class GoalOrchestrator {
         'pipeline',
       );
 
-      const reAudit = await this.runAudit(goalId, taskId, guildId, channelId, task, state, usage, taskDetailPlan);
+      const reAudit = await this.runAudit(goalId, taskId, guildId, channelId, task, state, usage);
       if (reAudit.verdict === 'pass') {
         await this.onTaskCompleted(goalId, taskId, usage);
         return;
@@ -1568,7 +1749,6 @@ export class GoalOrchestrator {
     task: GoalTask,
     state: GoalDriveState,
     usage: ChatUsageResult,
-    taskDetailPlan?: TaskDetailPlan,
   ): Promise<{ verdict: 'pass' | 'fail'; summary?: string; issues: string[]; verifyCommands: string[] }> {
     const { pipelineOpusModel: opusModel } = this.deps.config;
 
@@ -1580,7 +1760,7 @@ export class GoalOrchestrator {
       'pipeline',
     );
 
-    const auditPrompt = this.buildAuditPrompt(task, state, taskDetailPlan);
+    const auditPrompt = this.buildAuditPrompt(task, state);
     logger.info(`[Orchestrator] Pipeline ${taskId}: Opus audit`);
     const auditUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, channelId, auditPrompt);
     this.accumulateUsage(usage, auditUsage);
@@ -1718,7 +1898,7 @@ export class GoalOrchestrator {
    * buildPlanPrompt — Opus plan phase（复杂代码）
    * 分析代码 → 写 .task-plan.md → commit → 不写实现代码
    */
-  private buildPlanPrompt(task: GoalTask, state: GoalDriveState, taskDetailPlan?: TaskDetailPlan): string {
+  private buildPlanPrompt(task: GoalTask, state: GoalDriveState): string {
     const ps = this.deps.promptService;
     const label = this.getTaskLabel(state, task.id);
     const parts: string[] = [];
@@ -1731,9 +1911,9 @@ export class GoalOrchestrator {
     }));
 
     // 条件 section：详细计划
-    if (taskDetailPlan) {
+    if (task.detailPlan) {
       const s = ps.tryRender('orchestrator.plan.detail_plan', {
-        DETAIL_PLAN_TEXT: formatDetailPlanForPrompt(taskDetailPlan),
+        DETAIL_PLAN_TEXT: task.detailPlan,
       });
       if (s) parts.push(s);
     }
@@ -1759,7 +1939,7 @@ export class GoalOrchestrator {
    * buildExecuteWithPlanPrompt — Sonnet execute (复杂代码)
    * 先读 .task-plan.md → 按步骤实施 → 不偏离方向
    */
-  private buildExecuteWithPlanPrompt(task: GoalTask, state: GoalDriveState, taskDetailPlan?: TaskDetailPlan): string {
+  private buildExecuteWithPlanPrompt(task: GoalTask, state: GoalDriveState): string {
     const ps = this.deps.promptService;
     const label = this.getTaskLabel(state, task.id);
     const parts: string[] = [];
@@ -1772,9 +1952,9 @@ export class GoalOrchestrator {
     }));
 
     // 条件 section：详细计划
-    if (taskDetailPlan) {
+    if (task.detailPlan) {
       const s = ps.tryRender('orchestrator.execute_with_plan.detail_plan', {
-        DETAIL_PLAN_TEXT: formatDetailPlanForPrompt(taskDetailPlan),
+        DETAIL_PLAN_TEXT: task.detailPlan,
       });
       if (s) parts.push(s);
     }
@@ -1790,7 +1970,7 @@ export class GoalOrchestrator {
    * buildAuditPrompt — Opus audit phase
    * 运行 build/test 验证 + 读 git diff → 审查正确性/完整性/bug → 写 audit verdict 文件
    */
-  private buildAuditPrompt(task: GoalTask, state: GoalDriveState, taskDetailPlan?: TaskDetailPlan): string {
+  private buildAuditPrompt(task: GoalTask, state: GoalDriveState): string {
     const ps = this.deps.promptService;
     const label = this.getTaskLabel(state, task.id);
     const parts: string[] = [];
@@ -1803,9 +1983,9 @@ export class GoalOrchestrator {
     }));
 
     // 条件 section：详细计划
-    if (taskDetailPlan) {
+    if (task.detailPlan) {
       const s = ps.tryRender('orchestrator.audit.detail_plan', {
-        DETAIL_PLAN_TEXT: formatDetailPlanForPrompt(taskDetailPlan),
+        DETAIL_PLAN_TEXT: task.detailPlan,
       });
       if (s) parts.push(s);
     }
@@ -1831,7 +2011,6 @@ export class GoalOrchestrator {
     auditSummary: string | undefined,
     issues: string[],
     verifyCommands: string[] = [],
-    taskDetailPlan?: TaskDetailPlan,
   ): string {
     const ps = this.deps.promptService;
     const label = this.getTaskLabel(state, task.id);
@@ -1846,9 +2025,9 @@ export class GoalOrchestrator {
     }));
 
     // 条件 section：详细计划
-    if (taskDetailPlan) {
+    if (task.detailPlan) {
       const s = ps.tryRender('orchestrator.fix.detail_plan', {
-        DETAIL_PLAN_TEXT: formatDetailPlanForPrompt(taskDetailPlan),
+        DETAIL_PLAN_TEXT: task.detailPlan,
       });
       if (s) parts.push(s);
     }
@@ -1949,7 +2128,61 @@ export class GoalOrchestrator {
 
       const costInfo = usage ? ` ($${usage.total_cost_usd.toFixed(4)}, ${Math.round(usage.duration_ms / 1000)}s)` : '';
       await this.notify(state.goalChannelId, `Completed: ${this.getTaskLabel(state, task.id)} - ${task.description}${costInfo}`, 'success');
+
+      // Brain eval 需要在 merge 前获取 diff stat（merge 后分支被删除）
+      let preMergeDiffStat: string | undefined;
+      if (task.type === '代码' && state.brainChannelId && task.branchName) {
+        try {
+          const goalDir = await this.getGoalWorktreeDir(state);
+          if (goalDir) {
+            const stat = await execGit(
+              ['diff', '--stat', `${state.goalBranch}...${task.branchName}`],
+              goalDir,
+              `brain pre-merge diff stat for ${task.id}`,
+            );
+            preMergeDiffStat = stat.trim() || undefined;
+          }
+        } catch { /* ignore — best effort */ }
+      }
+
       if (task.branchName) await this.mergeAndCleanup(state, task);
+
+      // Post-task evaluation via Brain（代码任务 + 有 brain 时触发）
+      if (task.type === '代码' && state.brainChannelId) {
+        try {
+          const ps = this.deps.promptService;
+          const taskDiff = preMergeDiffStat ?? '(no diff available)';
+
+          const evalPrompt = ps.render('orchestrator.brain_post_eval', {
+            TASK_LABEL: this.getTaskLabel(state, task.id),
+            TASK_DESCRIPTION: task.description,
+            DIFF_STATS: taskDiff,
+            TASK_ID: task.id,
+          });
+          await this.sendToBrain(state, evalPrompt);
+
+          const evalResult = await this.readBrainDecision<{
+            needsReplan: boolean; reason: string;
+          }>(state, `eval-${task.id}.json`);
+
+          if (evalResult?.needsReplan) {
+            await this.notify(state.goalChannelId,
+              `**Brain eval:** ${evalResult.reason}`,
+              'info',
+            );
+            await this.triggerReplan(state, taskId, {
+              type: 'replan',
+              reason: `Post-task review: ${evalResult.reason}`,
+            });
+            const refreshed2 = await this.getState(goalId);
+            if (refreshed2?.status === 'running') await this.reviewAndDispatch(refreshed2, taskId);
+            return;
+          }
+        } catch (err: any) {
+          logger.warn(`[Orchestrator] Brain post-eval failed, continuing: ${err.message}`);
+        }
+      }
+
       const refreshed = await this.getState(goalId);
       if (refreshed && refreshed.status === 'running') await this.reviewAndDispatch(refreshed, taskId);
     });
@@ -1978,6 +2211,69 @@ export class GoalOrchestrator {
 
       const costInfo = usage ? ` ($${usage.total_cost_usd.toFixed(4)})` : '';
       const hasContext = !!task.channelId;
+
+      // Brain failure analysis
+      if (state.brainChannelId) {
+        try {
+          const ps = this.deps.promptService;
+          const taskContext = hasContext
+            ? `Has code context: yes (branch: ${task.branchName}, channel: ${task.channelId})`
+            : 'Has code context: no';
+
+          const failurePrompt = ps.render('orchestrator.brain_failure', {
+            TASK_LABEL: this.getTaskLabel(state, task.id),
+            TASK_DESCRIPTION: task.description,
+            ERROR_MESSAGE: error,
+            PIPELINE_PHASE: task.pipelinePhase ?? 'unknown',
+            AUDIT_RETRIES: String(task.auditRetries ?? 0),
+            TASK_CONTEXT: taskContext,
+            TASK_ID: task.id,
+          });
+          await this.sendToBrain(state, failurePrompt);
+
+          const analysis = await this.readBrainDecision<{
+            recommendation: string; reason: string; confidence: string;
+          }>(state, `failure-${task.id}.json`);
+
+          if (analysis) {
+            // 高置信度 retry + 未超限 → 自动重试
+            if (analysis.confidence === 'high' && analysis.recommendation === 'retry'
+                && (task.auditRetries ?? 0) < 3) {
+              await this.notify(state.goalChannelId,
+                `Failed: ${this.getTaskLabel(state, task.id)} - ${task.description}${costInfo}\n` +
+                `Error: ${error}\n\n**Brain:** ${analysis.reason}\nAuto-retrying...`,
+                'info',
+              );
+              // 重置 task 为 pending
+              task.status = 'pending';
+              task.error = undefined;
+              task.branchName = undefined;
+              task.channelId = undefined;
+              task.dispatchedAt = undefined;
+              task.pipelinePhase = undefined;
+              task.auditRetries = (task.auditRetries ?? 0) + 1;
+              await this.saveState(state);
+              if (state.status === 'running') await this.reviewAndDispatch(state);
+              return;
+            }
+
+            // 其他：Brain 推荐 + 增强按钮
+            const buttons = buildFailureButtons(goalId, task.id, analysis.recommendation, hasContext);
+            await this.notify(state.goalChannelId,
+              `Failed: ${this.getTaskLabel(state, task.id)} - ${task.description}${costInfo}\n` +
+              `Error: ${error}\n\n**Brain:** ${analysis.recommendation} (${analysis.confidence})\n${analysis.reason}`,
+              'error',
+              { components: buttons },
+            );
+            if (state.status === 'running') await this.reviewAndDispatch(state);
+            return;
+          }
+        } catch (err: any) {
+          logger.warn(`[Orchestrator] Brain failure analysis failed, using fallback: ${err.message}`);
+        }
+      }
+
+      // Fallback: 原有按钮（无 brain 或 brain 失败时）
       const hint = hasContext
         ? `Reply "retry ${task.id}" to restart, or "refix ${task.id}" to fix in-place.`
         : `Reply "retry ${task.id}" to retry.`;
@@ -2014,20 +2310,58 @@ export class GoalOrchestrator {
       // 2. 获取 Goal 元数据
       const goalMeta = await this.deps.goalMetaRepo.get(state.goalId);
 
-      // 3. 调用 LLM 生成 replan 结果
-      const ctx: ReplanContext = {
-        state,
-        goalMeta,
-        triggerTaskId,
-        feedback,
-        completedDiffStats,
-        promptService: this.deps.promptService,
-      };
+      let result: ReplanResult | null = null;
 
-      const result = await replanTasks(ctx);
+      // 3a. 优先通过 Brain 重规划
+      if (state.brainChannelId) {
+        try {
+          const ps = this.deps.promptService;
+          const tasksSummary = state.tasks.map(t =>
+            `- ${t.id}: [${t.type}] ${t.description} (${t.status})` +
+            (t.depends.length > 0 ? ` depends: ${t.depends.join(', ')}` : ''),
+          ).join('\n');
+          const immutableCompleted = state.tasks
+            .filter(t => t.status === 'completed' || t.status === 'skipped')
+            .map(t => t.id).join(', ') || '(none)';
+          const immutableRunning = state.tasks
+            .filter(t => t.status === 'running' || t.status === 'dispatched')
+            .map(t => t.id).join(', ') || '(none)';
+
+          const replanPrompt = ps.render('orchestrator.brain_replan', {
+            TRIGGER_TASK_ID: triggerTaskId,
+            FEEDBACK_TYPE: feedback.type,
+            FEEDBACK_REASON: feedback.reason,
+            FEEDBACK_DETAILS: feedback.details ? `Details: ${feedback.details}` : '',
+            CURRENT_TASKS: tasksSummary,
+            IMMUTABLE_COMPLETED: immutableCompleted,
+            IMMUTABLE_RUNNING: immutableRunning,
+          });
+          await this.sendToBrain(state, replanPrompt);
+          result = await this.readBrainDecision<ReplanResult>(state, 'replan-result.json');
+          if (result) {
+            logger.info(`[Orchestrator] Brain replan succeeded`);
+          }
+        } catch (err: any) {
+          logger.warn(`[Orchestrator] Brain replan failed, falling back to DeepSeek: ${err.message}`);
+        }
+      }
+
+      // 3b. Fallback: DeepSeek replan
+      if (!result) {
+        const ctx: ReplanContext = {
+          state,
+          goalMeta,
+          triggerTaskId,
+          feedback,
+          completedDiffStats,
+          promptService: this.deps.promptService,
+        };
+        result = await replanTasks(ctx);
+      }
+
       if (!result) {
         await this.notify(state.goalChannelId,
-          `⚠️ Replan 调用失败 — LLM 未返回有效结果，当前计划保持不变`,
+          `Replan 调用失败 — LLM 未返回有效结果，当前计划保持不变`,
           'warning',
         );
         return;
@@ -2053,8 +2387,6 @@ export class GoalOrchestrator {
           `[Orchestrator] Replan auto-applied (${handleResult.impactLevel}), goal ${state.goalId}`,
         );
       } else {
-        // high impact — state.status 保持 running，但 pendingReplan 标记已设置
-        // 等待用户 approve/reject
         logger.info(
           `[Orchestrator] Replan pending approval (high impact), goal ${state.goalId}`,
         );
@@ -2804,7 +3136,7 @@ export class GoalOrchestrator {
     return `${prefix}/${taskLabel}-${translated.slice(0, 30) || 'task'}`;
   }
 
-  private buildTaskPrompt(task: GoalTask, state: GoalDriveState, taskDetailPlan?: TaskDetailPlan): string {
+  private buildTaskPrompt(task: GoalTask, state: GoalDriveState): string {
     const ps = this.deps.promptService;
     const label = this.getTaskLabel(state, task.id);
     const parts: string[] = [];
@@ -2818,9 +3150,9 @@ export class GoalOrchestrator {
     }));
 
     // 条件 section：详细计划
-    if (taskDetailPlan) {
+    if (task.detailPlan) {
       const s = ps.tryRender('orchestrator.task.detail_plan', {
-        DETAIL_PLAN_TEXT: formatDetailPlanForPrompt(taskDetailPlan),
+        DETAIL_PLAN_TEXT: task.detailPlan,
       });
       if (s) parts.push(s);
     }

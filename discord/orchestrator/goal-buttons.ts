@@ -96,6 +96,51 @@ export function buildTaskFailedButtons(goalId: string, taskId: string): ActionRo
   return [row];
 }
 
+// ==================== Brain 增强失败按钮 ====================
+
+/**
+ * 生成 Brain 增强的任务失败按钮组
+ *
+ * Brain 推荐的操作以 Success 样式高亮，其他操作以 Secondary 样式显示。
+ * 按钮比 buildTaskFailedButtons 多了 Skip 和 Replan 选项。
+ */
+export function buildFailureButtons(
+  goalId: string,
+  taskId: string,
+  recommended: string,
+  hasContext: boolean,
+): ActionRowBuilder<ButtonBuilder>[] {
+  const row = new ActionRowBuilder<ButtonBuilder>();
+
+  // Retry — always available
+  row.addComponents(new ButtonBuilder()
+    .setCustomId(`goal:retry_task:${goalId}:${taskId}`)
+    .setLabel('🔄 Retry')
+    .setStyle(recommended === 'retry' ? ButtonStyle.Success : ButtonStyle.Secondary));
+
+  // Refix — only if has context (existing branch/channel)
+  if (hasContext) {
+    row.addComponents(new ButtonBuilder()
+      .setCustomId(`goal:refix_task:${goalId}:${taskId}`)
+      .setLabel('🔧 Refix')
+      .setStyle(recommended === 'refix' ? ButtonStyle.Success : ButtonStyle.Secondary));
+  }
+
+  // Skip
+  row.addComponents(new ButtonBuilder()
+    .setCustomId(`goal:skip_task:${goalId}:${taskId}`)
+    .setLabel('⏭ Skip')
+    .setStyle(recommended === 'skip' ? ButtonStyle.Success : ButtonStyle.Secondary));
+
+  // Replan
+  row.addComponents(new ButtonBuilder()
+    .setCustomId(`goal:replan_task:${goalId}:${taskId}`)
+    .setLabel('📋 Replan')
+    .setStyle(recommended === 'replan' ? ButtonStyle.Success : ButtonStyle.Secondary));
+
+  return [row];
+}
+
 // ==================== 修改后批准 Modal ====================
 
 /** Modal customId 前缀（与 goal button 区分） */
