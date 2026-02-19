@@ -1,51 +1,54 @@
 ---
 name: merge
 description: >
-  合并 worktree 分支到主分支并清理。检查未提交代码、合并分支、删除 worktree、
-  删除 Discord Thread。合并成功后自动写入 Dev Log。
+  Merge worktree branch to main and cleanup. Checks for uncommitted code,
+  merges branch, removes worktree, deletes Discord thread.
+  Auto-records Dev Log after successful merge.
 disable-model-invocation: true
 ---
 
-# Merge & Cleanup - 分支合并与清理
+# Merge & Cleanup
 
-将 worktree 分支合并到 main 并清理资源。
+Merge a worktree branch into main and clean up resources.
 
-**目标分支:** $ARGUMENTS
+**Target branch:** $ARGUMENTS
 
-**当前 Worktree 信息:**
+**Current worktree info:**
 !`git worktree list`
 
-## 第一步：解析参数
+## Step 1: Parse arguments
 
-从上面的 worktree 列表中提取：
-- **TARGET_BRANCH**: `$ARGUMENTS` 指定的分支名
-- **TARGET_CWD**: TARGET_BRANCH 对应的 worktree 路径
-- **MAIN_CWD**: `[main]` 或 `[master]` 标记的 worktree 路径
+Extract from the worktree list above:
+- **TARGET_BRANCH**: branch name specified by `$ARGUMENTS`
+- **TARGET_CWD**: worktree path for TARGET_BRANCH
+- **MAIN_CWD**: worktree path marked with `[main]` or `[master]`
 
-如果找不到 TARGET_BRANCH 对应的 worktree，报错并停止。
+If no worktree found for TARGET_BRANCH, report error and stop.
 
-## 第二步：执行合并与清理
+## Step 2: Merge and cleanup
 
-**重要：用一个 bash 脚本完成全部操作，不要分步执行。** 将解析出的参数填入以下脚本：
+**Important: Execute all operations in a single bash script. Do not split into separate commands.**
+
+Fill parsed parameters into this script:
 
 ```bash
 #!/bin/bash
 set -e
 
-TARGET_CWD="<解析出的 TARGET_CWD>"
-TARGET_BRANCH="<解析出的 TARGET_BRANCH>"
-MAIN_CWD="<解析出的 MAIN_CWD>"
+TARGET_CWD="<parsed TARGET_CWD>"
+TARGET_BRANCH="<parsed TARGET_BRANCH>"
+MAIN_CWD="<parsed MAIN_CWD>"
 
-echo "=== Step 1: 检查工作目录 ==="
+echo "=== Step 1: Check working directory ==="
 cd "$TARGET_CWD"
 STATUS=$(git status --porcelain)
 if [ -n "$STATUS" ]; then
-  echo "发现未提交的更改，自动提交..."
-  git add -A && git commit -m "auto commit before merge" || { echo "FAIL: 自动提交失败"; exit 1; }
+  echo "Found uncommitted changes, auto-committing..."
+  git add -A && git commit -m "auto commit before merge" || { echo "FAIL: auto commit failed"; exit 1; }
 fi
-echo "工作目录干净"
+echo "Working directory clean"
 
-echo "=== Step 2: 收集分支信息（合并前） ==="
+echo "=== Step 2: Collect branch info (pre-merge) ==="
 cd "$MAIN_CWD"
 COMMIT_COUNT=$(git log main.."$TARGET_BRANCH" --oneline | wc -l | tr -d ' ')
 COMMIT_MESSAGES=$(git log main.."$TARGET_BRANCH" --pretty=format:"- %s")
@@ -56,67 +59,67 @@ echo "$COMMIT_MESSAGES"
 echo "EOF"
 echo "DEVLOG_DIFF_STAT=$DIFF_STAT"
 
-echo "=== Step 3: 合并到 main ==="
-git merge "$TARGET_BRANCH" --no-edit || { echo "FAIL: 合并冲突"; git merge --abort; exit 1; }
-echo "合并成功"
+echo "=== Step 3: Merge to main ==="
+git merge "$TARGET_BRANCH" --no-edit || { echo "FAIL: merge conflict"; git merge --abort; exit 1; }
+echo "Merge successful"
 
-echo "=== Step 4: 验证合并 ==="
+echo "=== Step 4: Verify merge ==="
 if ! git branch --merged main | grep -q "$TARGET_BRANCH"; then
-  echo "FAIL: 分支未完全合并到 main"
+  echo "FAIL: branch not fully merged into main"
   exit 1
 fi
-echo "分支已完全合并"
+echo "Branch fully merged"
 
-echo "=== Step 5: 删除 worktree ==="
-git worktree remove "$TARGET_CWD" || { echo "FAIL: 删除 worktree 失败"; exit 1; }
-echo "Worktree 已删除"
+echo "=== Step 5: Remove worktree ==="
+git worktree remove "$TARGET_CWD" || { echo "FAIL: worktree removal failed"; exit 1; }
+echo "Worktree removed"
 
-echo "=== Step 6: 删除分支 ==="
-git branch -d "$TARGET_BRANCH" || { echo "FAIL: 删除分支失败（可能未完全合并）"; exit 1; }
-echo "分支已删除"
+echo "=== Step 6: Delete branch ==="
+git branch -d "$TARGET_BRANCH" || { echo "FAIL: branch deletion failed (may not be fully merged)"; exit 1; }
+echo "Branch deleted"
 
 echo ""
-echo "===== 完成 ====="
-echo "合并清理完成"
-echo "- 分支: $TARGET_BRANCH → main"
-echo "- Worktree: 已删除"
-echo "- 分支: 已删除"
+echo "===== Done ====="
+echo "Merge and cleanup complete"
+echo "- Branch: $TARGET_BRANCH → main"
+echo "- Worktree: removed"
+echo "- Branch: deleted"
 ```
 
-## 第三步：删除 Discord Thread
+## Step 3: Delete Discord thread
 
-脚本成功后，通过 MCP 查找并删除 task：
+After script succeeds, find and delete the task via MCP:
 
-1. `bot_tasks(action="list")` 列出所有 tasks
-2. 找到 `branch` 匹配 TARGET_BRANCH 的 task（注意：task 的 cwd 可能已被改为 main 路径，优先用 branch 匹配）
-3. `bot_tasks(action="delete", task_id="<channel_id>", cascade=true)` 删除
+1. `bot_tasks(action="list")` to list all tasks
+2. Find the task whose `branch` matches TARGET_BRANCH (note: task's cwd may have been changed to main path, prefer matching by branch)
+3. `bot_tasks(action="delete", task_id="<channel_id>", cascade=true)` to delete
 
-如果没找到匹配的 task，跳过此步骤。
+If no matching task found, skip this step.
 
-## 第四步：写入 Dev Log
+## Step 4: Write Dev Log
 
-**脚本成功后，必须执行此步骤。** 使用 `/devlog` skill 将合并记录写入数据库。脚本输出中的 `DEVLOG_` 开头的信息会被 devlog skill 自动识别使用。
+**After script succeeds, this step is mandatory.** Use `/devlog` skill to write the merge record to database. The `DEVLOG_` prefixed info from script output will be automatically recognized by the devlog skill.
 
-## 第五步：标记关联 Idea 为 Done
+## Step 5: Mark associated Idea as Done
 
-查询 Processing 状态的 Ideas：
+Query Processing Ideas:
 
 ```
-bot_ideas(action="list", project="<项目名>", status="Processing")
+bot_ideas(action="list", project="<project name>", status="Processing")
 ```
 
-如果找到匹配的记录（根据分支名或任务描述判断关联性），更新其状态为 Done：
+If a matching record is found (determined by branch name or task description), update its status to Done:
 
 ```
 bot_ideas(action="update", idea_id="<id>", status="Done")
 ```
 
-如果没找到 Processing 状态的 Idea，跳过此步骤。
+If no Processing Idea found, skip this step.
 
-## 安全规则
+## Safety rules
 
-- 使用 `git branch -d`（安全删除），禁止 `-D`
-- 合并冲突时中止并报告，不强制合并
-- 合并在 main worktree 中执行，不在被删除的 worktree 中操作
+- Use `git branch -d` (safe delete), never `-D`
+- Abort and report on merge conflicts, never force merge
+- Merge is executed in the main worktree, not in the worktree being removed
 
-**立即运行上面的脚本，不要拆分成多个命令。如果脚本失败，报告具体的 FAIL 原因，不执行后续步骤。**
+**Execute the script above immediately as a single command. If the script fails, report the specific FAIL reason and do not proceed with subsequent steps.**

@@ -1,104 +1,104 @@
 ---
 name: kb
 description: >
-  知识库管理。无参数列出当前项目的条目；有参数时记录新的经验/教训。
-  支持 Markdown 格式，可记录架构决策、排障经验、API 设计要点等。
+  Knowledge base management. No arguments lists entries for current project;
+  with arguments records new lessons/insights. Supports Markdown format for
+  architecture decisions, troubleshooting, API design notes, etc.
 ---
 
-# KB - Knowledge Base 知识库
+# KB - Knowledge Base
 
-## 模式判断
+## Mode selection
 
-根据 `$ARGUMENTS` 决定模式：
+Based on `$ARGUMENTS`:
 
-- **为空** → 列表模式
-- **不为空** → 记录模式
+- **Empty** → List mode
+- **Non-empty** → Record mode
 
 ---
 
-## 列表模式（无参数）
+## List mode (no arguments)
 
-### 1. 查询当前项目的知识库条目
-
-```
-bot_kb(action="list", project="<项目名>")
-```
-
-### 2. 展示列表
-
-按 category 分组展示：
+### 1. Query knowledge base entries for current project
 
 ```
-知识库 (项目: <Project>)
+bot_kb(action="list", project="<project name>")
+```
+
+### 2. Display list
+
+Group by category:
+
+```
+Knowledge Base (project: <Project>)
 
 Architecture
-  1. <Title> — <content 前50字>
+  1. <Title> — <first 50 chars of content>
 
 Troubleshooting
-  2. <Title> — <content 前50字>
+  2. <Title> — <first 50 chars of content>
 
-(未分类)
-  3. <Title> — <content 前50字>
+(Uncategorized)
+  3. <Title> — <first 50 chars of content>
 
-共 N 条。输入编号查看详情，或用 /kb <描述> 记录新条目。
+Total: N entries. Enter a number to view details, or use /kb <description> to record a new entry.
 ```
 
-如果没有任何条目，提示：`当前项目没有知识库条目。用 /kb <描述> 记录一条经验。`
+If no entries exist, show: `No knowledge base entries for this project. Use /kb <description> to record one.`
 
-### 3. 用户选择后
+### 3. After user selects
 
-调用 `bot_kb(action="get", kb_id="<id>")` 获取完整内容并展示。
+Call `bot_kb(action="get", kb_id="<id>")` to fetch and display full content.
 
 ---
 
-## 记录模式（有参数）
+## Record mode (with arguments)
 
-`$ARGUMENTS` 作为初始描述，与用户快速确认以下信息：
+`$ARGUMENTS` serves as the initial description. Quickly confirm with user:
 
-### 1. 收集信息
+### 1. Collect information
 
-向用户确认：
-- **标题**: 从参数提取或请用户精简（≤20字）
-- **分类**: 建议一个分类 — Architecture / Troubleshooting / API / Design / Convention / Other
-- **内容**: 请用户补充详细内容（Markdown 格式），或根据对话上下文自动整理
-- **标签**: 提取相关技术关键词（如 SQLite, migration, Discord.js）
-- **来源**: 如果能判断关联的 Goal 或任务，自动填写
+Confirm with user:
+- **Title**: Extract from arguments or ask user to refine (<=20 chars)
+- **Category**: Suggest one — Architecture / Troubleshooting / API / Design / Convention / Other
+- **Content**: Ask user for details (Markdown format), or auto-organize from conversation context
+- **Tags**: Extract relevant technical keywords (e.g. SQLite, migration, Discord.js)
+- **Source**: Auto-fill if an associated Goal or task can be identified
 
-如果用户给的参数已经足够详细（超过一句话），直接整理为结构化内容，不追问。
+If the arguments are already detailed enough (more than one sentence), organize into structured content directly without asking.
 
-### 2. 写入 SQLite
+### 2. Write to SQLite
 
 ```
 bot_kb(action="create",
-  title="<标题>",
-  content="<Markdown 内容>",
-  project="<项目名>",
-  category="<分类>",
+  title="<title>",
+  content="<Markdown content>",
+  project="<project name>",
+  category="<category>",
   tags=["tag1", "tag2"],
-  source="<来源>"
+  source="<source>"
 )
 ```
 
-### 3. 确认
+### 3. Confirm
 
 ```
-已记录: <标题>
-分类: <category> | 标签: tag1, tag2
+Recorded: <title>
+Category: <category> | Tags: tag1, tag2
 ```
 
 ---
 
-## 项目名判断
+## Project name detection
 
-根据当前工作目录判断项目：
-- 路径包含 `claude-bot` → `claude-bot`
-- 路径包含 `LearnFlashy` → `LearnFlashy`
-- 其他 → 用目录名作为项目名
+Determine project from current working directory:
+- Path contains `claude-bot` → `claude-bot`
+- Path contains `LearnFlashy` → `LearnFlashy`
+- Otherwise → use directory name
 
 ---
 
-## 重要提示
+## Important notes
 
-- 所有操作通过 MCP 工具 `bot_kb` 完成（action: list/get/create/update/delete）
-- 如果 MCP 工具不可用，提示用户检查 Bot 和 MCP Server 是否运行
-
+- All operations use MCP tool `bot_kb` (actions: list/get/create/update/delete)
+- If MCP tools are unavailable, prompt user to check if Bot and MCP Server are running

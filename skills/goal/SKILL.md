@@ -1,84 +1,87 @@
 ---
 name: goal
-description: 管理大型开发目标，支持子任务拆解、进度跟踪和 Drive 并行执行。当用户提到目标管理、任务拆解、Goal、Drive、"看看当前目标"、"继续之前的任务"时触发。
+description: >
+  Manage large development goals with subtask decomposition, progress tracking,
+  and parallel Drive execution. Triggers when user mentions goal management,
+  task breakdown, Goal, Drive, "check current goals", or "continue previous task".
 ---
 
-# Goal - 开发目标管理
+# Goal - Development Goal Management
 
-在 plan mode 的 research → plan → review 流程之上，增加**持久化**（SQLite）和**并行执行**（Drive API）能力。
+Adds **persistence** (SQLite) and **parallel execution** (Drive API) on top of plan mode's research → plan → review workflow.
 
-状态流: `Pending → Collecting → Planned → Processing → Completed → Merged`，Processing 可进入 `Blocking`。
+State flow: `Pending → Collecting → Planned → Processing → Completed → Merged`. Processing can enter `Blocking`.
 
-## 模式分发
+## Mode dispatch
 
-根据 `$ARGUMENTS`：
+Based on `$ARGUMENTS`:
 
-| 输入 | 模式 |
-|------|------|
-| 空 | 列表：查询各状态 Goals + 最近 5 Ideas，按状态分组展示 |
-| `drive all` | 批量推进：查询 Planned + Blocking Goals，逐个 Drive 启动，汇总输出 |
-| 其他 | `bot_goals(action="list", q=输入)` → 匹配 1 个→继续；多个→列出选择；无→创建 |
+| Input | Mode |
+|-------|------|
+| Empty | List: query Goals by status + recent 5 Ideas, display grouped by status |
+| `drive all` | Batch drive: query Planned + Blocking Goals, start Drive for each, output summary |
+| Other | `bot_goals(action="list", q=input)` → 1 match → continue; multiple → list for selection; none → create |
 
 ---
 
-## 创建模式
+## Create mode
 
-### 1. 建记录
+### 1. Create record
 
 ```
-bot_goals(action="create", name="<10字以内>", project="<项目名>", status="Collecting", type="探索型|交付型", completion="<完成标准>")
+bot_goals(action="create", name="<<=10 chars>", project="<project name>", status="Collecting", type="探索型|交付型", completion="<completion criteria>")
 ```
 
-项目名：路径含 `claude-bot` → claude-bot；含 `LearnFlashy` → LearnFlashy；其他 → 目录名。
+Project name: path contains `claude-bot` → claude-bot; contains `LearnFlashy` → LearnFlashy; otherwise → directory name.
 
-### 2. 规划（复用 plan mode 流程）
+### 2. Planning (reuse plan mode workflow)
 
-按 plan mode 的自然节奏与用户协作：
+Collaborate with user following plan mode's natural rhythm:
 
-**Research** — 理解需求，澄清问题，探索代码库
-**Plan** — 按功能点拆子任务（规则见 `references/planning-guide.md`），写入 body（模板见 `references/body-template.md`）
-**Review** — 展示计划摘要，进入确认循环：用户修改→更新→重新展示；用户确认（开始/ok/lgtm）→下一步
+**Research** — Understand requirements, clarify questions, explore codebase
+**Plan** — Decompose into subtasks by feature (rules in `references/planning-guide.md`), write into body (template in `references/body-template.md`)
+**Review** — Show plan summary, enter confirmation loop: user modifies → update → re-display; user confirms (start/ok/lgtm) → next step
 
-与标准 plan mode 的区别：计划写入 Goal body（`bot_goals(action="update")`）而非本地 markdown 文件，这样跨会话持久化。
+Difference from standard plan mode: plan is written to Goal body (`bot_goals(action="update")`) instead of local markdown files, enabling cross-session persistence.
 
-### 3. 启动
+### 3. Launch
 
-`bot_goals(action="update", goal_id=..., status="Planned")` → Drive 启动（见下方）
-
----
-
-## 继续模式
-
-`bot_goals(action="get", goal_id=...)` 获取详情后按状态路由：
-
-| 状态 | 行为 |
-|------|------|
-| Collecting | 继续 plan mode 规划流程 |
-| Planned（tasks 全 pending 或为空） | 展示计划，确认后 Drive 启动 |
-| Planned/Processing/Blocking（有非 pending tasks） | 有未完成任务 → Drive 启动 |
-| Completed | 展示摘要，提示 merge |
-| Merged | 展示归档 |
-
-**用户指令**（修改 body 前必须先 `bot_goals(action="get")` 获取最新版本）：
-
-- 完成/添加子任务 → 更新 body + progress/next
-- 记录决策 → 追加到决策记录（带日期）
-- 方向变更 → 废弃任务移存档 + 记录决策
-- 状态变更 → `bot_goals(action="update", goal_id=..., status=...)`
+`bot_goals(action="update", goal_id=..., status="Planned")` → Drive launch (see below)
 
 ---
 
-## Drive 启动
+## Continue mode
 
-所有需要启动 Drive 的地方统一使用此流程：
+`bot_goals(action="get", goal_id=...)` to get details, then route by status:
 
-1. 构建 tasks：优先用 API 返回的 `tasks`，为空则从 body 解析 `[代码]`/`[调研]` 类型，过滤已完成。ID 必须用 `g<seq>t<N>` 格式（seq = API 返回的 Goal `seq` 字段），防止跨 goal 串号。
+| Status | Behavior |
+|--------|----------|
+| Collecting | Continue plan mode planning workflow |
+| Planned (all tasks pending or empty) | Show plan, launch Drive after confirmation |
+| Planned/Processing/Blocking (has non-pending tasks) | Has incomplete tasks → launch Drive |
+| Completed | Show summary, prompt merge |
+| Merged | Show archive |
+
+**User commands** (must `bot_goals(action="get")` for latest version before modifying body):
+
+- Complete/add subtasks → update body + progress/next
+- Record decisions → append to decision log (with date)
+- Direction change → archive abandoned tasks + record decision
+- Status change → `bot_goals(action="update", goal_id=..., status=...)`
+
+---
+
+## Drive launch
+
+All places that need to start Drive use this unified flow:
+
+1. Build tasks: prefer `tasks` from API response; if empty, parse `[代码]`/`[调研]` types from body, filter completed. IDs must use `g<seq>t<N>` format (seq = Goal's `seq` field from API), preventing cross-goal ID collisions.
    ```json
-   [{"id":"g2t1","name":"描述","type":"code|research","complexity":"simple|complex","depends":[],"status":"pending"}]
+   [{"id":"g2t1","name":"description","type":"code|research","complexity":"simple|complex","depends":[],"status":"pending"}]
    ```
-2. 获取当前 thread ID：`bot_tasks(action="list")` → 用当前 cwd 匹配 task 的 `cwd` 字段 → 取 `channel_id`
-3. 调用：
+2. Get current thread ID: `bot_tasks(action="list")` → match task's `cwd` field with current cwd → get `channel_id`
+3. Call:
    ```
-   bot_goals(action="drive", goal_id="<goal-id>", goal_name="<n>", goal_channel_id="<channel_id>", base_cwd="<cwd>", tasks="<JSON数组字符串>", max_concurrent=3)
+   bot_goals(action="drive", goal_id="<goal-id>", goal_name="<n>", goal_channel_id="<channel_id>", base_cwd="<cwd>", tasks="<JSON array string>", max_concurrent=3)
    ```
-4. 成功 → `bot_goals(action="update", goal_id=..., status="Processing")`；失败 → 输出错误，保持原状态，提示重试
+4. Success → `bot_goals(action="update", goal_id=..., status="Processing")`; Failure → output error, keep current status, prompt retry

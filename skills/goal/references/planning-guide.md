@@ -1,23 +1,23 @@
-# 子任务规划指南
+# Subtask Planning Guide
 
-## 拆分原则
+## Decomposition principles
 
-按**功能点**拆，不按技术层。一个功能点 = 一个子任务，即使跨前后端。只有无代码耦合、可独立交付的功能才拆为不同子任务。
+Split by **feature**, not by technical layer. One feature = one subtask, even if it spans frontend and backend. Only split into separate subtasks when there is no code coupling and each can be delivered independently.
 
-## 类型
+## Types
 
-| 标注 | Drive 处理 |
-|------|-----------|
-| `[代码, simple]` | 自动执行（默认复杂度） |
-| `[代码, complex]` | 自动执行（需架构设计/跨模块） |
-| `[调研]` | 自动执行 |
-| `[手动]` | 不传入 Drive，用户自行完成 |
+| Annotation | Drive handling |
+|-----------|---------------|
+| `[代码, simple]` | Auto-execute (default complexity) |
+| `[代码, complex]` | Auto-execute (requires architecture design / cross-module coordination) |
+| `[调研]` | Auto-execute |
+| `[手动]` | Not sent to Drive, user completes manually |
 
-依赖：`— depends: g2t1, g2t2`（ID 带 goal seq 前缀，防止跨 goal 串号）。可选 Phase 分组。
+Dependencies: `— depends: g2t1, g2t2` (IDs include goal seq prefix to prevent cross-goal ID collisions). Optional Phase grouping.
 
-## 每个子任务须包含
+## Each subtask must include
 
-- **目标**：做什么（一句话）
-- **为什么**：设计意图
-- **实现**：文件清单、数据结构、核心逻辑
-- **注意事项**（可选）：边界、兼容性、风险
+- **Goal**: What to do (one sentence)
+- **Why**: Design intent
+- **Implementation**: File list, data structures, core logic
+- **Caveats** (optional): Edge cases, compatibility, risks

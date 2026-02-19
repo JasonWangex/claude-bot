@@ -1,40 +1,41 @@
 ---
 name: devlog
 description: >
-  记录开发日志到 SQLite 数据库（通过 MCP 工具）。可独立调用，也可被 /merge 等 skill 调用。
-  自动收集 git 信息，生成功能摘要，写入数据库。用 git tag 追踪进度，避免重复记录。
+  Record dev logs to SQLite database (via MCP tools). Can be invoked standalone
+  or called by other skills like /merge. Auto-collects git info, generates summaries,
+  and writes to database. Uses git tags to track progress and avoid duplicates.
 ---
 
-# Dev Log - 开发日志记录
+# Dev Log
 
-将开发成果记录到本地 SQLite 数据库（通过 MCP 工具）。
+Record development progress to local SQLite database (via MCP tools).
 
-## 信息收集
+## Data Collection
 
-根据调用场景，收集以下信息：
+Depending on the invocation context:
 
-### 场景 A：从 /merge 调用（已有信息）
+### Scenario A: Called from /merge (info already available)
 
-如果上下文中已有 `DEVLOG_` 开头的信息（来自 merge 脚本输出），直接使用：
-- `DEVLOG_COMMIT_COUNT` → commit 数量
-- `DEVLOG_COMMIT_MESSAGES` → commit 消息列表
-- `DEVLOG_DIFF_STAT` → diff 统计
+If the context already contains `DEVLOG_` prefixed info (from merge script output), use directly:
+- `DEVLOG_COMMIT_COUNT` → number of commits
+- `DEVLOG_COMMIT_MESSAGES` → commit message list
+- `DEVLOG_DIFF_STAT` → diff statistics
 
-此场景下跳过书签检查（merge 已经明确了范围）。写入成功后仍需更新书签。
+Skip bookmark check in this scenario (merge already defines the range). Still update bookmark after successful write.
 
-### 场景 B：独立调用
+### Scenario B: Standalone invocation
 
-用 `devlog/last` tag 作为书签，只收集上次记录之后的新 commit。
+Use `devlog/last` tag as bookmark, only collect new commits since last recording.
 
 ```bash
 BRANCH=$(git rev-parse --abbrev-ref HEAD)
 
-# 确定起点：有书签用书签，没有则取最近 20 条
+# Determine starting point: use bookmark if exists, otherwise last 20 commits
 if git rev-parse devlog/last >/dev/null 2>&1; then
   BASE="devlog/last"
 else
   echo "DEVLOG_NO_BOOKMARK=true"
-  BASE="HEAD~20"  # 首次使用，回溯 20 条作为候选范围
+  BASE="HEAD~20"  # First use, look back 20 commits as candidates
 fi
 
 if [ "$BRANCH" != "main" ]; then
@@ -46,11 +47,11 @@ COMMIT_MESSAGES=$(git log ${BASE}..HEAD --pretty=format:"- %s")
 DIFF_STAT=$(git diff --shortstat ${BASE}..HEAD)
 ```
 
-**如果 COMMIT_COUNT 为 0**：告知用户"没有新的提交需要记录"，不执行写入。
+**If COMMIT_COUNT is 0**: Inform user "no new commits to record" and skip writing.
 
-**如果 DEVLOG_NO_BOOKMARK=true**（首次使用）：向用户展示收集到的 commit 列表，确认范围是否正确后再写入。
+**If DEVLOG_NO_BOOKMARK=true** (first use): Show collected commit list to user, confirm the range is correct before writing.
 
-### 额外信息收集
+### Additional data collection
 
 ```bash
 git diff --stat ${BASE}..HEAD
@@ -58,74 +59,74 @@ git diff --name-status ${BASE}..HEAD
 git log ${BASE}..HEAD --pretty=format:"%h %s (%ai)"
 ```
 
-### 项目名判断
+### Project name detection
 
-根据当前工作目录判断项目：
-- 路径包含 `claude-bot` → `claude-bot`
-- 路径包含 `LearnFlashy` → `LearnFlashy`
-- 其他 → 用目录名作为项目名
+Determine project from current working directory:
+- Path contains `claude-bot` → `claude-bot`
+- Path contains `LearnFlashy` → `LearnFlashy`
+- Otherwise → use directory name
 
-### Goal 关联
+### Goal association
 
-如果当前上下文中能明确判断关联的 Goal（例如分支名包含 goal 关键词），填写 Goal 名称；否则留空。
+If the current context clearly indicates an associated Goal (e.g. branch name contains goal keywords), fill in the Goal name; otherwise leave empty.
 
-如果需要查询 Active Goals：
+To query active Goals:
 
 ```
 bot_goals(action="list", status="Processing")
 ```
 
-## 写入 SQLite
+## Write to SQLite
 
-通过 MCP 工具写入 DevLog：
+Write DevLog via MCP tool:
 
 ```
 bot_devlogs(action="create",
-  name="<功能标题（中文，10字以内）>",
-  date="<今天日期 yyyy-MM-dd>",
-  project="<项目名>",
-  branch="<分支名>",
-  summary="<用一两句自然语言概括做了什么>",
-  commits=<commit数量>,
-  lines_changed="<diff stat 原文>",
-  goal="<关联的 Active Goal 名称，可选>",
-  content="<Markdown 格式的详细内容>"
+  name="<feature title, Chinese, <=10 chars>",
+  date="<today yyyy-MM-dd>",
+  project="<project name>",
+  branch="<branch name>",
+  summary="<1-2 sentence natural language summary>",
+  commits=<commit count>,
+  lines_changed="<diff stat raw text>",
+  goal="<associated active Goal name, optional>",
+  content="<Markdown formatted detailed content>"
 )
 ```
 
-### Content 格式
+### Content format
 
-用 Markdown 生成详细内容，结构如下：
+Generate detailed content in Markdown:
 
 ```markdown
-## 背景与动机
-（2-3 句话说明为什么做这次变更，体现工程思维。）
+## Background & Motivation
+(2-3 sentences explaining why this change was made, showing engineering reasoning.)
 
-## 主要变更
-- **变更点 1 标题**：具体说明
-- **变更点 2 标题**：具体说明
+## Key Changes
+- **Change 1 title**: specific description
+- **Change 2 title**: specific description
 
 ## Commits
 <hash> <message> (<date>)
 
-## 文件变更
-| 文件 | 变更 | 说明 |
-|------|------|------|
-| path/to/file | +20 -5 | 简要说明变更内容 |
+## File Changes
+| File | Changes | Description |
+|------|---------|-------------|
+| path/to/file | +20 -5 | Brief description of what changed |
 ```
 
-**Content 生成要求：**
-1. 语言使用中文
-2. "背景与动机"要解释"为什么改"而非"改了什么"
-3. "主要变更"应归纳整理，合并相关 commit
-4. "文件变更"表格的"说明"列应简要说明变更目的
+**Content generation requirements:**
+1. Write in Chinese
+2. "Background & Motivation" should explain "why" not "what"
+3. "Key Changes" should consolidate and group related commits
+4. "File Changes" table description column should briefly explain the purpose
 
-## 更新书签
+## Update bookmark
 
-**写入成功后**，更新 git tag 书签：
+**After successful write**, update the git tag bookmark:
 
 ```bash
 git tag -f devlog/last HEAD
 ```
 
-写入成功后，输出确认信息。
+Output confirmation after successful write.

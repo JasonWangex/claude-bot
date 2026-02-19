@@ -1,35 +1,35 @@
-# Body 模板
+# Body Template
 
 ```markdown
-## 目标与完成标准
-<描述>
+## Objective & Completion Criteria
+<description>
 
-## 当前状态
-**进度**: 0/N | **下一步**: <g2t1> | **卡点**: 无
+## Current Status
+**Progress**: 0/N | **Next**: <g2t1> | **Blocked by**: none
 
-## 子任务
+## Subtasks
 
-> ID 格式: `g<seq>t<N>`，seq 是 Goal 的自增序号（API 返回的 `seq` 字段）。例如 seq=2 → `g2t1`, `g2t2`。
+> ID format: `g<seq>t<N>`, where seq is the Goal's auto-increment number (`seq` field from API). Example: seq=2 → `g2t1`, `g2t2`.
 
-- [ ] `[代码, simple]` g2t1: 描述 — 技术备注
-- [ ] `[代码, complex]` g2t2: 描述 — depends: g2t1
-- [ ] `[调研]` g2t3: 描述
-- [ ] `[手动]` g2t4: 描述
-- [ ] `[代码, simple]` g2t5: 描述 — depends: g2t2, g2t3
+- [ ] `[代码, simple]` g2t1: description — technical notes
+- [ ] `[代码, complex]` g2t2: description — depends: g2t1
+- [ ] `[调研]` g2t3: description
+- [ ] `[手动]` g2t4: description
+- [ ] `[代码, simple]` g2t5: description — depends: g2t2, g2t3
 
-### g2t1: 描述 `[代码, simple]`
-**目标**: ...
-**为什么**: ...
-**实现**: ...
+### g2t1: description `[代码, simple]`
+**Goal**: ...
+**Why**: ...
+**Implementation**: ...
 
-### g2t2: 描述 `[代码, complex]` — depends: g2t1
-**目标**: ...
-**为什么**: ...
-**实现**: ...
+### g2t2: description `[代码, complex]` — depends: g2t1
+**Goal**: ...
+**Why**: ...
+**Implementation**: ...
 
-## 决策记录
-暂无
+## Decision Log
+None yet
 
-## 已完成子任务存档
-暂无
+## Completed Subtask Archive
+None yet
 ```
