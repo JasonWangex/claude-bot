@@ -3,6 +3,8 @@
  * 开发工作流快捷命令，通过 Skill 文件或 Claude 后台进程执行
  */
 
+import { randomUUID } from 'crypto';
+import { basename } from 'path';
 import { spawn } from 'child_process';
 import {
   SlashCommandBuilder,
@@ -19,6 +21,7 @@ import { StateManager } from '../state.js';
 import { getDb } from '../../db/index.js';
 import { IdeaRepository } from '../../db/idea-repo.js';
 import { buildIdeaPromoteButtons } from '../idea-buttons.js';
+import type { Idea } from '../../types/repository.js';
 import type { CommandDeps } from './types.js';
 import { requireAuth, requireThread } from './utils.js';
 
@@ -175,10 +178,32 @@ async function handleIdea(
   }
 
   if (args) {
-    // 记录模式：从数据库加载 skill 模板
-    const prompt = deps.promptService.render('skill.idea', { SKILL_ARGS: args });
+    // 记录模式：直接写入数据库
     await interaction.reply('Recording idea...');
-    spawnSkillProcess('idea', prompt, session.cwd, channelId, messageQueue);
+    try {
+      const project = projectFromCwd(session.cwd);
+      const now = Date.now();
+      const today = new Date().toISOString().slice(0, 10); // yyyy-MM-dd
+      const idea: Idea = {
+        id: randomUUID(),
+        name: args,
+        status: 'Idea',
+        project,
+        date: today,
+        createdAt: now,
+        updatedAt: now,
+      };
+      const db = getDb();
+      const ideaRepo = new IdeaRepository(db);
+      await ideaRepo.save(idea);
+      await messageQueue.send(channelId, `Idea recorded: **${args}**\nProject: \`${project}\``, {
+        embedColor: EmbedColors.GREEN,
+        priority: 'high',
+      });
+    } catch (err: any) {
+      logger.error('idea record failed:', err.message);
+      await messageQueue.sendLong(channelId, `idea record failed: ${err.message}`).catch(() => {});
+    }
   } else {
     // 列表模式：直接查询数据库，Embed + 按钮展示
     await interaction.reply('Querying ideas...');
@@ -329,6 +354,15 @@ async function handleMerge(
     logger.error('merge failed:', err.message);
     messageQueue.sendLong(targetSession.channelId, `merge failed: ${err.message}`).catch(() => {});
   });
+}
+
+// ========== helpers ==========
+
+/** cwd → project name */
+function projectFromCwd(cwd: string): string {
+  if (cwd.includes('claude-bot')) return 'claude-bot';
+  if (cwd.includes('LearnFlashy')) return 'LearnFlashy';
+  return basename(cwd);
 }
 
 // ========== spawnSkillProcess ==========

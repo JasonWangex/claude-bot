@@ -4,6 +4,7 @@
 
 import {
   Client,
+  EmbedBuilder,
   GatewayIntentBits,
   Events,
   ChannelType,
@@ -21,6 +22,9 @@ import { ApiServer } from '../api/server.js';
 import { GoalOrchestrator } from '../orchestrator/index.js';
 import { parseGoalButtonId, GOAL_MODAL_PREFIX, buildApproveWithModsModal } from '../orchestrator/goal-buttons.js';
 import { parseIdeaButtonId, buildIdeaAdvanceChoiceButtons } from './idea-buttons.js';
+import { generateBranchName } from '../utils/git-utils.js';
+import { generateTopicTitle } from '../utils/llm.js';
+import { forkTaskCore } from '../utils/fork-task.js';
 import { initDb, getDb, closeDb } from '../db/index.js';
 import { GoalRepo, TaskRepo, CheckpointRepo } from '../db/repo/index.js';
 import { GoalMetaRepo } from '../db/goal-meta-repo.js';
@@ -628,7 +632,7 @@ export class DiscordBot {
         }
 
         case 'qdev': {
-          // 快速开发：走 idea skill 的 qdev 流程
+          // 快速开发：纯代码流程（复用 /qdev 逻辑）
           await interaction.update({ content: '正在启动快速开发...', components: [] }).catch(() => {});
 
           const db = getDb();
@@ -639,18 +643,61 @@ export class DiscordBot {
             return;
           }
 
+          // 标记为 Processing
           idea.status = 'Processing';
           idea.updatedAt = Date.now();
           await ideaRepo.save(idea);
 
-          const prompt = this.promptService.render('skill.idea', {
-            SKILL_ARGS: `推进 Idea "${idea.name}" (project: ${idea.project}, id: ${idea.id}) 到开发`,
+          // 并行生成分支名和标题
+          const [branchName, threadTitle] = await Promise.all([
+            generateBranchName(idea.name),
+            generateTopicTitle(idea.name),
+          ]);
+
+          // 获取 root session 和 categoryId
+          const rootSession = this.stateManager.getRootSession(guildId, channelId);
+          const parentChannelId = rootSession?.channelId ?? channelId;
+
+          const channel = interaction.channel;
+          let categoryId: string | undefined;
+          if (channel && 'parentId' in channel && channel.parentId) {
+            const parent = await this.client.channels.fetch(channel.parentId);
+            if (parent && parent.type === ChannelType.GuildCategory) {
+              categoryId = parent.id;
+            }
+          }
+          if (!categoryId) {
+            await interaction.followUp({ content: 'This command must be used in a task channel (under a Category).', ephemeral: true }).catch(() => {});
+            return;
+          }
+
+          // Fork: 创建 worktree + channel + session
+          const forkResult = await forkTaskCore(guildId, parentChannelId, branchName, categoryId, {
+            stateManager: this.stateManager,
+            client: this.client,
+            worktreesDir: this.config.worktreesDir,
+            channelService: this.channelService ?? undefined,
+          }, threadTitle);
+
+          // 发送任务描述到新 channel
+          const newChannel = await this.client.channels.fetch(forkResult.channelId);
+          if (newChannel && newChannel.isTextBased() && 'send' in newChannel) {
+            const descEmbed = new EmbedBuilder()
+              .setColor(EmbedColors.PURPLE)
+              .setDescription(`[idea→qdev] ${idea.name}`.slice(0, 4096));
+            await (newChannel as any).send({ embeds: [descEmbed] });
+          }
+
+          // 触发 Claude 处理
+          this.messageHandler.handleBackgroundChat(guildId, forkResult.channelId, idea.name).catch((err) => {
+            logger.error('idea qdev failed:', err.message);
+            this.messageQueue.sendLong(forkResult.channelId, `idea qdev failed: ${err.message}`).catch(() => {});
           });
 
-          this.messageHandler.handleBackgroundChat(guildId, channelId, prompt).catch((err) => {
-            logger.error('idea qdev failed:', err.message);
-            this.messageQueue.sendLong(channelId, `idea qdev failed: ${err.message}`).catch(() => {});
-          });
+          // 回复确认
+          await interaction.followUp({
+            content: `**Idea → Dev**\nBranch: \`${forkResult.branchName}\`\nChannel: <#${forkResult.channelId}>`,
+          }).catch(() => {});
           break;
         }
 
