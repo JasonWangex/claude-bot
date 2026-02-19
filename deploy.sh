@@ -57,6 +57,36 @@ stamp_deploy_time() {
   echo "  DEPLOY_TIME=${ts}"
 }
 
+install_mcp() {
+  local claude_json="$HOME/.claude.json"
+  local mcp_entry
+  mcp_entry=$(cat <<MCPEOF
+{
+  "type": "stdio",
+  "command": "node",
+  "args": ["$PROJECT_DIR/dist-server/mcp/server.js"],
+  "cwd": "$PROJECT_DIR"
+}
+MCPEOF
+)
+
+  if [ ! -f "$claude_json" ]; then
+    echo '{}' > "$claude_json"
+  fi
+
+  # 用 python3 安全地 merge 进 mcpServers
+  python3 -c "
+import json, sys
+with open('$claude_json', 'r') as f:
+    config = json.load(f)
+config.setdefault('mcpServers', {})['claude-bot'] = json.loads('''$mcp_entry''')
+with open('$claude_json', 'w') as f:
+    json.dump(config, f, indent=2)
+    f.write('\n')
+"
+  echo "  claude-bot MCP: registered in $claude_json"
+}
+
 install_systemd_services() {
   local svc_src="$PROJECT_DIR/systemd"
   local svc_dst="$HOME/.config/systemd/user"
@@ -92,6 +122,9 @@ do_deploy() {
 
   echo "==> Installing Claude hooks..."
   install_hooks
+
+  echo "==> Registering MCP server..."
+  install_mcp
 
   echo "==> Reloading systemd..."
   systemctl --user daemon-reload
