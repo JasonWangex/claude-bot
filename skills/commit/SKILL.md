@@ -63,4 +63,4 @@ type(scope): 简短描述
 
 - 根据 `git log` 的历史风格来匹配项目惯例
 - 描述「为什么」改而不只是「改了什么」
-- 如果有 `{{SKILL_ARGS}}`，将其作为 commit message 的参考或直接使用
+- 如果有 `$ARGUMENTS`，将其作为 commit message 的参考或直接使用

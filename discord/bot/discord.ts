@@ -37,6 +37,7 @@ import { registerSlashCommands, routeCommand } from './commands/index.js';
 import { SessionSyncService } from '../sync/session-sync-service.js';
 import { join } from 'path';
 import { MODEL_OPTIONS, getModelLabel } from './commands/task.js';
+import { renderSkill } from '../services/skill-reader.js';
 import type { CommandDeps } from './commands/types.js';
 import type { PromptConfigService } from '../services/prompt-config-service.js';
 
@@ -576,8 +577,8 @@ export class DiscordBot {
         return;
       }
 
-      // 加载 goal skill，用 goal 名称作为参数
-      const prompt = this.promptService.render('skill.goal', {
+      // 加载 goal skill（直读文件 + 模板替换），用 goal 名称作为参数
+      const prompt = renderSkill('goal', {
         SKILL_ARGS: goal.name,
         THREAD_ID: channelId,
       });
@@ -670,7 +671,7 @@ export class DiscordBot {
           idea.updatedAt = Date.now();
           await ideaRepo.save(idea);
 
-          const goalPrompt = this.promptService.render('skill.goal', {
+          const goalPrompt = renderSkill('goal', {
             SKILL_ARGS: idea.name,
             THREAD_ID: channelId,
           });

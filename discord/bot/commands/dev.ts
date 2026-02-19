@@ -19,6 +19,7 @@ import { StateManager } from '../state.js';
 import { getDb } from '../../db/index.js';
 import { IdeaRepository } from '../../db/idea-repo.js';
 import { buildIdeaPromoteButtons } from '../idea-buttons.js';
+import { renderSkill } from '../../services/skill-reader.js';
 import type { CommandDeps } from './types.js';
 import { requireAuth, requireThread } from './utils.js';
 
@@ -239,7 +240,7 @@ async function handleCommit(
     return;
   }
 
-  const prompt = deps.promptService.render('skill.commit', { SKILL_ARGS: message });
+  const prompt = message ? `/commit ${message}` : '/commit';
 
   await interaction.reply({
     content: `Reviewing and committing code...${message ? `\nHint: ${message}` : ''}`,
@@ -298,8 +299,8 @@ async function handleMerge(
     return;
   }
 
-  // 加载 skill
-  const prompt = deps.promptService.render('skill.merge', {
+  // 加载 skill（直读文件 + 模板替换）
+  const prompt = renderSkill('merge', {
     TARGET_TOPIC_ID: targetSession.channelId,
     TARGET_BRANCH: targetSession.worktreeBranch,
     TARGET_CWD: targetSession.cwd,
