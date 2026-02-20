@@ -13,6 +13,7 @@ import type { DiscordBotConfig } from '../types/index.js';
 import type { GoalOrchestrator } from '../orchestrator/index.js';
 import type { GoalStatus, GoalType } from '../types/db.js';
 import type { SessionSyncService } from '../sync/session-sync-service.js';
+import type { UsageReconciler } from '../sync/usage-reconciler.js';
 import type { ChannelService } from '../services/channel-service.js';
 import type { PromptConfigService } from '../services/prompt-config-service.js';
 
@@ -36,6 +37,7 @@ export interface ApiDeps {
   db: Database.Database;
   orchestrator?: GoalOrchestrator;
   sessionSyncService?: SessionSyncService;
+  usageReconciler?: UsageReconciler;
   channelService?: ChannelService;
   promptService: PromptConfigService;
 }

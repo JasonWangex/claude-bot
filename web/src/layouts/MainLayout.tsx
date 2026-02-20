@@ -10,6 +10,7 @@ import {
   BookOutlined,
   CodeOutlined,
   MessageOutlined,
+  SettingOutlined,
   LogoutOutlined,
 } from '@ant-design/icons';
 import { Outlet, useLocation, useNavigate } from 'react-router';
@@ -27,6 +28,7 @@ const menuItems = [
   { key: '/kb', icon: <BookOutlined />, label: 'KB' },
   { key: '/commands', icon: <CodeOutlined />, label: 'Commands' },
   { key: '/prompts', icon: <MessageOutlined />, label: 'Prompts' },
+  { key: '/settings', icon: <SettingOutlined />, label: 'Settings' },
 ];
 
 export default function MainLayout() {

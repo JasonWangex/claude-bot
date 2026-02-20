@@ -987,6 +987,7 @@ export class DiscordBot {
         db,
         orchestrator,
         sessionSyncService: this.sessionSyncService,
+        usageReconciler: this.usageReconciler,
         channelService: this.channelService ?? undefined,
         promptService: this.promptService,
       });

@@ -16,6 +16,7 @@ import Sessions from '@/pages/Sessions';
 import SessionDetail from '@/pages/SessionDetail';
 import Commands from '@/pages/Commands';
 import Prompts from '@/pages/Prompts';
+import Settings from '@/pages/Settings';
 import Login from '@/pages/Login';
 
 function RequireAuth() {
@@ -43,6 +44,7 @@ export default function App() {
             <Route path="kb/:kbId" element={<KBDetail />} />
             <Route path="commands" element={<Commands />} />
             <Route path="prompts" element={<Prompts />} />
+            <Route path="settings" element={<Settings />} />
           </Route>
         </Route>
       </Routes>

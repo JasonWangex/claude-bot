@@ -66,9 +66,14 @@ export class UsageReconciler {
     }
   }
 
-  /** 手动触发（API 调用） */
+  /** 手动触发最近 3 天（API 调用） */
   async runNow(): Promise<ReconcileResult> {
     return this.reconcile();
+  }
+
+  /** 全量重算所有 session 的 usage（一次性历史数据同步） */
+  async reconcileAll(): Promise<ReconcileResult> {
+    return this.reconcile(true);
   }
 
   // ==================== 调度 ====================
@@ -108,19 +113,25 @@ export class UsageReconciler {
 
   // ==================== 对齐逻辑 ====================
 
-  private async reconcile(): Promise<ReconcileResult> {
+  private async reconcile(all = false): Promise<ReconcileResult> {
     const startTime = Date.now();
-    const cutoff = Date.now() - THREE_DAYS_MS;
     const result: ReconcileResult = { sessionsScanned: 0, sessionsUpdated: 0 };
 
-    // 查询最近 3 天活跃的 session
-    const sessions = this.db.prepare(`
-      SELECT claude_session_id
-      FROM claude_sessions
-      WHERE last_activity_at > ? OR created_at > ?
-    `).all(cutoff, cutoff) as Array<{ claude_session_id: string }>;
-
-    logger.info(`[UsageReconciler] ${sessions.length} sessions in last 3 days`);
+    let sessions: Array<{ claude_session_id: string }>;
+    if (all) {
+      sessions = this.db.prepare(
+        'SELECT claude_session_id FROM claude_sessions',
+      ).all() as Array<{ claude_session_id: string }>;
+      logger.info(`[UsageReconciler] Full reconciliation: ${sessions.length} sessions`);
+    } else {
+      const cutoff = Date.now() - THREE_DAYS_MS;
+      sessions = this.db.prepare(`
+        SELECT claude_session_id
+        FROM claude_sessions
+        WHERE last_activity_at > ? OR created_at > ?
+      `).all(cutoff, cutoff) as Array<{ claude_session_id: string }>;
+      logger.info(`[UsageReconciler] ${sessions.length} sessions in last 3 days`);
+    }
 
     // 逐个全量重算
     for (const { claude_session_id: sessionId } of sessions) {
