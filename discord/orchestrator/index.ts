@@ -512,7 +512,7 @@ export class GoalOrchestrator {
         await this.updatePipelinePhase(goalId, taskId, 'fix');
 
         await this.notify(state.goalChannelId,
-          `[Pipeline] ${taskId}: AI 调查 blocked feedback...`,
+          `[GoalOrchestrator] ${taskId}: AI 调查 blocked feedback...`,
           'pipeline',
         );
 
@@ -530,8 +530,9 @@ export class GoalOrchestrator {
           case 'continue':
             // Claude 已在调查中修复了问题 → 走 audit → fix 循环验证
             await this.notify(state.goalChannelId,
-              `[Pipeline] ${taskId}: 调查结论 — 问题已修复，进入审计验证`,
+              `[GoalOrchestrator] ${taskId}: 调查结论 — 问题已修复，进入审计验证`,
               'info',
+              { logOnly: true },
             );
             this.startRefixPipeline(goalId, taskId, guildId, channelId, task, state);
             break;
@@ -539,8 +540,9 @@ export class GoalOrchestrator {
           case 'retry':
             // 需要完全重试
             await this.notify(state.goalChannelId,
-              `[Pipeline] ${taskId}: 调查结论 — 需要完全重试\n原因: ${conclusion.reason}`,
+              `[GoalOrchestrator] ${taskId}: 调查结论 — 需要完全重试\n原因: ${conclusion.reason}`,
               'warning',
+              { logOnly: true },
             );
             await this.withStateLock(goalId, async () => {
               const freshState = await this.getState(goalId);
@@ -557,8 +559,9 @@ export class GoalOrchestrator {
           case 'replan':
             // 需要重新规划
             await this.notify(state.goalChannelId,
-              `[Pipeline] ${taskId}: 调查结论 — 需要重新规划\n原因: ${conclusion.reason}`,
+              `[GoalOrchestrator] ${taskId}: 调查结论 — 需要重新规划\n原因: ${conclusion.reason}`,
               'info',
+              { logOnly: true },
             );
             await this.withStateLock(goalId, async () => {
               const freshState = await this.getState(goalId);
@@ -592,8 +595,9 @@ export class GoalOrchestrator {
               freshTask.pipelinePhase = undefined;
               await this.saveState(freshState);
               await this.notify(freshState.goalChannelId,
-                `[Pipeline] ${taskId}: AI 调查无法自动解决\n原因: ${conclusion.reason}\n需要人工干预。`,
+                `[GoalOrchestrator] ${taskId}: AI 调查无法自动解决\n原因: ${conclusion.reason}\n需要人工干预。`,
                 'error',
+                { logOnly: true },
               );
             });
             break;
@@ -613,8 +617,9 @@ export class GoalOrchestrator {
             freshTask.pipelinePhase = undefined;
             await this.saveState(freshState);
             await this.notify(freshState.goalChannelId,
-              `[Pipeline] ${taskId}: AI 调查出错: ${err.message}\n已回退到 blocked_feedback，需要人工干预。`,
+              `[GoalOrchestrator] ${taskId}: AI 调查出错: ${err.message}\n已回退到 blocked_feedback，需要人工干预。`,
               'error',
+              { logOnly: true },
             );
           });
         } catch (cbErr: any) {
@@ -1485,7 +1490,7 @@ export class GoalOrchestrator {
     await this.updatePipelinePhase(goalId, taskId, 'execute');
 
     await this.notify(state.goalChannelId,
-      `[Pipeline] ${taskId}: 调研路径 → Opus 执行`,
+      `[GoalOrchestrator] ${taskId}: 调研路径 → Opus 执行`,
       'pipeline',
     );
 
@@ -1520,7 +1525,7 @@ export class GoalOrchestrator {
     await this.updatePipelinePhase(goalId, taskId, 'execute');
 
     await this.notify(state.goalChannelId,
-      `[Pipeline] ${taskId}: 简单代码 → Sonnet 执行`,
+      `[GoalOrchestrator] ${taskId}: 简单代码 → Sonnet 执行`,
       'pipeline',
     );
 
@@ -1574,7 +1579,7 @@ export class GoalOrchestrator {
     await this.updatePipelinePhase(goalId, taskId, 'plan');
 
     await this.notify(state.goalChannelId,
-      `[Pipeline] ${taskId}: 复杂代码 → Opus 规划`,
+      `[GoalOrchestrator] ${taskId}: 复杂代码 → Opus 规划`,
       'pipeline',
     );
 
@@ -1593,8 +1598,9 @@ export class GoalOrchestrator {
     if (!planExists) {
       logger.warn(`[Orchestrator] Pipeline ${taskId}: .task-plan.md not found after plan phase, Sonnet will execute without plan`);
       await this.notify(state.goalChannelId,
-        `[Pipeline] ${taskId}: Opus 未写入 .task-plan.md，Sonnet 将自行理解任务执行`,
+        `[GoalOrchestrator] ${taskId}: Opus 未写入 .task-plan.md，Sonnet 将自行理解任务执行`,
         'warning',
+        { logOnly: true },
       );
     }
 
@@ -1603,7 +1609,7 @@ export class GoalOrchestrator {
     await this.updatePipelinePhase(goalId, taskId, 'execute');
 
     await this.notify(state.goalChannelId,
-      `[Pipeline] ${taskId}: 复杂代码 → Sonnet 执行${planExists ? '（按 plan）' : '（无 plan fallback）'}`,
+      `[GoalOrchestrator] ${taskId}: 复杂代码 → Sonnet 执行${planExists ? '（按 plan）' : '（无 plan fallback）'}`,
       'pipeline',
     );
 
@@ -1672,7 +1678,7 @@ export class GoalOrchestrator {
       await this.updatePipelinePhase(goalId, taskId, 'fix');
 
       await this.notify(state.goalChannelId,
-        `[Pipeline] ${taskId}: Audit 失败 → Sonnet 修复 (${retry}/${maxRetries})`,
+        `[GoalOrchestrator] ${taskId}: Audit 失败 → Sonnet 修复 (${retry}/${maxRetries})`,
         'pipeline',
       );
 
@@ -1702,7 +1708,7 @@ export class GoalOrchestrator {
 
       // Self-review 通过 → Opus re-audit
       await this.notify(state.goalChannelId,
-        `[Pipeline] ${taskId}: Self-review 通过 → Opus 二次审查`,
+        `[GoalOrchestrator] ${taskId}: Self-review 通过 → Opus 二次审查`,
         'pipeline',
       );
 
@@ -1736,7 +1742,7 @@ export class GoalOrchestrator {
     verifyCommands: string[],
     usage: ChatUsageResult,
   ): Promise<{ hasRemainingIssues: boolean; remainingIssues: string[] }> {
-    await this.notify(state.goalChannelId, `[Pipeline] ${taskId}: Sonnet 自查中...`, 'pipeline');
+    await this.notify(state.goalChannelId, `[GoalOrchestrator] ${taskId}: Sonnet 自查中...`, 'pipeline');
 
     const selfReviewPrompt = this.buildSelfReviewPrompt(task, state, originalIssues, verifyCommands);
     const reviewUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, channelId, selfReviewPrompt);
@@ -1745,11 +1751,12 @@ export class GoalOrchestrator {
     const result = await this.readSelfReviewResult(state, task);
 
     if (!result.hasRemainingIssues) {
-      await this.notify(state.goalChannelId, `[Pipeline] ${taskId}: Self-review 通过 ✓`, 'success');
+      await this.notify(state.goalChannelId, `[GoalOrchestrator] ${taskId}: Self-review 通过 ✓`, 'success', { logOnly: true });
     } else {
       await this.notify(state.goalChannelId,
-        `[Pipeline] ${taskId}: Self-review 发现 ${result.remainingIssues.length} 个遗留问题`,
+        `[GoalOrchestrator] ${taskId}: Self-review 发现 ${result.remainingIssues.length} 个遗留问题`,
         'warning',
+        { logOnly: true },
       );
     }
 
@@ -1849,7 +1856,7 @@ export class GoalOrchestrator {
     await this.updatePipelinePhase(goalId, taskId, 'audit');
 
     await this.notify(state.goalChannelId,
-      `[Pipeline] ${taskId}: Opus 审查中...`,
+      `[GoalOrchestrator] ${taskId}: Opus 审查中...`,
       'pipeline',
     );
 
@@ -1863,13 +1870,15 @@ export class GoalOrchestrator {
 
     if (result.verdict === 'pass') {
       await this.notify(state.goalChannelId,
-        `[Pipeline] ${taskId}: Audit 通过 ✓`,
+        `[GoalOrchestrator] ${taskId}: Audit 通过 ✓`,
         'success',
+        { logOnly: true },
       );
     } else {
       await this.notify(state.goalChannelId,
-        `[Pipeline] ${taskId}: Audit 未通过 — ${result.issues.length} 个问题`,
+        `[GoalOrchestrator] ${taskId}: Audit 未通过 — ${result.issues.length} 个问题`,
         'warning',
+        { logOnly: true },
       );
     }
 
@@ -3304,7 +3313,10 @@ export class GoalOrchestrator {
     threadId: string,
     message: string,
     type?: 'success' | 'error' | 'warning' | 'info' | 'pipeline',
-    options?: { components?: import('discord.js').ActionRowBuilder<import('discord.js').MessageActionRowComponentBuilder>[] },
+    options?: {
+      components?: import('discord.js').ActionRowBuilder<import('discord.js').MessageActionRowComponentBuilder>[];
+      logOnly?: boolean;
+    },
   ): Promise<void> {
     try {
       const colorMap: Record<string, EmbedColor> = {
@@ -3317,8 +3329,8 @@ export class GoalOrchestrator {
       const embedColor = type ? colorMap[type] : undefined;
       const logChannelId = getGoalLogChannelId();
 
-      if (type === 'pipeline') {
-        // pipeline 类型：仅发日志 channel（未配置则 fallback 到 goal thread）
+      if (type === 'pipeline' || options?.logOnly) {
+        // pipeline 类型或 logOnly：仅发日志 channel（未配置则 fallback 到 goal thread）
         const targetId = logChannelId || threadId;
         await this.deps.mq.sendLong(targetId, message, {
           embedColor,
@@ -3609,7 +3621,7 @@ export class GoalOrchestrator {
 
     await this.notify(
       state.goalChannelId,
-      `[Pipeline] ${taskId}: 进入 Opus Audit 阶段`,
+      `[GoalOrchestrator] ${taskId}: 进入 Opus Audit 阶段`,
       'pipeline'
     );
 
