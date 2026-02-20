@@ -50,7 +50,7 @@ import {
   buildTaskFailedButtons,
   buildFailureButtons,
 } from './goal-buttons.js';
-import type { IGoalMetaRepo, ITaskRepo, IGoalCheckpointRepo } from '../types/repository.js';
+import type { IGoalMetaRepo, ITaskRepo, IGoalCheckpointRepo, IGoalTodoRepo } from '../types/repository.js';
 import type { PromptConfigService } from '../services/prompt-config-service.js';
 
 interface OrchestratorDeps {
@@ -64,6 +64,7 @@ interface OrchestratorDeps {
   goalMetaRepo: IGoalMetaRepo;
   taskRepo: ITaskRepo;
   checkpointRepo: IGoalCheckpointRepo;
+  goalTodoRepo: IGoalTodoRepo;
   promptService: PromptConfigService;
 }
 
@@ -1165,9 +1166,23 @@ export class GoalOrchestrator {
       await this.saveState(state);
       await this.syncGoalMeta(state);
       await this.archiveBrainChannel(state);
+
+      // 检查未完成的 todo
+      let todoWarning = '';
+      try {
+        const unfinished = await this.deps.goalTodoRepo.findUndoneByGoal(state.goalId);
+        if (unfinished.length > 0) {
+          todoWarning = `\n\n**Unfinished todos (${unfinished.length}):**\n` +
+            unfinished.map(t => `- ${t.content}`).join('\n');
+        }
+      } catch (err: any) {
+        logger.warn(`[Orchestrator] Failed to fetch goal todos: ${err.message}`);
+      }
+
       await this.notify(state.goalChannelId,
         `**Goal "${state.goalName}" completed!**\n` +
-        `Review branch \`${state.goalBranch}\` and merge to main.`,
+        `Review branch \`${state.goalBranch}\` and merge to main.` +
+        todoWarning,
         'success'
       );
       return;

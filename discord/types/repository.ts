@@ -72,6 +72,17 @@ export interface Idea {
   updatedAt: number;
 }
 
+/** Goal 待办事项 */
+export interface GoalTodo {
+  id: string;
+  goalId: string;
+  content: string;
+  done: boolean;
+  source: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+
 // ==================== Repository 接口 ====================
 
 /**
@@ -218,6 +229,21 @@ export interface IIdeaRepo {
   findByStatus(status: IdeaStatus): Promise<Idea[]>;
   findByProject(project: string): Promise<Idea[]>;
   findByProjectAndStatus(project: string, status: IdeaStatus): Promise<Idea[]>;
+}
+
+/**
+ * GoalTodo 仓库
+ *
+ * 管理 Goal 关联的待办事项。
+ * 主键: id
+ */
+export interface IGoalTodoRepo {
+  get(id: string): Promise<GoalTodo | null>;
+  findByGoal(goalId: string): Promise<GoalTodo[]>;
+  findUndoneByGoal(goalId: string): Promise<GoalTodo[]>;
+  save(todo: GoalTodo): Promise<void>;
+  delete(id: string): Promise<boolean>;
+  deleteByGoal(goalId: string): Promise<number>;
 }
 
 // ==================== 知识库 ====================

@@ -216,6 +216,27 @@ export interface IdeaRow {
 }
 
 // ================================================================
+// goal_todos 表
+// ================================================================
+
+export interface GoalTodoRow {
+  /** UUID (PRIMARY KEY) */
+  id: string;
+  /** 所属 Goal ID (FOREIGN KEY -> goals.id) */
+  goal_id: string;
+  /** 待办内容 */
+  content: string;
+  /** 是否完成 (0/1) */
+  done: number;
+  /** 创建来源（如 "user", "brain", task ID） */
+  source: string | null;
+  /** 创建时间 (Unix ms) */
+  created_at: number;
+  /** 更新时间 (Unix ms) */
+  updated_at: number;
+}
+
+// ================================================================
 // goal_checkpoints 表 — 对应 GoalCheckpoint 接口
 // ================================================================
 

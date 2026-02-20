@@ -26,6 +26,7 @@ import migration010 from './migrations/010_add_task_detail_plan.js';
 import migration011 from './migrations/011_update_prompts.js';
 import migration012 from './migrations/012_remove_skill_prompts.js';
 import migration013 from './migrations/013_add_session_usage.js';
+import migration014 from './migrations/014_create_goal_todos.js';
 
 const allMigrations: Migration[] = [
   migration001,
@@ -41,6 +42,7 @@ const allMigrations: Migration[] = [
   migration011,
   migration012,
   migration013,
+  migration014,
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -137,3 +139,4 @@ export { ChannelRepository, ClaudeSessionRepository, ChannelSessionLinkRepositor
 export type { ChannelSessionLink } from './repo/index.js';
 export { KnowledgeBaseRepository } from './knowledge-base-repo.js';
 export { PromptConfigRepository } from './prompt-config-repo.js';
+export { GoalTodoRepository } from './goal-todo-repo.js';

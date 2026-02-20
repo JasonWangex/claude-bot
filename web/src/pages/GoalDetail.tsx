@@ -10,6 +10,7 @@ import { GoalDAG } from '@/components/goals/GoalDAG';
 import { TaskPanel } from '@/components/goals/TaskPanel';
 import { DriveControls } from '@/components/goals/DriveControls';
 import { GoalStatusBadge, taskStatusLabels } from '@/components/goals/StatusBadge';
+import { TodoPanel } from '@/components/goals/TodoPanel';
 import { useGoal, useGoalDrive, updateGoal } from '@/lib/hooks/use-goals';
 import type { GoalStatus, GoalType, GoalTaskStatus } from '@/lib/types';
 
@@ -148,6 +149,11 @@ export default function GoalDetail() {
       key: 'tasks',
       label: '任务列表',
       children: <TaskPanel goalId={goalId} tasks={tasks} onAction={() => mutateDrive()} />,
+    },
+    {
+      key: 'todos',
+      label: 'Todos',
+      children: <TodoPanel goalId={goalId} />,
     },
     ...(goal.body ? [{
       key: 'detail',
