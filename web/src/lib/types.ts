@@ -132,6 +132,17 @@ export interface Idea {
   updated_at: number;
 }
 
+// GoalTodo
+export interface GoalTodo {
+  id: string;
+  goal_id: string;
+  content: string;
+  done: boolean;
+  source: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
 // Knowledge Base
 export interface KnowledgeBaseEntry {
   id: string;

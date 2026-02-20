@@ -21,6 +21,7 @@ import { clearSession, compactSession, rewindSession, stopSession } from './rout
 import { getModels, setDefaultModel } from './routes/models.js';
 import { startDrive, getDriveStatus, pauseDrive, resumeDrive, skipTask, markTaskDone, retryTask, refixTask, pauseTask, resumeTask, rollback, confirmRollback, cancelRollback } from './routes/goals.js';
 import { listGoals, createGoal, getGoal, updateGoal } from './routes/goal-crud.js';
+import { listGoalTodos, createGoalTodo, updateGoalTodo, deleteGoalTodo } from './routes/goal-todos.js';
 import { qdev } from './routes/qdev.js';
 import { listDevLogs, getDevLog, createDevLog } from './routes/devlogs.js';
 import { listIdeas, createIdea, getIdea, updateIdea, deleteIdea } from './routes/ideas.js';
@@ -101,6 +102,12 @@ function defineRoutes(): Route[] {
     r('POST', '/api/goals/:goalId/rollback', rollback),
     r('POST', '/api/goals/:goalId/confirm-rollback', confirmRollback),
     r('POST', '/api/goals/:goalId/cancel-rollback', cancelRollback),
+
+    // Goal Todos
+    r('GET',    '/api/goals/:goalId/todos', listGoalTodos),
+    r('POST',   '/api/goals/:goalId/todos', createGoalTodo),
+    r('PATCH',  '/api/goals/:goalId/todos/:todoId', updateGoalTodo),
+    r('DELETE', '/api/goals/:goalId/todos/:todoId', deleteGoalTodo),
 
     // Ideas CRUD
     r('GET',    '/api/ideas', listIdeas),

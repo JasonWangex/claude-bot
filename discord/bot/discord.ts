@@ -28,6 +28,7 @@ import { forkTaskCore } from '../utils/fork-task.js';
 import { initDb, getDb, closeDb } from '../db/index.js';
 import { GoalRepo, TaskRepo, CheckpointRepo } from '../db/repo/index.js';
 import { GoalMetaRepo } from '../db/goal-meta-repo.js';
+import { GoalTodoRepository } from '../db/goal-todo-repo.js';
 import { IdeaRepository } from '../db/idea-repo.js';
 import { GuildRepository } from '../db/repo/guild-repo.js';
 import { ChannelRepository } from '../db/repo/channel-repo.js';
@@ -959,6 +960,7 @@ export class DiscordBot {
     const goalMetaRepo = new GoalMetaRepo(db);
     const taskRepo = new TaskRepo(db);
     const checkpointRepo = new CheckpointRepo(db);
+    const goalTodoRepo = new GoalTodoRepository(db);
     const orchestrator = new GoalOrchestrator({
       stateManager: this.stateManager,
       claudeClient: this.claudeClient,
@@ -970,6 +972,7 @@ export class DiscordBot {
       goalMetaRepo,
       taskRepo,
       checkpointRepo,
+      goalTodoRepo,
       promptService: this.promptService,
     });
     this.orchestrator = orchestrator;
