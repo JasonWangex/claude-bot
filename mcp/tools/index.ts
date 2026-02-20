@@ -10,6 +10,7 @@ import { registerDataTools } from './data.js';
 import { registerSystemTools } from './system.js';
 import { registerKnowledgeBaseTools } from './knowledge-base.js';
 import { registerGoalTodoTools } from './goal-todos.js';
+import { registerTaskEventTools } from './task-event.js';
 
 export function registerAllTools(server: McpServer) {
   registerChannelTools(server);       // 3 tools: bot_channels (list/get/delete), bot_send_message, bot_qdev
@@ -19,5 +20,6 @@ export function registerAllTools(server: McpServer) {
   registerDataTools(server);          // 2 tools: bot_devlogs, bot_ideas
   registerSystemTools(server);        // 1 tool:  bot_status
   registerKnowledgeBaseTools(server); // 1 tool:  bot_kb
-  // Total: 10 tools
+  registerTaskEventTools(server);     // 1 tool:  bot_task_event (write-only)
+  // Total: 11 tools
 }

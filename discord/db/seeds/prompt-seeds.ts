@@ -107,14 +107,16 @@ ${DETAIL_PLAN_NOTE}`,
     name: 'Feedback 协议 section',
     description: '任务遇到问题时的反馈机制（含触发场景）',
     template: `## Feedback Protocol
-When you encounter any of these situations, write a feedback file and **end your session**:
+When you encounter any of these situations, call the \`bot_task_event\` MCP tool and **end your session**:
 - **Blocked:** Technical blocker you cannot resolve (missing API, wrong architecture, external dependency). Use \`type: "blocked"\`.
 - **Needs Clarification:** Ambiguous task or conflicting requirements. Use \`type: "clarify"\`, list questions in \`details.questions\`.
 - **Scope Mismatch:** Task requires changes far beyond its description, or should be split. Use \`type: "replan"\`.
 - **Dependency Issue:** A completed dependency is incorrect or insufficient. Use \`type: "blocked"\`, reference in \`details.dependencyId\`.
 
-**File path:** \`feedback/{{TASK_ID}}.json\`
-**Format:**
+Call \`bot_task_event\` with:
+- \`task_id\`: "{{TASK_ID}}"
+- \`event_type\`: "feedback.main"
+- \`payload\`:
 \`\`\`json
 {
   "type": "replan" | "blocked" | "clarify",
@@ -123,7 +125,7 @@ When you encounter any of these situations, write a feedback file and **end your
 }
 \`\`\`
 
-After writing the feedback file, \`git add\` and \`git commit\` it, then **stop working**.`,
+No file writing or git commit needed. The orchestrator will detect your event automatically. Then **stop working**.`,
     variables: ['TASK_ID'],
     parentKey: 'orchestrator.task',
     sortOrder: 4,
@@ -340,10 +342,12 @@ ${DETAIL_PLAN_NOTE}`,
    - **Completeness**: Are all aspects addressed?
    - **Bugs**: Obvious bugs, edge cases, runtime errors?
    - **Security**: Injection, XSS, etc.?
-4. Write verdict to \`feedback/{{TASK_ID}}-audit.json\`
-5. \`git add feedback/{{TASK_ID}}-audit.json && git commit -m "audit: {{TASK_LABEL}}"\`
+4. Call \`bot_task_event\` to submit your verdict:
+   - \`task_id\`: "{{TASK_ID}}"
+   - \`event_type\`: "feedback.audit"
+   - \`payload\`: (see format below)
 
-## Verdict File Format (feedback/{{TASK_ID}}-audit.json)
+## Verdict Payload Format
 \`\`\`json
 {
   "verdict": "pass" | "fail",
@@ -361,6 +365,8 @@ ${DETAIL_PLAN_NOTE}`,
 \`\`\`
 
 **IMPORTANT**: The \`verifyCommands\` array must list the exact build/test commands you ran. These will be passed to the fixer so they can re-verify after applying fixes.
+
+No file writing or git commit needed. The orchestrator will detect your event automatically.
 
 ## Verdict Rules
 - **pass**: No "error" severity issues. Warnings are acceptable.
@@ -486,9 +492,10 @@ Reason: {{FEEDBACK_REASON}}
    - Make the necessary code changes to unblock and complete the task
    - Run build/test to verify
    - Commit your changes
-4. **Write your conclusion** to \`feedback/{{TASK_ID}}-investigate.json\`
-
-## Conclusion File Format (feedback/{{TASK_ID}}-investigate.json)
+4. **Submit your conclusion** via the \`bot_task_event\` MCP tool:
+   - \`task_id\`: "{{TASK_ID}}"
+   - \`event_type\`: "feedback.investigate"
+   - \`payload\`:
 \`\`\`json
 {
   "action": "continue" | "retry" | "replan" | "escalate",
@@ -507,7 +514,7 @@ Reason: {{FEEDBACK_REASON}}
 - Prefer "continue" if you can fix the issue — this saves the most work
 - Use "retry" only if the existing code is unsalvageable
 - Use "escalate" only as last resort when you truly cannot determine the right action
-- After writing the conclusion file: \`git add feedback/{{TASK_ID}}-investigate.json && git commit -m "investigate: {{TASK_LABEL}}"\``,
+- No file writing or git commit needed for the conclusion. The orchestrator will detect your event automatically.`,
     variables: ['GOAL_NAME', 'TASK_LABEL', 'TASK_DESCRIPTION', 'FEEDBACK_TYPE', 'FEEDBACK_REASON', 'FEEDBACK_DETAILS', 'DEP_SECTION', 'GOAL_BRANCH', 'TASK_ID'],
     parentKey: null,
     sortOrder: 0,
@@ -533,16 +540,16 @@ Description: {{TASK_DESCRIPTION}}
 2. Verify each original issue is actually fixed
 {{VERIFY_COMMANDS_SECTION}}
 4. If you spot small remaining problems (typos, missing imports, logic errors), **fix them now** and commit
-5. Write self-review result to \`feedback/{{TASK_ID}}-self-review.json\`:
-\`\`\`json
-{ "allIssuesFixed": true|false, "remainingIssues": [...], "notes": "..." }
-\`\`\`
-6. Commit: \`git add feedback/{{TASK_ID}}-self-review.json && git commit -m "self-review: {{TASK_LABEL}}"\`
+5. Call \`bot_task_event\` to submit your self-review:
+   - \`task_id\`: "{{TASK_ID}}"
+   - \`event_type\`: "feedback.self_review"
+   - \`payload\`: \`{ "allIssuesFixed": true|false, "remainingIssues": [...], "notes": "..." }\`
 
 ## Rules
 - Be **honest** — better to catch issues now than fail the audit again
 - If verify commands fail, set \`allIssuesFixed: false\`
-- Fix small issues directly; only report issues you truly cannot resolve`,
+- Fix small issues directly; only report issues you truly cannot resolve
+- No file writing or git commit needed for the self-review result. The orchestrator will detect your event automatically.`,
     variables: ['TASK_LABEL', 'TASK_DESCRIPTION', 'ISSUE_LIST', 'VERIFY_COMMANDS_SECTION', 'TASK_ID'],
     parentKey: null,
     sortOrder: 0,
@@ -700,7 +707,10 @@ Evaluate whether this task's completion changes the strategic picture:
 3. Is a replan necessary?
 
 ## Output
-Write your evaluation to \`feedback/eval-{{TASK_ID}}.json\`:
+Call \`bot_task_event\` to submit your evaluation:
+- \`task_id\`: "{{TASK_ID}}"
+- \`event_type\`: "brain.eval"
+- \`payload\`:
 \`\`\`json
 {
   "needsReplan": false,
@@ -710,7 +720,8 @@ Write your evaluation to \`feedback/eval-{{TASK_ID}}.json\`:
 }
 \`\`\`
 
-Set \`needsReplan: true\` ONLY if the task outcome reveals that remaining tasks need structural changes (not just minor adjustments).`,
+Set \`needsReplan: true\` ONLY if the task outcome reveals that remaining tasks need structural changes (not just minor adjustments).
+No file writing needed. The orchestrator will detect your event automatically.`,
     variables: ['TASK_LABEL', 'TASK_DESCRIPTION', 'DIFF_STATS', 'TASK_ID'],
     parentKey: null,
     sortOrder: 0,
@@ -739,7 +750,10 @@ Analyze the failure and recommend the best recovery action:
 - **escalate**: Cannot determine the right action — needs human judgment
 
 ## Output
-Write your analysis to \`feedback/failure-{{TASK_ID}}.json\`:
+Call \`bot_task_event\` to submit your analysis:
+- \`task_id\`: "{{TASK_ID}}"
+- \`event_type\`: "brain.failure"
+- \`payload\`:
 \`\`\`json
 {
   "recommendation": "retry" | "refix" | "skip" | "replan" | "escalate",
@@ -751,7 +765,9 @@ Write your analysis to \`feedback/failure-{{TASK_ID}}.json\`:
 Confidence guide:
 - **high**: Clear root cause, strong evidence for the recommendation
 - **medium**: Likely root cause, recommendation is reasonable but uncertain
-- **low**: Ambiguous failure, recommendation is a best guess`,
+- **low**: Ambiguous failure, recommendation is a best guess
+
+No file writing needed. The orchestrator will detect your event automatically.`,
     variables: ['TASK_LABEL', 'TASK_DESCRIPTION', 'ERROR_MESSAGE', 'PIPELINE_PHASE', 'AUDIT_RETRIES', 'TASK_CONTEXT', 'TASK_ID'],
     parentKey: null,
     sortOrder: 0,
@@ -783,7 +799,10 @@ Reason: {{FEEDBACK_REASON}}
 6. Preserve the overall goal direction
 
 ## Output
-Write your replan result to \`feedback/replan-result.json\`:
+Call \`bot_task_event\` to submit your replan result:
+- \`task_id\`: "{{TRIGGER_TASK_ID}}"
+- \`event_type\`: "brain.replan"
+- \`payload\`:
 \`\`\`json
 {
   "changes": [
@@ -806,7 +825,9 @@ Valid task types: 代码, 手动, 调研, 占位
 Valid complexity: "simple" or "complex" (default: "simple")
 Valid actions: add, modify, remove, reorder
 
-If no changes are needed: \`{ "changes": [], "reasoning": "...", "impactLevel": "low" }\``,
+If no changes are needed: \`{ "changes": [], "reasoning": "...", "impactLevel": "low" }\`
+
+No file writing needed. The orchestrator will detect your event automatically.`,
     variables: ['TRIGGER_TASK_ID', 'FEEDBACK_TYPE', 'FEEDBACK_REASON', 'FEEDBACK_DETAILS', 'CURRENT_TASKS', 'IMMUTABLE_COMPLETED', 'IMMUTABLE_RUNNING'],
     parentKey: null,
     sortOrder: 0,
@@ -828,11 +849,12 @@ Check the worktree for:
 2. Does the code build successfully? (run the project's build command)
 3. Are there any uncommitted changes that should be committed?
 
-Write your assessment to \`feedback/{{TASK_ID}}-readiness.json\`:
-\`\`\`json
-{ "completed": true|false, "audited": false, "committed": true|false, "reason": "..." }
-\`\`\`
-Commit the file and stop.`,
+Call \`bot_task_event\` to submit your assessment:
+- \`task_id\`: "{{TASK_ID}}"
+- \`event_type\`: "feedback.readiness"
+- \`payload\`: \`{ "completed": true|false, "audited": false, "committed": true|false, "reason": "..." }\`
+
+No file writing or git commit needed. The orchestrator will detect your event automatically. Stop after submitting.`,
     variables: ['TASK_DESCRIPTION', 'TASK_ID', 'TASK_LABEL', 'PIPELINE_PHASE'],
     parentKey: null,
     sortOrder: 0,
