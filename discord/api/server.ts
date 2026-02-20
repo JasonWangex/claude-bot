@@ -30,6 +30,7 @@ import { syncSessions, syncUsage } from './routes/sync.js';
 import { getCommands } from './routes/commands.js';
 import { getSessionConversation } from './routes/sessions.js';
 import { listSessions, getSessionMeta } from './routes/session-list.js';
+import { getUsageDaily } from './routes/usage-daily.js';
 import { listChannelSessions } from './routes/channel-sessions.js';
 import { listPrompts, getPrompt, updatePrompt, refreshPrompts } from './routes/prompts.js';
 import { getRunningTasks, getActiveProcesses, killZombieTasks } from './routes/debug.js';
@@ -129,6 +130,7 @@ function defineRoutes(): Route[] {
 
     // Sessions
     r('GET', '/api/sessions', listSessions),
+    r('GET', '/api/sessions/usage/daily', getUsageDaily),
     r('GET', '/api/sessions/:id/meta', getSessionMeta),
     r('GET', '/api/sessions/:id/conversation', getSessionConversation),
 
