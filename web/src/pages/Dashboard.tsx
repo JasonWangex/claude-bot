@@ -1,4 +1,5 @@
-import { Card, Typography, Tag, Progress, Space, Empty, Row, Col } from 'antd';
+import { Card, Typography, Tag, Progress, Space, Empty, Row, Col, Table } from 'antd';
+import type { ColumnsType } from 'antd/es/table';
 import {
   AimOutlined,
   UnorderedListOutlined,
@@ -11,7 +12,14 @@ import { useGoals } from '@/lib/hooks/use-goals';
 import { useChannels } from '@/lib/hooks/use-channels';
 import { useDevLogs } from '@/lib/hooks/use-devlogs';
 import { useIdeas } from '@/lib/hooks/use-ideas';
+import { useUsageDaily, type DailyUsage } from '@/lib/hooks/use-usage-daily';
 import { formatDateTime } from '@/lib/format';
+
+function formatK(n: number): string {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
+  return String(n);
+}
 
 const { Title, Text } = Typography;
 
@@ -20,6 +28,7 @@ export default function Dashboard() {
   const { data: channels } = useChannels();
   const { data: devlogs } = useDevLogs();
   const { data: ideas } = useIdeas();
+  const { data: usageDaily, isLoading: usageLoading } = useUsageDaily();
 
   const activeGoals = goals?.filter(g => g.status === 'Processing' || g.status === 'Collecting' || g.status === 'Planned' || g.status === 'Blocking') ?? [];
   const totalChannels = channels?.length ?? 0;
@@ -94,6 +103,46 @@ export default function Dashboard() {
           </Card>
         </Col>
       </Row>
+
+      <Card title="7 Day Usage" size="small">
+        <Table<DailyUsage>
+          dataSource={usageDaily}
+          loading={usageLoading}
+          rowKey="date"
+          size="small"
+          pagination={false}
+          summary={(data) => {
+            const totals = data.reduce(
+              (acc, row) => ({
+                session_count: acc.session_count + row.session_count,
+                tokens_in: acc.tokens_in + row.tokens_in,
+                tokens_out: acc.tokens_out + row.tokens_out,
+                cost_usd: acc.cost_usd + row.cost_usd,
+                turn_count: acc.turn_count + row.turn_count,
+              }),
+              { session_count: 0, tokens_in: 0, tokens_out: 0, cost_usd: 0, turn_count: 0 },
+            );
+            return (
+              <Table.Summary.Row style={{ fontWeight: 600 }}>
+                <Table.Summary.Cell index={0}>Total</Table.Summary.Cell>
+                <Table.Summary.Cell index={1}>{totals.session_count}</Table.Summary.Cell>
+                <Table.Summary.Cell index={2}>{formatK(totals.tokens_in)}</Table.Summary.Cell>
+                <Table.Summary.Cell index={3}>{formatK(totals.tokens_out)}</Table.Summary.Cell>
+                <Table.Summary.Cell index={4}>${totals.cost_usd.toFixed(2)}</Table.Summary.Cell>
+                <Table.Summary.Cell index={5}>{totals.turn_count}</Table.Summary.Cell>
+              </Table.Summary.Row>
+            );
+          }}
+          columns={[
+            { title: 'Date', dataIndex: 'date', key: 'date' },
+            { title: 'Sessions', dataIndex: 'session_count', key: 'session_count', align: 'right' },
+            { title: 'Input Tokens', dataIndex: 'tokens_in', key: 'tokens_in', align: 'right', render: (v: number) => formatK(v) },
+            { title: 'Output Tokens', dataIndex: 'tokens_out', key: 'tokens_out', align: 'right', render: (v: number) => formatK(v) },
+            { title: 'Cost (USD)', dataIndex: 'cost_usd', key: 'cost_usd', align: 'right', render: (v: number) => `$${v.toFixed(2)}` },
+            { title: 'Turns', dataIndex: 'turn_count', key: 'turn_count', align: 'right' },
+          ] satisfies ColumnsType<DailyUsage>}
+        />
+      </Card>
     </Space>
   );
 }
