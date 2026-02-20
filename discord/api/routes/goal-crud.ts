@@ -32,6 +32,21 @@ function getRepo() {
   return new GoalMetaRepo(getDb());
 }
 
+/** 解析 progress 字段：JSON 格式 → 结构化对象，旧文本格式 → 兼容解析 */
+function parseProgress(raw: string | null): { completed: number; total: number; running: number; failed: number } | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed.completed === 'number' && typeof parsed.total === 'number') {
+      return { completed: parsed.completed, total: parsed.total, running: parsed.running ?? 0, failed: parsed.failed ?? 0 };
+    }
+  } catch { /* not JSON, try legacy format */ }
+  // 兼容旧格式 "3/5 子任务完成"
+  const match = raw.match(/(\d+)\s*\/\s*(\d+)/);
+  if (match) return { completed: parseInt(match[1], 10), total: parseInt(match[2], 10), running: 0, failed: 0 };
+  return null;
+}
+
 /** Goal → API 响应格式 (snake_case) */
 function toApiGoal(goal: Goal) {
   return {
@@ -43,7 +58,7 @@ function toApiGoal(goal: Goal) {
     project: goal.project,
     date: goal.date,
     completion: goal.completion,
-    progress: goal.progress,
+    progress: parseProgress(goal.progress),
     next: goal.next,
     blocked_by: goal.blockedBy,
     body: goal.body,

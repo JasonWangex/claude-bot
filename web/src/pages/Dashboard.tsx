@@ -53,9 +53,8 @@ export default function Dashboard() {
             ) : (
               <Space direction="vertical" style={{ width: '100%' }} size="small">
                 {activeGoals.slice(0, 5).map(goal => {
-                  const match = goal.progress?.match(/(\d+)\s*\/\s*(\d+)/);
-                  const total = match ? parseInt(match[2], 10) : 0;
-                  const pct = match && total > 0 ? Math.round((parseInt(match[1], 10) / total) * 100) : undefined;
+                  const prog = goal.progress;
+                  const pct = prog && prog.total > 0 ? Math.round((prog.completed / prog.total) * 100) : undefined;
                   return (
                     <Link key={goal.id} to={`/goals/${goal.id}`} style={{ display: 'block' }}>
                       <Card size="small" hoverable style={{ marginBottom: 0 }}>

@@ -424,10 +424,12 @@ export async function applyChanges(
   const goalMeta = await deps.goalMetaRepo.get(state.goalId);
   if (goalMeta) {
     goalMeta.body = updateGoalBodyWithTasks(goalMeta.body, result.updatedTasks);
-    // 更新进度信息
-    const completed = result.updatedTasks.filter(t => t.status === 'completed').length;
-    const active = result.updatedTasks.filter(t => t.status !== 'cancelled' && t.status !== 'skipped').length;
-    goalMeta.progress = `${completed}/${active} 子任务完成`;
+    // 更新进度信息（JSON 格式）
+    const total = result.updatedTasks.filter(t => t.status !== 'cancelled' && t.status !== 'skipped').length;
+    const completed = result.updatedTasks.filter(t => t.status === 'completed' && (!t.branchName || t.merged)).length;
+    const running = result.updatedTasks.filter(t => t.status === 'dispatched' || t.status === 'running').length;
+    const failed = result.updatedTasks.filter(t => t.status === 'failed').length;
+    goalMeta.progress = JSON.stringify({ completed, total, running, failed });
     await deps.goalMetaRepo.save(goalMeta);
   }
 

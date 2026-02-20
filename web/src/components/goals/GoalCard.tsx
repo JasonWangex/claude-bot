@@ -5,16 +5,9 @@ import type { Goal } from '@/lib/types';
 
 const { Text } = Typography;
 
-function parseProgress(progress: string | null): { completed: number; total: number } | null {
-  if (!progress) return null;
-  const match = progress.match(/(\d+)\s*\/\s*(\d+)/);
-  if (!match) return null;
-  return { completed: parseInt(match[1], 10), total: parseInt(match[2], 10) };
-}
-
 export function GoalCard({ goal }: { goal: Goal }) {
   const isDone = goal.status === 'Completed' || goal.status === 'Merged';
-  const prog = parseProgress(goal.progress);
+  const prog = goal.progress;
   const percentage = isDone ? 100 : (prog && prog.total > 0 ? Math.round((prog.completed / prog.total) * 100) : 0);
 
   return (
@@ -34,7 +27,7 @@ export function GoalCard({ goal }: { goal: Goal }) {
         {(isDone || prog) && (
           <div style={{ marginTop: 8 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#999' }}>
-              <span>{isDone && prog ? `${prog.total}/${prog.total} 子任务完成` : goal.progress}</span>
+              <span>{isDone && prog ? `${prog.total}/${prog.total} 完成` : prog ? `${prog.completed}/${prog.total} 完成` : ''}</span>
               <span>{percentage}%</span>
             </div>
             <Progress percent={percentage} showInfo={false} size="small" status={isDone ? 'success' : 'active'} />

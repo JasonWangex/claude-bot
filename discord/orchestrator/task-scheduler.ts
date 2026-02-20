@@ -11,8 +11,8 @@ import type { GoalDriveState, GoalTask } from '../types/index.js';
  *
  * 规则：
  * 1. 状态为 pending
- * 2. 所有 depends 中的任务都已 completed
- * 3. 如果有 phase，前一个 phase 的所有任务都已 completed
+ * 2. 所有 depends 中的任务都已终结（completed+merged / skipped / cancelled）
+ * 3. 如果有 phase，前一个 phase 的所有任务都已终结
  * 4. type 为 '手动' 的任务不自动派发，标记为 blocked
  */
 /** 判断任务是否视为「已终结」（不再阻塞后续）
