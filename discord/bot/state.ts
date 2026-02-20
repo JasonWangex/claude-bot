@@ -166,13 +166,16 @@ export class StateManager {
       // 写入 claude_sessions 表（仅在已有 claudeSessionId 时写入，避免产生空壳记录）
       if (session.claudeSessionId) {
         const ctx = this.db ? resolveSessionContext(this.db, session.channelId) : null;
+        // 保留已有的 status，避免覆盖 hook 事件设置的状态（idle/waiting/closed）
+        // 新 session（首次写入）默认为 'active'
+        const existingSession = this.claudeSessionRepo.get(session.claudeSessionId);
         const claudeSession: ClaudeSession = {
           claudeSessionId: session.claudeSessionId,
           prevClaudeSessionId: session.prevClaudeSessionId,
           channelId: session.channelId,
           model: session.model,
           planMode: session.planMode ?? false,
-          status: 'active',
+          status: existingSession?.status ?? 'active',
           createdAt: session.createdAt,
           purpose: 'channel',
           taskId: ctx?.taskId ?? undefined,

@@ -10,7 +10,8 @@ import { logger } from '../utils/logger.js';
 export class SessionTimeoutService {
   private timer: NodeJS.Timeout | null = null;
   private readonly CHECK_INTERVAL = 5 * 60 * 1000;  // 5分钟检查一次
-  private readonly TIMEOUT = 30 * 60 * 1000;        // 30分钟超时
+  private readonly TIMEOUT = 30 * 60 * 1000;        // 30分钟超时（waiting/idle）
+  private readonly ACTIVE_TIMEOUT = 5 * 60 * 60 * 1000;  // 5小时超时（active 僵尸 session）
 
   constructor(private claudeSessionRepo: ClaudeSessionRepository) {}
 
@@ -53,7 +54,6 @@ export class SessionTimeoutService {
    */
   private async checkTimeouts(): Promise<void> {
     const now = Date.now();
-    const threshold = now - this.TIMEOUT;
 
     // 加载所有 session（实际应该用专门的查询方法，但当前 repo 没有提供）
     const allSessions = this.claudeSessionRepo.loadAll();
@@ -61,15 +61,19 @@ export class SessionTimeoutService {
     let closedCount = 0;
 
     for (const session of allSessions) {
-      // 只检查 waiting/idle 状态的 session
-      if (session.status !== 'waiting' && session.status !== 'idle') {
+      // 只检查 waiting/idle/active 状态的 session
+      if (session.status !== 'waiting' && session.status !== 'idle' && session.status !== 'active') {
         continue;
       }
 
+      // active 状态用更长的超时（5小时），避免误关仍在运行的 session
+      const timeout = session.status === 'active' ? this.ACTIVE_TIMEOUT : this.TIMEOUT;
+      const timeoutThreshold = now - timeout;
+
       // 检查 lastActivityAt 是否超时
       const lastActivity = session.lastActivityAt || session.createdAt;
-      if (lastActivity < threshold) {
-        logger.warn(`[SessionTimeout] Closing inactive session: ${session.claudeSessionId.slice(0, 8)} - last activity: ${new Date(lastActivity).toISOString()}`);
+      if (lastActivity < timeoutThreshold) {
+        logger.warn(`[SessionTimeout] Closing inactive session: ${session.claudeSessionId.slice(0, 8)} status=${session.status} - last activity: ${new Date(lastActivity).toISOString()}`);
 
         await this.claudeSessionRepo.close(session.claudeSessionId);
         closedCount++;
