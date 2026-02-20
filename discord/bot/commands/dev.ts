@@ -20,6 +20,7 @@ import { StateManager } from '../state.js';
 import { getDb } from '../../db/index.js';
 import { IdeaRepository } from '../../db/idea-repo.js';
 import { buildIdeaPromoteButtons } from '../idea-buttons.js';
+import { MODEL_OPTIONS } from './task.js';
 import type { Idea } from '../../types/repository.js';
 import type { CommandDeps } from './types.js';
 import { requireAuth, requireThread } from './utils.js';
@@ -30,6 +31,11 @@ export const devCommands = [
     .setDescription('Quick Dev: create branch + task + start Claude')
     .addStringOption(opt =>
       opt.setName('description').setDescription('Task description').setRequired(true)
+    )
+    .addStringOption(opt =>
+      opt.setName('model').setDescription('Claude model to use')
+        .addChoices(...MODEL_OPTIONS.map(m => ({ name: m.label, value: m.id })))
+        .setRequired(false)
     ),
 
   new SlashCommandBuilder()
@@ -82,6 +88,7 @@ async function handleQdev(
   const guildId = interaction.guildId!;
   const channelId = interaction.channelId;
   const description = interaction.options.getString('description', true);
+  const model = interaction.options.getString('model') || undefined;
   const { stateManager, client, config, messageHandler } = deps;
 
   const session = stateManager.getSession(guildId, channelId);
@@ -127,7 +134,12 @@ async function handleQdev(
       channelService: deps.channelService,
     }, threadTitle);
 
-    // 5. 发送任务描述到新 thread
+    // 5. 设置自定义 model（如果指定）
+    if (model) {
+      stateManager.setSessionModel(guildId, forkResult.channelId, model);
+    }
+
+    // 6. 发送任务描述到新 thread
     await interaction.editReply(`Branch: \`${branchName}\`\nSending task to new thread...`);
     const newChannel = await client.channels.fetch(forkResult.channelId);
     if (newChannel && newChannel.isTextBased() && 'send' in newChannel) {
@@ -137,12 +149,12 @@ async function handleQdev(
       await (newChannel as any).send({ embeds: [descEmbed] });
     }
 
-    // 6. 触发 Claude 处理（fire-and-forget）
+    // 7. 触发 Claude 处理（fire-and-forget）
     messageHandler.handleBackgroundChat(guildId, forkResult.channelId, description).catch((err) => {
       logger.error('qdev background chat failed:', err.message);
     });
 
-    // 7. 最终结果
+    // 8. 最终结果
     await interaction.editReply(
       `**Task created**\n\n` +
       `Branch: \`${forkResult.branchName}\`\n` +

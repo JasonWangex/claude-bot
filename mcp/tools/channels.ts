@@ -51,9 +51,10 @@ export function registerChannelTools(server: McpServer) {
     inputSchema: {
       channel_id: z.string().describe('Parent channel ID to create sub-task from'),
       description: z.string().describe('Task description'),
+      model: z.string().optional().describe('Claude model to use (e.g. claude-sonnet-4-6, claude-opus-4-6)'),
     },
-  }, async ({ channel_id, description }) => {
-    const r = await apiPost(`/api/tasks/${channel_id}/qdev`, { description });
+  }, async ({ channel_id, description, model }) => {
+    const r = await apiPost(`/api/tasks/${channel_id}/qdev`, { description, model });
     return { content: [{ type: 'text', text: JSON.stringify(r.data ?? r, null, 2) }] };
   });
 }

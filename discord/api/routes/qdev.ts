@@ -39,13 +39,14 @@ export const qdev: RouteHandler = async (req, res, params, deps) => {
     return;
   }
 
-  const body = await readJsonBody<{ description: string; category_id?: string }>(req);
+  const body = await readJsonBody<{ description: string; category_id?: string; model?: string }>(req);
   if (!body?.description || typeof body.description !== 'string') {
     sendJson(res, 400, { ok: false, error: '"description" field is required' });
     return;
   }
 
   const description = body.description.trim();
+  const model = body.model?.trim() || undefined;
 
   // 需要 category_id 来创建新 channel
   let categoryId = body.category_id;
@@ -96,6 +97,11 @@ export const qdev: RouteHandler = async (req, res, params, deps) => {
       channelId: forkResult.channelId,
       dispatchedAt: Date.now(),
     }, null);  // goalId = null（独立任务）
+
+    // 3c. 设置自定义 model（如果指定）
+    if (model) {
+      deps.stateManager.setSessionModel(guildId, forkResult.channelId, model);
+    }
 
     // 4. 发送任务描述到新 channel
     const newChannel = await deps.client.channels.fetch(forkResult.channelId);
