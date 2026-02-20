@@ -183,20 +183,47 @@ export const getChannel: RouteHandler = async (_req, res, params, deps) => {
 
   const channelId = params.channelId;
   const session = deps.stateManager.getSession(guildId, channelId);
-  if (!session) {
+
+  if (session) {
+    const children = deps.stateManager.getChildSessions(guildId, channelId);
+    const childSummaries = children.map(c => sessionToSummary(c, []));
+    sendJson(res, 200, {
+      ok: true,
+      data: {
+        ...sessionToSummary(session, childSummaries),
+        claude_session_id: session.claudeSessionId || null,
+        plan_mode: !!session.planMode,
+      },
+    });
+    return;
+  }
+
+  // Fallback: 从数据库查询（含归档 channel）
+  const channelRepo = new ChannelRepository(deps.db);
+  const channel = await channelRepo.get(channelId);
+  if (!channel) {
     sendJson(res, 404, { ok: false, error: 'Channel not found' });
     return;
   }
 
-  const children = deps.stateManager.getChildSessions(guildId, channelId);
-  const childSummaries = children.map(c => sessionToSummary(c, []));
-
   sendJson(res, 200, {
     ok: true,
     data: {
-      ...sessionToSummary(session, childSummaries),
-      claude_session_id: session.claudeSessionId || null,
-      plan_mode: !!session.planMode,
+      channel_id: channel.id,
+      name: channel.name,
+      cwd: channel.cwd,
+      model: null,
+      has_session: false,
+      message_count: channel.messageCount,
+      created_at: channel.createdAt,
+      last_message: channel.lastMessage || null,
+      last_message_at: channel.lastMessageAt || null,
+      parent_channel_id: channel.parentChannelId || null,
+      worktree_branch: channel.worktreeBranch || null,
+      status: channel.status,
+      children: [],
+      claude_session_id: null,
+      plan_mode: false,
     },
   });
 };
