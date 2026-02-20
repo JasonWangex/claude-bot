@@ -94,9 +94,9 @@ export class GoalOrchestrator {
     this.deps = deps;
   }
 
-  /** 生成带 goal seq 前缀的任务标签，如 g2t1 */
-  private getTaskLabel(state: GoalDriveState, taskId: string): string {
-    return state.goalSeq > 0 ? `g${state.goalSeq}${taskId}` : taskId;
+  /** 任务标签（task ID 已含 goal seq 前缀，如 g2t1） */
+  private getTaskLabel(_state: GoalDriveState, taskId: string): string {
+    return taskId;
   }
 
   /**
