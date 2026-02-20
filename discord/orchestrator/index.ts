@@ -52,6 +52,7 @@ import {
 } from './goal-buttons.js';
 import type { IGoalMetaRepo, ITaskRepo, IGoalCheckpointRepo, IGoalTodoRepo } from '../types/repository.js';
 import type { PromptConfigService } from '../services/prompt-config-service.js';
+import { TaskEventRepo } from '../db/repo/task-event-repo.js';
 
 interface OrchestratorDeps {
   stateManager: StateManager;
@@ -66,6 +67,7 @@ interface OrchestratorDeps {
   checkpointRepo: IGoalCheckpointRepo;
   goalTodoRepo: IGoalTodoRepo;
   promptService: PromptConfigService;
+  taskEventRepo: TaskEventRepo;
 }
 
 /** startDrive 的入参 */
@@ -492,7 +494,7 @@ export class GoalOrchestrator {
    * 流程：
    * 1. 在已有 thread 中发送调查 prompt（Sonnet 快速分析）
    * 2. Claude 分析 blocked 原因、检查依赖状态/代码上下文
-   * 3. 写结论到 feedback/<taskId>-investigate.json
+   * 3. 调用 bot_task_event MCP 写结论（feedback.investigate 事件）
    * 4. 根据结论自动路由：continue（继续修复）/ retry / replan / escalate
    */
   private startFeedbackInvestigation(
@@ -664,47 +666,25 @@ export class GoalOrchestrator {
   }
 
   /**
-   * 读取调查结论文件 feedback/<taskId>-investigate.json
+   * 读取调查结论事件 feedback.investigate
    */
   private async readInvestigationResult(
-    state: GoalDriveState,
+    _state: GoalDriveState,
     task: GoalTask,
   ): Promise<{ action: string; reason: string; details?: string }> {
-    const defaultResult = { action: 'escalate', reason: 'Investigation result file not found or unreadable' };
+    const defaultResult = { action: 'escalate', reason: 'No investigation event found in DB' };
 
-    if (!task.branchName) {
-      logger.warn(`[Orchestrator] readInvestigationResult(${task.id}): no branchName`);
-      return defaultResult;
-    }
+    const result = this.deps.taskEventRepo.read<{ action: string; reason: string; details?: string }>(
+      task.id, 'feedback.investigate',
+    );
+    if (!result) return defaultResult;
 
-    try {
-      const stdout = await execGit(
-        ['worktree', 'list', '--porcelain'],
-        state.baseCwd,
-        `readInvestigationResult(${task.id}): list worktrees`,
-      );
-      const subtaskDir = this.findWorktreeDir(stdout, task.branchName);
-      if (!subtaskDir) {
-        logger.warn(`[Orchestrator] readInvestigationResult(${task.id}): worktree not found`);
-        return defaultResult;
-      }
-
-      const resultPath = join(subtaskDir, 'feedback', `${task.id}-investigate.json`);
-      const content = await readFile(resultPath, 'utf-8');
-      const parsed = JSON.parse(content);
-
-      const validActions = ['continue', 'retry', 'replan', 'escalate'];
-      const action = validActions.includes(parsed.action) ? parsed.action : 'escalate';
-
-      return {
-        action,
-        reason: parsed.reason || 'No reason provided',
-        details: parsed.details,
-      };
-    } catch (err: any) {
-      logger.warn(`[Orchestrator] readInvestigationResult(${task.id}): ${err.message}`);
-      return defaultResult;
-    }
+    const validActions = ['continue', 'retry', 'replan', 'escalate'];
+    return {
+      action: validActions.includes(result.action) ? result.action : 'escalate',
+      reason: result.reason || 'No reason provided',
+      details: result.details,
+    };
   }
 
   // ========== Brain 战略大脑 ==========
@@ -725,36 +705,6 @@ export class GoalOrchestrator {
       );
     } catch (err: any) {
       logger.warn(`[Orchestrator] sendToBrain failed: ${err.message}`);
-    }
-  }
-
-  /**
-   * 读取 Brain 写入的决策 JSON 文件
-   *
-   * Brain 将决策写入 goal worktree 的 feedback/ 目录。
-   */
-  private async readBrainDecision<T>(
-    state: GoalDriveState,
-    filename: string,
-  ): Promise<T | null> {
-    try {
-      const stdout = await execGit(
-        ['worktree', 'list', '--porcelain'],
-        state.baseCwd,
-        `readBrainDecision(${filename}): list worktrees`,
-      );
-      const goalWorktreeDir = this.findWorktreeDir(stdout, state.goalBranch);
-      if (!goalWorktreeDir) {
-        logger.warn(`[Orchestrator] readBrainDecision: goal worktree not found`);
-        return null;
-      }
-
-      const resultPath = join(goalWorktreeDir, 'feedback', filename);
-      const content = await readFile(resultPath, 'utf-8');
-      return JSON.parse(content) as T;
-    } catch (err: any) {
-      logger.warn(`[Orchestrator] readBrainDecision(${filename}): ${err.message}`);
-      return null;
     }
   }
 
@@ -1018,6 +968,9 @@ export class GoalOrchestrator {
     if (states.length > 0) {
       logger.info(`[Orchestrator] Restored ${states.length} running drives`);
     }
+
+    // 启动后台事件扫描器（兜底：处理 crash 后遗留的未处理事件）
+    this.startEventScanner();
   }
 
   // ========== 内部方法 ==========
@@ -1789,53 +1742,27 @@ export class GoalOrchestrator {
   }
 
   /**
-   * 读取 self-review 结果
+   * 读取 self-review 事件 feedback.self_review
    */
   private async readSelfReviewResult(
-    state: GoalDriveState,
+    _state: GoalDriveState,
     task: GoalTask,
   ): Promise<{ hasRemainingIssues: boolean; remainingIssues: string[] }> {
-    if (!task.branchName) {
-      return { hasRemainingIssues: true, remainingIssues: ['No branch name'] };
+    const parsed = this.deps.taskEventRepo.read<{
+      allIssuesFixed?: boolean;
+      remainingIssues?: string[];
+    }>(task.id, 'feedback.self_review');
+
+    if (!parsed) {
+      logger.warn(`[Orchestrator] Self-review ${task.id}: No event in DB`);
+      return { hasRemainingIssues: true, remainingIssues: ['No self-review event in DB'] };
     }
 
-    let subtaskDir: string | null = null;
-    try {
-      const stdout = await execGit(['worktree', 'list', '--porcelain'], state.baseCwd, '...');
-      subtaskDir = this.findWorktreeDir(stdout, task.branchName);
-    } catch (err: any) {
-      return { hasRemainingIssues: true, remainingIssues: [`Cannot list worktrees: ${err.message}`] };
-    }
-
-    if (!subtaskDir) {
-      return { hasRemainingIssues: true, remainingIssues: ['Worktree not found'] };
-    }
-
-    const reviewPath = join(subtaskDir, 'feedback', `${task.id}-self-review.json`);
-
-    try {
-      await access(reviewPath);
-      const content = await readFile(reviewPath, 'utf-8');
-      const parsed = JSON.parse(content);
-
-      // 验证 JSON 结构
-      if (typeof parsed !== 'object' || parsed === null) {
-        logger.warn(`[Orchestrator] Self-review ${task.id}: Invalid JSON structure`);
-        return { hasRemainingIssues: true, remainingIssues: ['Invalid self-review format'] };
-      }
-
-      // 验证 remainingIssues 是数组
-      const remainingIssues = Array.isArray(parsed.remainingIssues) ? parsed.remainingIssues : [];
-
-      return {
-        hasRemainingIssues: parsed.allIssuesFixed !== true || remainingIssues.length > 0,
-        remainingIssues,
-      };
-    } catch (err: any) {
-      // 没写文件或解析失败 → 假定有问题（保守策略）
-      logger.warn(`[Orchestrator] Self-review ${task.id}: Failed to read or parse - ${err.message}`);
-      return { hasRemainingIssues: true, remainingIssues: ['Self-review file not found or invalid'] };
-    }
+    const remainingIssues = Array.isArray(parsed.remainingIssues) ? parsed.remainingIssues : [];
+    return {
+      hasRemainingIssues: parsed.allIssuesFixed !== true || remainingIssues.length > 0,
+      remainingIssues,
+    };
   }
 
   /**
@@ -1916,82 +1843,48 @@ export class GoalOrchestrator {
   }
 
   private async readAuditResult(
-    state: GoalDriveState,
+    _state: GoalDriveState,
     task: GoalTask,
   ): Promise<{ verdict: 'pass' | 'fail'; summary?: string; issues: string[]; verifyCommands: string[] }> {
-    const defaultResult = { verifyCommands: [] as string[] };
+    const defaultFail = { verdict: 'fail' as const, issues: ['No audit event in DB'], verifyCommands: [] };
 
-    if (!task.branchName) {
-      logger.warn(`[Orchestrator] readAuditResult(${task.id}): no branchName, defaulting to fail`);
-      return { verdict: 'fail', issues: ['No branch name — cannot locate audit result'], ...defaultResult };
+    const parsed = this.deps.taskEventRepo.read<{
+      verdict?: string;
+      summary?: string;
+      issues?: unknown[];
+      verifyCommands?: unknown[];
+    }>(task.id, 'feedback.audit');
+
+    if (!parsed) {
+      logger.warn(`[Orchestrator] readAuditResult(${task.id}): No audit event in DB`);
+      return defaultFail;
     }
 
-    let subtaskDir: string | null = null;
-    try {
-      const stdout = await execGit(
-        ['worktree', 'list', '--porcelain'],
-        state.baseCwd,
-        `readAuditResult(${task.id}): list worktrees`,
-      );
-      subtaskDir = this.findWorktreeDir(stdout, task.branchName);
-    } catch (err: any) {
-      logger.warn(`[Orchestrator] readAuditResult(${task.id}): cannot list worktrees: ${err.message}`);
-      return { verdict: 'fail', issues: ['Cannot list worktrees to find audit result'], ...defaultResult };
+    if (!parsed.verdict) {
+      logger.warn(`[Orchestrator] readAuditResult(${task.id}): verdict field missing`);
+      return { verdict: 'fail', issues: ['Audit event missing verdict field'], verifyCommands: [] };
     }
 
-    if (!subtaskDir) {
-      logger.warn(`[Orchestrator] readAuditResult(${task.id}): worktree not found for ${task.branchName}`);
-      return { verdict: 'fail', issues: ['Worktree not found — cannot locate audit result'], ...defaultResult };
-    }
+    const issues = Array.isArray(parsed.issues)
+      ? parsed.issues.map((i: any) => {
+          if (typeof i === 'string') return i;
+          const sev = i.severity || 'error';
+          const loc = i.file ? ` (${i.file}${i.line ? ':' + i.line : ''})` : '';
+          const desc = i.description || JSON.stringify(i);
+          return `[${sev}]${loc} ${desc}`;
+        })
+      : [];
 
-    const auditPath = join(subtaskDir, 'feedback', `${task.id}-audit.json`);
+    const verifyCommands = Array.isArray(parsed.verifyCommands)
+      ? parsed.verifyCommands.filter((c: any) => typeof c === 'string')
+      : [];
 
-    // 检查文件是否存在
-    try {
-      await access(auditPath);
-    } catch {
-      logger.warn(`[Orchestrator] readAuditResult(${task.id}): audit file not found at ${auditPath}`);
-      return { verdict: 'fail', issues: ['Audit result file not found — auditor may not have written it'], ...defaultResult };
-    }
-
-    // 文件存在，读取并解析
-    try {
-      const content = await readFile(auditPath, 'utf-8');
-      const parsed = JSON.parse(content);
-
-      if (!parsed.verdict) {
-        logger.warn(`[Orchestrator] readAuditResult(${task.id}): verdict field missing in audit file`);
-        return { verdict: 'fail', issues: ['Audit file exists but verdict field is missing'], ...defaultResult };
-      }
-
-      // 保留结构化信息：[severity] (file:line) description
-      const issues = Array.isArray(parsed.issues)
-        ? parsed.issues.map((i: any) => {
-            if (typeof i === 'string') return i;
-            const sev = i.severity || 'error';
-            const loc = i.file ? ` (${i.file}${i.line ? ':' + i.line : ''})` : '';
-            const desc = i.description || JSON.stringify(i);
-            return `[${sev}]${loc} ${desc}`;
-          })
-        : [];
-
-      const verifyCommands = Array.isArray(parsed.verifyCommands)
-        ? parsed.verifyCommands.filter((c: any) => typeof c === 'string')
-        : [];
-
-      // 提取 summary（Opus 的整体审查评价）
-      const summary = typeof parsed.summary === 'string' ? parsed.summary : undefined;
-
-      return {
-        verdict: parsed.verdict === 'pass' ? 'pass' : 'fail',
-        summary,
-        issues,
-        verifyCommands,
-      };
-    } catch (err: any) {
-      logger.warn(`[Orchestrator] readAuditResult(${task.id}): failed to parse audit file: ${err.message}`);
-      return { verdict: 'fail', issues: [`Audit file parse error: ${err.message}`], ...defaultResult };
-    }
+    return {
+      verdict: parsed.verdict === 'pass' ? 'pass' : 'fail',
+      summary: typeof parsed.summary === 'string' ? parsed.summary : undefined,
+      issues,
+      verifyCommands,
+    };
   }
 
   // ========== 流水线 Prompts ==========
@@ -2162,6 +2055,8 @@ export class GoalOrchestrator {
       if (!state) return;
       const task = state.tasks.find(t => t.id === taskId);
       if (!task) return;
+      // 防止扫描器与正常流竞争时重复处理同一任务
+      if (task.status !== 'running') return;
 
       // 写入 usage 数据
       if (usage) {
@@ -2256,9 +2151,9 @@ export class GoalOrchestrator {
           });
           await this.sendToBrain(state, evalPrompt);
 
-          const evalResult = await this.readBrainDecision<{
+          const evalResult = this.deps.taskEventRepo.read<{
             needsReplan: boolean; reason: string;
-          }>(state, `eval-${task.id}.json`);
+          }>(task.id, 'brain.eval');
 
           if (evalResult?.needsReplan) {
             await this.notify(state.goalChannelId,
@@ -2326,9 +2221,9 @@ export class GoalOrchestrator {
           });
           await this.sendToBrain(state, failurePrompt);
 
-          const analysis = await this.readBrainDecision<{
+          const analysis = this.deps.taskEventRepo.read<{
             recommendation: string; reason: string; confidence: string;
-          }>(state, `failure-${task.id}.json`);
+          }>(task.id, 'brain.failure');
 
           if (analysis) {
             // 高置信度 retry + 未超限 → 自动重试
@@ -2432,7 +2327,7 @@ export class GoalOrchestrator {
             IMMUTABLE_RUNNING: immutableRunning,
           });
           await this.sendToBrain(state, replanPrompt);
-          result = await this.readBrainDecision<ReplanResult>(state, 'replan-result.json');
+          result = this.deps.taskEventRepo.read<ReplanResult>(triggerTaskId, 'brain.replan');
           if (result) {
             logger.info(`[Orchestrator] Brain replan succeeded`);
           }
@@ -3072,40 +2967,22 @@ export class GoalOrchestrator {
   // ========== Feedback 检测 ==========
 
   /**
-   * 检测子任务 worktree 下的 feedback/<taskId>.json
-   * 存在且合法则返回 feedback 内容，否则返回 null
+   * 检测任务的 feedback.main 事件（从 DB 读取）
    */
-  private async checkFeedbackFile(state: GoalDriveState, task: GoalTask): Promise<GoalTaskFeedback | null> {
-    if (!task.branchName) return null;
+  private async checkFeedbackFile(_state: GoalDriveState, task: GoalTask): Promise<GoalTaskFeedback | null> {
+    const parsed = this.deps.taskEventRepo.read<{
+      type?: string;
+      reason?: string;
+      details?: string;
+    }>(task.id, 'feedback.main');
 
-    try {
-      const stdout = await execGit(
-        ['worktree', 'list', '--porcelain'],
-        state.baseCwd,
-        `checkFeedbackFile(${task.id}): list worktrees`
-      );
-      const subtaskDir = this.findWorktreeDir(stdout, task.branchName);
-      if (!subtaskDir) return null;
+    if (!parsed || !parsed.type || !parsed.reason) return null;
 
-      const feedbackPath = join(subtaskDir, 'feedback', `${task.id}.json`);
-      const content = await readFile(feedbackPath, 'utf-8');
-      const parsed = JSON.parse(content);
-
-      // 校验必须字段
-      if (!parsed.type || !parsed.reason) {
-        logger.warn(`[Orchestrator] Invalid feedback file for ${task.id}: missing type or reason`);
-        return null;
-      }
-
-      return {
-        type: parsed.type,
-        reason: parsed.reason,
-        details: parsed.details,
-      };
-    } catch {
-      // 文件不存在或读取/解析失败 → 无 feedback
-      return null;
-    }
+    return {
+      type: parsed.type,
+      reason: parsed.reason,
+      details: parsed.details,
+    };
   }
 
   private async mergeAndCleanup(state: GoalDriveState, task: GoalTask): Promise<void> {
@@ -3441,28 +3318,33 @@ export class GoalOrchestrator {
   }
 
   /**
-   * 读取任务检查回答（从 channel 的最后一条 Claude 消息）
+   * 读取任务检查回答
+   * 主路径：feedback.readiness 事件（DB）
+   * Fallback：从 Discord channel 的最后一条 Claude 消息解析
    */
   private async readTaskCheckResponse(
     channelId: string,
-    state: GoalDriveState,
+    _state: GoalDriveState,
     task: GoalTask
   ): Promise<{ completed: boolean; audited: boolean; committed: boolean } | null> {
-    try {
-      // 方法1: 尝试从 feedback 文件读取（如果 Claude 写入了结构化反馈）
-      const feedbackPath = join(state.baseCwd, 'feedback', `${task.id}-readiness.json`);
-      try {
-        const feedbackContent = await readFile(feedbackPath, 'utf-8');
-        const feedback = JSON.parse(feedbackContent);
-        if (feedback.completed !== undefined && feedback.audited !== undefined && feedback.committed !== undefined) {
-          logger.info(`[Orchestrator] Read readiness check from feedback file`);
-          return feedback;
-        }
-      } catch {
-        // Feedback 文件不存在，继续尝试其他方法
-      }
+    // 方法1: 从 DB 读取 feedback.readiness 事件
+    const dbResult = this.deps.taskEventRepo.read<{
+      completed?: boolean;
+      audited?: boolean;
+      committed?: boolean;
+    }>(task.id, 'feedback.readiness');
 
-      // 方法2: 从 Discord channel 读取最后一条 Claude 消息
+    if (dbResult?.completed !== undefined && dbResult?.audited !== undefined && dbResult?.committed !== undefined) {
+      logger.info(`[Orchestrator] Read readiness check from DB event`);
+      return {
+        completed: dbResult.completed,
+        audited: dbResult.audited,
+        committed: dbResult.committed,
+      };
+    }
+
+    // 方法2: 从 Discord channel 读取最后一条 Claude 消息（fallback）
+    try {
       const channel = await this.deps.client.channels.fetch(channelId);
       if (!channel || !('messages' in channel)) return null;
 
@@ -3473,7 +3355,6 @@ export class GoalOrchestrator {
       const lastBotMessage = botMessages.first();
       if (!lastBotMessage) return null;
 
-      // 解析回答
       return this.parseCheckResponse(lastBotMessage.content);
     } catch (err: any) {
       logger.error(`[Orchestrator] Failed to read check response:`, err.message);
@@ -3638,5 +3519,66 @@ export class GoalOrchestrator {
     // TODO: 实现 audit pipeline 逻辑
     // Audit pipeline 应该切换到 Opus model 并发送 audit prompt
     logger.warn(`[Orchestrator] startAuditPipeline: audit pipeline not fully implemented yet`);
+  }
+
+  // ========== 后台事件扫描器 ==========
+
+  /**
+   * 启动后台事件扫描器
+   *
+   * 每 5s 扫描一次 DB 中未处理的 task_events，
+   * 兜底处理 AI session crash 后遗留的事件。
+   */
+  private startEventScanner(): void {
+    const INTERVAL = 5_000;
+    const tick = async () => {
+      try {
+        await this.processPendingEvents();
+      } catch (e) {
+        logger.error('[Scanner] Error processing pending events:', e);
+      }
+      setTimeout(tick, INTERVAL);
+    };
+    setTimeout(tick, INTERVAL);
+    logger.info('[Scanner] Event scanner started (5s interval)');
+  }
+
+  private async processPendingEvents(): Promise<void> {
+    const pending = this.deps.taskEventRepo.findPending();
+    if (pending.length === 0) return;
+
+    for (const ev of pending) {
+      // 找到对应的 active drive
+      if (!ev.goalId) {
+        this.deps.taskEventRepo.markProcessed(ev.id);
+        continue;
+      }
+
+      const state = this.activeDrives.get(ev.goalId);
+      if (!state) {
+        // goal 不在内存中（可能已完成）— 标记为已处理
+        this.deps.taskEventRepo.markProcessed(ev.id);
+        continue;
+      }
+
+      // 暂停/完成的 goal 不自动处理事件，等 goal 恢复 running 后再处理
+      if (state.status !== 'running') continue;
+
+      const task = state.tasks.find(t => t.id === ev.taskId);
+      if (!task || task.status !== 'running') {
+        // 任务不在 running 状态，事件已过期
+        this.deps.taskEventRepo.markProcessed(ev.id);
+        continue;
+      }
+
+      logger.info(`[Scanner] Found pending event '${ev.eventType}' for task ${ev.taskId}, triggering onTaskCompleted`);
+
+      try {
+        await this.onTaskCompleted(ev.goalId, ev.taskId);
+        this.deps.taskEventRepo.markProcessed(ev.id);
+      } catch (err: any) {
+        logger.error(`[Scanner] Failed to process event ${ev.id}: ${err.message}`);
+      }
+    }
   }
 }

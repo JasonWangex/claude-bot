@@ -28,6 +28,7 @@ import migration012 from './migrations/012_remove_skill_prompts.js';
 import migration013 from './migrations/013_add_session_usage.js';
 import migration014 from './migrations/014_create_goal_todos.js';
 import migration015 from './migrations/015_add_model_usage.js';
+import migration016 from './migrations/016_create_task_events.js';
 
 const allMigrations: Migration[] = [
   migration001,
@@ -45,6 +46,7 @@ const allMigrations: Migration[] = [
   migration013,
   migration014,
   migration015,
+  migration016,
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -142,3 +144,5 @@ export type { ChannelSessionLink } from './repo/index.js';
 export { KnowledgeBaseRepository } from './knowledge-base-repo.js';
 export { PromptConfigRepository } from './prompt-config-repo.js';
 export { GoalTodoRepository } from './goal-todo-repo.js';
+export { TaskEventRepo, EVENT_TYPES } from './repo/task-event-repo.js';
+export type { EventType, PendingEvent } from './repo/task-event-repo.js';
