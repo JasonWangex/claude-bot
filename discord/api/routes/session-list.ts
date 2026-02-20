@@ -32,6 +32,7 @@ interface SessionListRow {
   cache_write_in: number;
   cost_usd: number;
   turn_count: number;
+  model_usage: string | null;
   // JOIN 字段
   channel_name: string | null;
   task_description: string | null;
@@ -83,7 +84,7 @@ export const listSessions: RouteHandler = async (req, res, _params, deps) => {
              cs.status, cs.purpose, cs.title, cs.created_at, cs.closed_at,
              cs.last_activity_at, cs.task_id, cs.goal_id, cs.cwd, cs.git_branch, cs.project_path,
              cs.tokens_in, cs.tokens_out, cs.cache_read_in, cs.cache_write_in,
-             cs.cost_usd, cs.turn_count,
+             cs.cost_usd, cs.turn_count, cs.model_usage,
              ch.name AS channel_name,
              t.description AS task_description,
              t.pipeline_phase,
@@ -126,6 +127,7 @@ export const listSessions: RouteHandler = async (req, res, _params, deps) => {
       cache_write_in: r.cache_write_in,
       cost_usd: r.cost_usd,
       turn_count: r.turn_count,
+      model_usage: r.model_usage ? JSON.parse(r.model_usage) : null,
     }));
 
     sendJson(res, 200, { ok: true, data, total, limit, offset });
@@ -151,7 +153,7 @@ export const getSessionMeta: RouteHandler = async (_req, res, params, deps) => {
              cs.status, cs.purpose, cs.title, cs.created_at, cs.closed_at,
              cs.last_activity_at, cs.task_id, cs.goal_id, cs.cwd, cs.git_branch, cs.project_path,
              cs.tokens_in, cs.tokens_out, cs.cache_read_in, cs.cache_write_in,
-             cs.cost_usd, cs.turn_count,
+             cs.cost_usd, cs.turn_count, cs.model_usage,
              ch.name AS channel_name,
              t.description AS task_description,
              t.pipeline_phase,
@@ -198,6 +200,7 @@ export const getSessionMeta: RouteHandler = async (_req, res, params, deps) => {
         cache_write_in: row.cache_write_in,
         cost_usd: row.cost_usd,
         turn_count: row.turn_count,
+        model_usage: row.model_usage ? JSON.parse(row.model_usage) : null,
       },
     });
   } catch (error: any) {

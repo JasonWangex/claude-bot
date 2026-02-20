@@ -40,6 +40,7 @@ function rowToClaudeSession(row: ClaudeSessionRow): ClaudeSession {
     costUsd: row.cost_usd || undefined,
     turnCount: row.turn_count || undefined,
     usageFileOffset: row.usage_file_offset || undefined,
+    modelUsage: row.model_usage ? JSON.parse(row.model_usage) : undefined,
   };
 }
 

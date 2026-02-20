@@ -28,6 +28,14 @@ export interface SessionSummary {
   cache_write_in: number;
   cost_usd: number;
   turn_count: number;
+  model_usage: Record<string, {
+    tokensIn: number;
+    tokensOut: number;
+    cacheReadIn: number;
+    cacheWriteIn: number;
+    costUsd: number;
+    turnCount: number;
+  }> | null;
 }
 
 // ========== JSONL Event Types (matching Claude Code format) ==========

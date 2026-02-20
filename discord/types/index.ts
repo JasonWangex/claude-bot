@@ -434,6 +434,16 @@ export interface Channel {
   lastMessageAt?: number;
 }
 
+/** 每个模型的分项 token/cost 统计 */
+export interface ModelUsageEntry {
+  tokensIn: number;
+  tokensOut: number;
+  cacheReadIn: number;
+  cacheWriteIn: number;
+  costUsd: number;
+  turnCount: number;
+}
+
 // ClaudeSession（Claude Code CLI 会话实体，PK = claudeSessionId）
 export interface ClaudeSession {
   claudeSessionId: string;   // Claude CLI session_id (PK)
@@ -464,4 +474,5 @@ export interface ClaudeSession {
   costUsd?: number;
   turnCount?: number;
   usageFileOffset?: number;
+  modelUsage?: Record<string, ModelUsageEntry>;  // 每模型分项统计
 }

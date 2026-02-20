@@ -29,13 +29,23 @@ function projectPathFromJsonl(jsonlPath: string): string {
   return decodeProjectDirName(dirName);
 }
 
-interface UsageDelta {
+interface ModelStats {
   tokensIn: number;
   tokensOut: number;
   cacheReadIn: number;
   cacheWriteIn: number;
   costUsd: number;
   turnCount: number;
+}
+
+interface UsageTotals {
+  tokensIn: number;
+  tokensOut: number;
+  cacheReadIn: number;
+  cacheWriteIn: number;
+  costUsd: number;
+  turnCount: number;
+  byModel: Record<string, ModelStats>;
 }
 
 export class SessionSyncService {
@@ -47,10 +57,8 @@ export class SessionSyncService {
   private pricingService: PricingService | null = null;
   /** 序列化同一 claudeSessionId 的并发 syncSession 调用，避免重复 INSERT */
   private syncSessionLocks: Map<string, Promise<void>> = new Map();
-  /** 累加 delta 的预编译 SQL */
-  private usageAccumulateStmt: Database.Statement;
-  /** 仅更新 offset 的预编译 SQL */
-  private usageOffsetStmt: Database.Statement;
+  /** 全量覆盖写 usage 的预编译 SQL */
+  private usageOverwriteStmt: Database.Statement;
 
   constructor(
     private db: Database.Database,
@@ -62,20 +70,16 @@ export class SessionSyncService {
     this.channelRepo = new ChannelRepository(db);
     this.pricingService = pricingService ?? null;
 
-    this.usageAccumulateStmt = db.prepare(`
+    this.usageOverwriteStmt = db.prepare(`
       UPDATE claude_sessions SET
-        tokens_in         = tokens_in      + ?,
-        tokens_out        = tokens_out     + ?,
-        cache_read_in     = cache_read_in  + ?,
-        cache_write_in    = cache_write_in + ?,
-        cost_usd          = cost_usd       + ?,
-        turn_count        = turn_count     + ?,
-        usage_file_offset = ?
-      WHERE claude_session_id = ?
-    `);
-
-    this.usageOffsetStmt = db.prepare(`
-      UPDATE claude_sessions SET usage_file_offset = ?
+        tokens_in         = ?,
+        tokens_out        = ?,
+        cache_read_in     = ?,
+        cache_write_in    = ?,
+        cost_usd          = ?,
+        turn_count        = ?,
+        usage_file_offset = ?,
+        model_usage       = ?
       WHERE claude_session_id = ?
     `);
   }
@@ -601,11 +605,13 @@ export class SessionSyncService {
     return null;
   }
 
-  // ==================== 增量 Usage 扫描 ====================
+  // ==================== Usage 扫描 ====================
 
   /**
-   * 从 JSONL 文件增量读取 usage delta 并累加到 DB
+   * 检测到 JSONL 文件有新增内容时，对整个文件做全量扫描并覆盖写 DB
    *
+   * 只处理文件大小超过上次记录 offset 的 session（有变化才扫描），
+   * 但扫描时从头读取整个文件以避免累加漂移。
    * fire-and-forget 调用，不阻塞同步循环。
    */
   private async processUsageDelta(jsonlPath: string): Promise<void> {
@@ -616,14 +622,12 @@ export class SessionSyncService {
 
       const claudeSessionId = fileName;
 
-      // 查 DB 获取当前 offset
+      // 查 DB 获取当前 offset（仅用于判断文件是否有新增内容）
       const row = this.db.prepare(
         'SELECT usage_file_offset FROM claude_sessions WHERE claude_session_id = ?',
       ).get(claudeSessionId) as { usage_file_offset: number } | undefined;
 
       if (!row) return; // session 尚未入库
-
-      const currentOffset = row.usage_file_offset;
 
       // 检查文件大小
       let fileSize: number;
@@ -633,45 +637,46 @@ export class SessionSyncService {
         return;
       }
 
-      if (fileSize <= currentOffset) return; // 无新增内容
+      if (fileSize <= row.usage_file_offset) return; // 无新增内容，跳过
 
-      const delta = await this.readUsageDelta(jsonlPath, currentOffset);
+      // 有新内容 → 全量扫描整个文件后覆盖写
+      const totals = await this.fullScan(jsonlPath);
 
-      if (delta.turnCount > 0) {
-        this.usageAccumulateStmt.run(
-          delta.tokensIn,
-          delta.tokensOut,
-          delta.cacheReadIn,
-          delta.cacheWriteIn,
-          delta.costUsd,
-          delta.turnCount,
-          fileSize,
-          claudeSessionId,
-        );
-      } else {
-        // 文件变大了但没有新的 assistant usage（可能是 user/system 事件）
-        this.usageOffsetStmt.run(fileSize, claudeSessionId);
-      }
+      this.usageOverwriteStmt.run(
+        totals.tokensIn,
+        totals.tokensOut,
+        totals.cacheReadIn,
+        totals.cacheWriteIn,
+        totals.costUsd,
+        totals.turnCount,
+        fileSize,
+        Object.keys(totals.byModel).length > 0 ? JSON.stringify(totals.byModel) : null,
+        claudeSessionId,
+      );
     } catch (e: any) {
       logger.debug(`[SessionSync] processUsageDelta failed: ${e.message}`);
     }
   }
 
   /**
-   * 从 byte offset 开始读取新增行，提取 usage delta
+   * 全量读取一个 JSONL 文件，返回完整 token/cost 汇总
    *
-   * offset 可能落在行中间，readline 会把该"半行"作为第一行返回，
-   * JSON.parse 会失败，被 catch 安全跳过。
+   * 使用 messageId+requestId 去重，支持 byModel 分项统计。
    */
-  private async readUsageDelta(filePath: string, offset: number): Promise<UsageDelta> {
-    const delta: UsageDelta = {
+  private async fullScan(filePath: string): Promise<UsageTotals> {
+    const totals: UsageTotals = {
       tokensIn: 0, tokensOut: 0,
       cacheReadIn: 0, cacheWriteIn: 0,
       costUsd: 0, turnCount: 0,
+      byModel: {},
     };
 
-    const stream = createReadStream(filePath, { start: offset, encoding: 'utf-8' });
-    const rl = createInterface({ input: stream, crlfDelay: Infinity });
+    const seen = new Set<string>(); // messageId:requestId 去重
+
+    const rl = createInterface({
+      input: createReadStream(filePath, { encoding: 'utf-8' }),
+      crlfDelay: Infinity,
+    });
 
     for await (const line of rl) {
       const trimmed = line.trim();
@@ -684,28 +689,59 @@ export class SessionSyncService {
         const usage = event.message?.usage;
         if (!usage) continue;
 
-        delta.tokensIn += usage.input_tokens ?? 0;
-        delta.tokensOut += usage.output_tokens ?? 0;
-        delta.cacheReadIn += usage.cache_read_input_tokens ?? 0;
-        delta.cacheWriteIn += usage.cache_creation_input_tokens ?? 0;
-        delta.turnCount++;
+        // 去重：messageId + requestId
+        const msgId = event.message?.id;
+        const reqId = event.requestId;
+        if (msgId && reqId) {
+          const hash = `${msgId}:${reqId}`;
+          if (seen.has(hash)) continue;
+          seen.add(hash);
+        }
+
+        const tokensIn = usage.input_tokens ?? 0;
+        const tokensOut = usage.output_tokens ?? 0;
+        const cacheReadIn = usage.cache_read_input_tokens ?? 0;
+        const cacheWriteIn = usage.cache_creation_input_tokens ?? 0;
+
+        totals.tokensIn += tokensIn;
+        totals.tokensOut += tokensOut;
+        totals.cacheReadIn += cacheReadIn;
+        totals.cacheWriteIn += cacheWriteIn;
+        totals.turnCount++;
 
         // 费用：优先用预计算值
+        let eventCost = 0;
         if (event.costUSD != null) {
-          delta.costUsd += event.costUSD;
+          eventCost = event.costUSD;
         } else if (this.pricingService) {
           const model = event.message?.model;
           if (model) {
-            delta.costUsd += this.pricingService.calculateCost(usage, model);
+            eventCost = this.pricingService.calculateCost(usage, model);
           }
         }
+        totals.costUsd += eventCost;
+
+        // 按模型分类
+        const model: string = event.message?.model ?? 'unknown';
+        if (!totals.byModel[model]) {
+          totals.byModel[model] = {
+            tokensIn: 0, tokensOut: 0,
+            cacheReadIn: 0, cacheWriteIn: 0,
+            costUsd: 0, turnCount: 0,
+          };
+        }
+        totals.byModel[model].tokensIn += tokensIn;
+        totals.byModel[model].tokensOut += tokensOut;
+        totals.byModel[model].cacheReadIn += cacheReadIn;
+        totals.byModel[model].cacheWriteIn += cacheWriteIn;
+        totals.byModel[model].costUsd += eventCost;
+        totals.byModel[model].turnCount++;
       } catch {
-        // offset 截断的半行、格式错误等，安全跳过
         continue;
       }
     }
 
-    return delta;
+    return totals;
   }
 
   // ==================== 文件系统工具 ====================

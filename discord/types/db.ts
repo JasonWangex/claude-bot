@@ -340,6 +340,7 @@ export interface ClaudeSessionRow {
   cost_usd: number;                    // 累计费用（美元）
   turn_count: number;                  // 对话轮次
   usage_file_offset: number;           // JSONL 增量读取偏移量（字节）
+  model_usage: string | null;          // 每模型分项统计 JSON（见 ModelUsageEntry）
 }
 
 // ================================================================

@@ -27,6 +27,7 @@ import migration011 from './migrations/011_update_prompts.js';
 import migration012 from './migrations/012_remove_skill_prompts.js';
 import migration013 from './migrations/013_add_session_usage.js';
 import migration014 from './migrations/014_create_goal_todos.js';
+import migration015 from './migrations/015_add_model_usage.js';
 
 const allMigrations: Migration[] = [
   migration001,
@@ -43,6 +44,7 @@ const allMigrations: Migration[] = [
   migration012,
   migration013,
   migration014,
+  migration015,
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useParams, Navigate } from 'react-router';
-import { Typography, Breadcrumb, Card, Descriptions, Spin, Space, Alert, Tag } from 'antd';
+import { Typography, Breadcrumb, Card, Descriptions, Spin, Space, Alert, Tag, Table } from 'antd';
 import { ClockCircleOutlined, RobotOutlined } from '@ant-design/icons';
 import { Link } from 'react-router';
 import ConversationViewer from '@/components/sessions/ConversationViewer';
@@ -171,7 +171,7 @@ export default function SessionDetail() {
             {(session.cost_usd > 0 || session.tokens_in > 0) && (
               <>
                 <Descriptions.Item label="Cost">
-                  ${session.cost_usd.toFixed(2)}
+                  ${session.cost_usd.toFixed(4)}
                 </Descriptions.Item>
                 <Descriptions.Item label="Tokens In">
                   {formatK(session.tokens_in)}
@@ -191,6 +191,35 @@ export default function SessionDetail() {
               </>
             )}
           </Descriptions>
+
+          {session.model_usage && Object.keys(session.model_usage).length > 1 && (
+            <div style={{ marginTop: 16 }}>
+              <Text type="secondary" style={{ fontSize: 12, marginBottom: 8, display: 'block' }}>
+                Per-model breakdown
+              </Text>
+              <Table
+                size="small"
+                pagination={false}
+                dataSource={Object.entries(session.model_usage).map(([model, s]) => ({
+                  key: model,
+                  model,
+                  cost: `$${s.costUsd.toFixed(4)}`,
+                  tokensIn: formatK(s.tokensIn),
+                  tokensOut: formatK(s.tokensOut),
+                  cacheRead: formatK(s.cacheReadIn),
+                  turns: s.turnCount,
+                }))}
+                columns={[
+                  { title: 'Model', dataIndex: 'model', key: 'model', render: (v: string) => <Text code style={{ fontSize: 11 }}>{v}</Text> },
+                  { title: 'Cost', dataIndex: 'cost', key: 'cost' },
+                  { title: 'Tokens In', dataIndex: 'tokensIn', key: 'tokensIn' },
+                  { title: 'Tokens Out', dataIndex: 'tokensOut', key: 'tokensOut' },
+                  { title: 'Cache Read', dataIndex: 'cacheRead', key: 'cacheRead' },
+                  { title: 'Turns', dataIndex: 'turns', key: 'turns' },
+                ]}
+              />
+            </div>
+          )}
         </Card>
       )}
 

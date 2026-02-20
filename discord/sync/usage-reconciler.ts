@@ -16,6 +16,15 @@ import { logger } from '../utils/logger.js';
 const THREE_DAYS_MS = 3 * 24 * 60 * 60 * 1000;
 const RETRY_DELAY_MS = 5 * 60 * 1000; // 5 分钟后重试
 
+interface ModelStats {
+  tokensIn: number;
+  tokensOut: number;
+  cacheReadIn: number;
+  cacheWriteIn: number;
+  costUsd: number;
+  turnCount: number;
+}
+
 interface UsageTotals {
   tokensIn: number;
   tokensOut: number;
@@ -23,6 +32,7 @@ interface UsageTotals {
   cacheWriteIn: number;
   costUsd: number;
   turnCount: number;
+  byModel: Record<string, ModelStats>;
 }
 
 interface ReconcileResult {
@@ -47,7 +57,8 @@ export class UsageReconciler {
         cache_write_in    = ?,
         cost_usd          = ?,
         turn_count        = ?,
-        usage_file_offset = ?
+        usage_file_offset = ?,
+        model_usage       = ?
       WHERE claude_session_id = ?
     `);
   }
@@ -157,6 +168,7 @@ export class UsageReconciler {
         totals.costUsd,
         totals.turnCount,
         fileSize,          // offset 对齐到文件末尾
+        Object.keys(totals.byModel).length > 0 ? JSON.stringify(totals.byModel) : null,
         sessionId,
       );
       result.sessionsUpdated++;
@@ -173,6 +185,7 @@ export class UsageReconciler {
       tokensIn: 0, tokensOut: 0,
       cacheReadIn: 0, cacheWriteIn: 0,
       costUsd: 0, turnCount: 0,
+      byModel: {},
     };
 
     const seen = new Set<string>(); // messageId:requestId 去重
@@ -202,21 +215,44 @@ export class UsageReconciler {
           seen.add(hash);
         }
 
-        totals.tokensIn += usage.input_tokens ?? 0;
-        totals.tokensOut += usage.output_tokens ?? 0;
-        totals.cacheReadIn += usage.cache_read_input_tokens ?? 0;
-        totals.cacheWriteIn += usage.cache_creation_input_tokens ?? 0;
+        const tokensIn = usage.input_tokens ?? 0;
+        const tokensOut = usage.output_tokens ?? 0;
+        const cacheReadIn = usage.cache_read_input_tokens ?? 0;
+        const cacheWriteIn = usage.cache_creation_input_tokens ?? 0;
+
+        totals.tokensIn += tokensIn;
+        totals.tokensOut += tokensOut;
+        totals.cacheReadIn += cacheReadIn;
+        totals.cacheWriteIn += cacheWriteIn;
         totals.turnCount++;
 
         // 费用：优先用预计算值
+        let eventCost = 0;
         if (event.costUSD != null) {
-          totals.costUsd += event.costUSD;
+          eventCost = event.costUSD;
         } else {
           const model = event.message?.model;
           if (model) {
-            totals.costUsd += this.pricingService.calculateCost(usage, model);
+            eventCost = this.pricingService.calculateCost(usage, model);
           }
         }
+        totals.costUsd += eventCost;
+
+        // 按模型分类累加
+        const model: string = event.message?.model ?? 'unknown';
+        if (!totals.byModel[model]) {
+          totals.byModel[model] = {
+            tokensIn: 0, tokensOut: 0,
+            cacheReadIn: 0, cacheWriteIn: 0,
+            costUsd: 0, turnCount: 0,
+          };
+        }
+        totals.byModel[model].tokensIn += tokensIn;
+        totals.byModel[model].tokensOut += tokensOut;
+        totals.byModel[model].cacheReadIn += cacheReadIn;
+        totals.byModel[model].cacheWriteIn += cacheWriteIn;
+        totals.byModel[model].costUsd += eventCost;
+        totals.byModel[model].turnCount++;
       } catch {
         continue;
       }
