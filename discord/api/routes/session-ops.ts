@@ -1,8 +1,8 @@
 /**
- * POST /api/tasks/:threadId/clear    — 清空 Claude 上下文
- * POST /api/tasks/:threadId/compact  — 压缩上下文
- * POST /api/tasks/:threadId/rewind   — 撤销最后一轮
- * POST /api/tasks/:threadId/stop     — 停止当前任务
+ * POST /api/channels/:channelId/clear    — 清空 Claude 上下文
+ * POST /api/channels/:channelId/compact  — 压缩上下文
+ * POST /api/channels/:channelId/rewind   — 撤销最后一轮
+ * POST /api/channels/:channelId/stop     — 停止当前任务
  */
 
 import type { RouteHandler } from '../types.js';

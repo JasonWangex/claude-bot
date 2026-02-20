@@ -20,7 +20,7 @@ const { Sider, Content } = Layout;
 const menuItems = [
   { key: '/', icon: <DashboardOutlined />, label: 'Dashboard' },
   { key: '/goals', icon: <AimOutlined />, label: 'Goals' },
-  { key: '/tasks', icon: <UnorderedListOutlined />, label: 'Tasks' },
+  { key: '/channels', icon: <UnorderedListOutlined />, label: 'Channels' },
   { key: '/sessions', icon: <HistoryOutlined />, label: 'Sessions' },
   { key: '/devlogs', icon: <FileTextOutlined />, label: 'DevLogs' },
   { key: '/ideas', icon: <BulbOutlined />, label: 'Ideas' },

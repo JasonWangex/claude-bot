@@ -1,9 +1,9 @@
-/* TaskTree hover */
-.task-tree-node:hover {
+/* ChannelTree hover */
+.channel-tree-node:hover {
   background: #fafafa;
 }
 
-/* ReactFlow TaskNode pulse animation */
+/* ReactFlow TaskNode pulse animation (Goal sub-tasks) */
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }

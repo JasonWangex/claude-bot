@@ -1,23 +1,21 @@
 /**
- * Task (Channel) CRUD 路由
+ * Channel CRUD 路由
  *
- * GET    /api/tasks              — 列出所有 Task
- * POST   /api/tasks              — 创建 Task (Category + Text Channel)
- * GET    /api/tasks/:threadId    — Task 详情
- * PATCH  /api/tasks/:threadId    — 更新 Task
- * DELETE /api/tasks/:threadId    — 删除 Task (?cascade=true 级联删子)
- * POST   /api/tasks/:threadId/archive — 归档
- * POST   /api/tasks/:threadId/fork    — Fork
+ * GET    /api/channels              — 列出所有 Channel
+ * POST   /api/channels              — 创建 Channel (Category + Text Channel)
+ * GET    /api/channels/:channelId   — Channel 详情
+ * PATCH  /api/channels/:channelId   — 更新 Channel
+ * DELETE /api/channels/:channelId   — 删除 Channel (?cascade=true 级联删子)
+ * POST   /api/channels/:channelId/archive — 归档
+ * POST   /api/channels/:channelId/fork    — Fork
  */
 
 import { ChannelType, EmbedBuilder } from 'discord.js';
-import type { RouteHandler, TaskSummary, CreateTaskRequest, UpdateTaskRequest } from '../types.js';
+import type { RouteHandler, ChannelSummary, CreateChannelRequest, UpdateChannelRequest } from '../types.js';
 import { sendJson, requireAuth, readJsonBody } from '../middleware.js';
 import { EmbedColors } from '../../bot/message-queue.js';
-import type { Session } from '../../types/index.js';
 import { MODEL_OPTIONS } from '../../bot/commands/task.js';
 import {
-  normalizeTopicName,
   resolveTopicWorkDir,
   ensureProjectDir,
   resolveCustomPath,
@@ -25,46 +23,10 @@ import {
 import { forkTaskCore } from '../../utils/fork-task.js';
 import { ChannelRepository } from '../../db/repo/channel-repo.js';
 import { logger } from '../../utils/logger.js';
+import { sessionToSummary, buildChannelTree } from './channel-utils.js';
 
-function sessionToSummary(s: Session, children: TaskSummary[]): TaskSummary {
-  return {
-    channel_id: s.channelId,
-    name: s.name,
-    cwd: s.cwd,
-    model: s.model || null,
-    has_session: !!s.claudeSessionId,
-    message_count: s.messageCount,
-    created_at: s.createdAt,
-    last_message: s.lastMessage || null,
-    last_message_at: s.lastMessageAt || null,
-    parent_channel_id: s.parentChannelId || null,
-    worktree_branch: s.worktreeBranch || null,
-    status: 'active',
-    children,
-  };
-}
-
-function buildTaskTree(sessions: Session[]): TaskSummary[] {
-  const liveIds = new Set(sessions.map(s => s.channelId));
-  const childMap = new Map<string, Session[]>();
-
-  for (const s of sessions) {
-    if (s.parentChannelId && liveIds.has(s.parentChannelId)) {
-      const arr = childMap.get(s.parentChannelId) || [];
-      arr.push(s);
-      childMap.set(s.parentChannelId, arr);
-    }
-  }
-
-  const topLevel = sessions.filter(s => !s.parentChannelId || !liveIds.has(s.parentChannelId));
-  return topLevel.map(s => {
-    const children = (childMap.get(s.channelId) || []).map(c => sessionToSummary(c, []));
-    return sessionToSummary(s, children);
-  });
-}
-
-// GET /api/tasks
-export const listTasks: RouteHandler = async (req, res, _params, deps) => {
+// GET /api/channels
+export const listChannels: RouteHandler = async (req, res, _params, deps) => {
   const guildId = requireAuth(res);
   if (!guildId) return;
 
@@ -78,7 +40,7 @@ export const listTasks: RouteHandler = async (req, res, _params, deps) => {
     const activeSessions = deps.stateManager.getAllSessions(guildId);
     const activeIds = new Set(activeSessions.map(s => s.channelId));
 
-    const summaries: TaskSummary[] = allChannels.map(ch => {
+    const summaries: ChannelSummary[] = allChannels.map(ch => {
       // 优先从内存取活跃 session 数据
       const activeSession = activeSessions.find(s => s.channelId === ch.id);
       if (activeSession) {
@@ -106,7 +68,7 @@ export const listTasks: RouteHandler = async (req, res, _params, deps) => {
 
     // 构建树结构
     const idSet = new Set(summaries.map(s => s.channel_id));
-    const childMap = new Map<string, TaskSummary[]>();
+    const childMap = new Map<string, ChannelSummary[]>();
     for (const s of summaries) {
       if (s.parent_channel_id && idSet.has(s.parent_channel_id)) {
         const arr = childMap.get(s.parent_channel_id) || [];
@@ -120,25 +82,25 @@ export const listTasks: RouteHandler = async (req, res, _params, deps) => {
 
     sendJson(res, 200, { ok: true, data: topLevel });
   } else {
-    // 默认：只返回活跃 task（从内存）
+    // 默认：只返回活跃 channel（从内存）
     const sessions = deps.stateManager.getAllSessions(guildId);
-    sendJson(res, 200, { ok: true, data: buildTaskTree(sessions) });
+    sendJson(res, 200, { ok: true, data: buildChannelTree(sessions) });
   }
 };
 
-// POST /api/tasks
-export const createTask: RouteHandler = async (req, res, _params, deps) => {
+// POST /api/channels
+export const createChannel: RouteHandler = async (req, res, _params, deps) => {
   const guildId = requireAuth(res);
   if (!guildId) return;
 
-  const body = await readJsonBody<CreateTaskRequest>(req);
+  const body = await readJsonBody<CreateChannelRequest>(req);
   if (!body?.name || typeof body.name !== 'string') {
     sendJson(res, 400, { ok: false, error: '"name" field is required' });
     return;
   }
 
-  const taskName = body.name.trim();
-  if (!taskName || taskName.length > 100) {
+  const channelName = body.name.trim();
+  if (!channelName || channelName.length > 100) {
     sendJson(res, 400, { ok: false, error: 'Name must be 1-100 characters' });
     return;
   }
@@ -158,7 +120,7 @@ export const createTask: RouteHandler = async (req, res, _params, deps) => {
     } else {
       const occupiedPaths = deps.stateManager.getOccupiedWorkDirs(guildId);
       cwd = await resolveTopicWorkDir(
-        taskName, deps.config.projectsRoot, deps.config.topicDirNaming, occupiedPaths,
+        channelName, deps.config.projectsRoot, deps.config.topicDirNaming, occupiedPaths,
       );
       const dirResult = await ensureProjectDir(cwd, deps.config.autoCreateProjectDir);
       dirCreated = dirResult.created;
@@ -186,43 +148,43 @@ export const createTask: RouteHandler = async (req, res, _params, deps) => {
 
     // 创建 Text Channel (under Category)
     const textChannel = await guild.channels.create({
-      name: taskName.slice(0, 100),
+      name: channelName.slice(0, 100),
       type: ChannelType.GuildText,
       parent: category.id,
-      reason: `Task: ${taskName}`,
+      reason: `Channel: ${channelName}`,
     });
 
     // 发送初始消息
     const initEmbed = new EmbedBuilder()
       .setColor(EmbedColors.PURPLE)
-      .setDescription(`[task] Task created: \`${taskName}\`\nWorking directory: \`${cwd}\`${dirCreated ? '\nDirectory auto-created' : ''}`.slice(0, 4096));
+      .setDescription(`[channel] Channel created: \`${channelName}\`\nWorking directory: \`${cwd}\`${dirCreated ? '\nDirectory auto-created' : ''}`.slice(0, 4096));
     await textChannel.send({ embeds: [initEmbed] });
 
-    deps.stateManager.getOrCreateSession(guildId, textChannel.id, { name: taskName, cwd });
+    deps.stateManager.getOrCreateSession(guildId, textChannel.id, { name: channelName, cwd });
 
     // 同步到 channels 表
     if (deps.channelService) {
-      await deps.channelService.ensureChannel(textChannel.id, guildId, taskName, cwd);
+      await deps.channelService.ensureChannel(textChannel.id, guildId, channelName, cwd);
     }
 
     sendJson(res, 201, {
       ok: true,
-      data: { channel_id: textChannel.id, name: taskName, cwd, dir_created: dirCreated },
+      data: { channel_id: textChannel.id, name: channelName, cwd, dir_created: dirCreated },
     });
   } catch (error: any) {
-    sendJson(res, 500, { ok: false, error: `Failed to create task: ${error.message}` });
+    sendJson(res, 500, { ok: false, error: `Failed to create channel: ${error.message}` });
   }
 };
 
-// GET /api/tasks/:threadId
-export const getTask: RouteHandler = async (_req, res, params, deps) => {
+// GET /api/channels/:channelId
+export const getChannel: RouteHandler = async (_req, res, params, deps) => {
   const guildId = requireAuth(res);
   if (!guildId) return;
 
   const channelId = params.channelId;
   const session = deps.stateManager.getSession(guildId, channelId);
   if (!session) {
-    sendJson(res, 404, { ok: false, error: 'Task not found' });
+    sendJson(res, 404, { ok: false, error: 'Channel not found' });
     return;
   }
 
@@ -239,19 +201,19 @@ export const getTask: RouteHandler = async (_req, res, params, deps) => {
   });
 };
 
-// PATCH /api/tasks/:threadId
-export const updateTask: RouteHandler = async (req, res, params, deps) => {
+// PATCH /api/channels/:channelId
+export const updateChannel: RouteHandler = async (req, res, params, deps) => {
   const guildId = requireAuth(res);
   if (!guildId) return;
 
   const channelId = params.channelId;
   const session = deps.stateManager.getSession(guildId, channelId);
   if (!session) {
-    sendJson(res, 404, { ok: false, error: 'Task not found' });
+    sendJson(res, 404, { ok: false, error: 'Channel not found' });
     return;
   }
 
-  const body = await readJsonBody<UpdateTaskRequest>(req);
+  const body = await readJsonBody<UpdateChannelRequest>(req);
   if (!body) {
     sendJson(res, 400, { ok: false, error: 'Request body required' });
     return;
@@ -309,15 +271,15 @@ export const updateTask: RouteHandler = async (req, res, params, deps) => {
   });
 };
 
-// DELETE /api/tasks/:threadId
-export const deleteTask: RouteHandler = async (req, res, params, deps) => {
+// DELETE /api/channels/:channelId
+export const deleteChannel: RouteHandler = async (req, res, params, deps) => {
   const guildId = requireAuth(res);
   if (!guildId) return;
 
   const channelId = params.channelId;
   const session = deps.stateManager.getSession(guildId, channelId);
   if (!session) {
-    sendJson(res, 404, { ok: false, error: 'Task not found' });
+    sendJson(res, 404, { ok: false, error: 'Channel not found' });
     return;
   }
 
@@ -328,7 +290,7 @@ export const deleteTask: RouteHandler = async (req, res, params, deps) => {
   if (children.length > 0 && !cascade) {
     sendJson(res, 400, {
       ok: false,
-      error: `Task has ${children.length} child task(s). Use ?cascade=true to delete all.`,
+      error: `Channel has ${children.length} child channel(s). Use ?cascade=true to delete all.`,
     });
     return;
   }
@@ -337,19 +299,17 @@ export const deleteTask: RouteHandler = async (req, res, params, deps) => {
     if (cascade) {
       for (const child of children) {
         deps.stateManager.deleteSession(guildId, child.channelId);
-        // Delete child channels
         const childChannel = await deps.client.channels.fetch(child.channelId).catch(() => null);
         if (childChannel && 'delete' in childChannel) {
-          await (childChannel as any).delete('Task cascade delete').catch(() => {});
+          await (childChannel as any).delete('Channel cascade delete').catch(() => {});
         }
       }
     }
 
     deps.stateManager.deleteSession(guildId, channelId);
-    // Delete the channel
     const channel = await deps.client.channels.fetch(channelId).catch(() => null);
     if (channel && 'delete' in channel) {
-      await (channel as any).delete('Task deleted').catch(() => {});
+      await (channel as any).delete('Channel deleted').catch(() => {});
     }
 
     sendJson(res, 200, {
@@ -363,15 +323,15 @@ export const deleteTask: RouteHandler = async (req, res, params, deps) => {
   }
 };
 
-// POST /api/tasks/:threadId/archive
-export const archiveTask: RouteHandler = async (_req, res, params, deps) => {
+// POST /api/channels/:channelId/archive
+export const archiveChannel: RouteHandler = async (_req, res, params, deps) => {
   const guildId = requireAuth(res);
   if (!guildId) return;
 
   const channelId = params.channelId;
   const session = deps.stateManager.getSession(guildId, channelId);
   if (!session) {
-    sendJson(res, 404, { ok: false, error: 'Task not found' });
+    sendJson(res, 404, { ok: false, error: 'Channel not found' });
     return;
   }
 
@@ -379,27 +339,27 @@ export const archiveTask: RouteHandler = async (_req, res, params, deps) => {
     deps.stateManager.archiveSession(guildId, channelId, undefined, 'API archive');
     const channel = await deps.client.channels.fetch(channelId).catch(() => null);
     if (channel && 'delete' in channel) {
-      await (channel as any).delete('Task archived').catch(() => {});
+      await (channel as any).delete('Channel archived').catch(() => {});
     }
 
     sendJson(res, 200, {
       ok: true,
-      data: { success: true, message: `Task "${session.name}" archived` },
+      data: { success: true, message: `Channel "${session.name}" archived` },
     });
   } catch (error: any) {
     sendJson(res, 500, { ok: false, error: `Archive failed: ${error.message}` });
   }
 };
 
-// POST /api/tasks/:threadId/fork
-export const forkTask: RouteHandler = async (req, res, params, deps) => {
+// POST /api/channels/:channelId/fork
+export const forkChannel: RouteHandler = async (req, res, params, deps) => {
   const guildId = requireAuth(res);
   if (!guildId) return;
 
   const channelId = params.channelId;
   const session = deps.stateManager.getSession(guildId, channelId);
   if (!session) {
-    sendJson(res, 404, { ok: false, error: 'Task not found' });
+    sendJson(res, 404, { ok: false, error: 'Channel not found' });
     return;
   }
 
@@ -418,7 +378,6 @@ export const forkTask: RouteHandler = async (req, res, params, deps) => {
   // 需要 category_id 来创建新 channel
   let categoryId = body.category_id;
   if (!categoryId) {
-    // 尝试从当前 channel 的 parentId 获取 Category
     try {
       const channel = await deps.client.channels.fetch(channelId);
       if (channel && 'parentId' in channel && channel.parentId) {
@@ -461,5 +420,5 @@ export const forkTask: RouteHandler = async (req, res, params, deps) => {
 
 function getCategoryNameFromCwd(cwd: string): string {
   const parts = cwd.split('/');
-  return parts[parts.length - 1] || 'tasks';
+  return parts[parts.length - 1] || 'channels';
 }

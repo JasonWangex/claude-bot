@@ -1,20 +1,20 @@
 import { useState } from 'react';
 import { Typography, Card, Spin, Space, Alert, Segmented } from 'antd';
-import { TaskTree } from '@/components/tasks/TaskTree';
-import { useTasks } from '@/lib/hooks/use-tasks';
+import { ChannelTree } from '@/components/channels/ChannelTree';
+import { useChannels } from '@/lib/hooks/use-channels';
 
 const { Title, Text } = Typography;
 
-export default function Tasks() {
+export default function Channels() {
   const [showAll, setShowAll] = useState(false);
-  const { data: tasks, isLoading, error } = useTasks(showAll ? 'all' : 'active');
+  const { data: channels, isLoading, error } = useChannels(showAll ? 'all' : 'active');
 
   return (
     <Space direction="vertical" size="large" style={{ width: '100%' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
         <div>
-          <Title level={3} style={{ margin: 0 }}>Tasks</Title>
-          <Text type="secondary">Session / Task 管理</Text>
+          <Title level={3} style={{ margin: 0 }}>Channels</Title>
+          <Text type="secondary">Discord Channel 管理</Text>
         </div>
         <Segmented
           options={[
@@ -35,7 +35,7 @@ export default function Tasks() {
               <Spin size="large" />
             </div>
           ) : (
-            <TaskTree tasks={tasks ?? []} />
+            <ChannelTree channels={channels ?? []} />
           )}
         </Card>
       )}

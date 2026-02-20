@@ -3,7 +3,7 @@
  *
  * 每个功能独立端点，返回结构化 JSON。
  * 不走 Discord.js 管道，直接调用服务层。
- * 唯一例外: POST /api/tasks/:id/message 会输出到 Discord 会话。
+ * 唯一例外: POST /api/channels/:id/message 会输出到 Discord 会话。
  */
 
 import { createServer, IncomingMessage, ServerResponse } from 'http';
@@ -15,7 +15,7 @@ import { logger } from '../utils/logger.js';
 // Route handlers
 import { getHealth } from './routes/health.js';
 import { getStatus } from './routes/status.js';
-import { listTasks, createTask, getTask, updateTask, deleteTask, archiveTask, forkTask } from './routes/tasks.js';
+import { listChannels, createChannel, getChannel, updateChannel, deleteChannel, archiveChannel, forkChannel } from './routes/channels.js';
 import { sendMessage } from './routes/messages.js';
 import { clearSession, compactSession, rewindSession, stopSession } from './routes/session-ops.js';
 import { getModels, setDefaultModel } from './routes/models.js';
@@ -29,7 +29,7 @@ import { syncSessions } from './routes/sync.js';
 import { getCommands } from './routes/commands.js';
 import { getSessionConversation } from './routes/sessions.js';
 import { listSessions, getSessionMeta } from './routes/session-list.js';
-import { listTaskSessions } from './routes/task-sessions.js';
+import { listChannelSessions } from './routes/channel-sessions.js';
 import { listPrompts, getPrompt, updatePrompt, refreshPrompts } from './routes/prompts.js';
 import { getRunningTasks, getActiveProcesses, killZombieTasks } from './routes/debug.js';
 import { handleSessionEvent } from './routes/hooks.js';
@@ -56,25 +56,25 @@ function defineRoutes(): Route[] {
     r('GET',  '/api/models', getModels),
     r('PUT',  '/api/models/default', setDefaultModel),
 
-    // Task CRUD
-    r('GET',    '/api/tasks', listTasks),
-    r('POST',   '/api/tasks', createTask),
-    r('GET',    '/api/tasks/:channelId', getTask),
-    r('PATCH',  '/api/tasks/:channelId', updateTask),
-    r('DELETE', '/api/tasks/:channelId', deleteTask),
-    r('POST',   '/api/tasks/:channelId/archive', archiveTask),
-    r('POST',   '/api/tasks/:channelId/fork', forkTask),
-    r('POST',   '/api/tasks/:channelId/qdev', qdev),
+    // Channel CRUD
+    r('GET',    '/api/channels', listChannels),
+    r('POST',   '/api/channels', createChannel),
+    r('GET',    '/api/channels/:channelId', getChannel),
+    r('PATCH',  '/api/channels/:channelId', updateChannel),
+    r('DELETE', '/api/channels/:channelId', deleteChannel),
+    r('POST',   '/api/channels/:channelId/archive', archiveChannel),
+    r('POST',   '/api/channels/:channelId/fork', forkChannel),
+    r('POST',   '/api/channels/:channelId/qdev', qdev),
 
-    // Task sessions
-    r('GET',  '/api/tasks/:channelId/sessions', listTaskSessions),
+    // Channel sessions
+    r('GET',  '/api/channels/:channelId/sessions', listChannelSessions),
 
-    // Task 内操作
-    r('POST', '/api/tasks/:channelId/message', sendMessage),
-    r('POST', '/api/tasks/:channelId/clear', clearSession),
-    r('POST', '/api/tasks/:channelId/compact', compactSession),
-    r('POST', '/api/tasks/:channelId/rewind', rewindSession),
-    r('POST', '/api/tasks/:channelId/stop', stopSession),
+    // Channel 内操作
+    r('POST', '/api/channels/:channelId/message', sendMessage),
+    r('POST', '/api/channels/:channelId/clear', clearSession),
+    r('POST', '/api/channels/:channelId/compact', compactSession),
+    r('POST', '/api/channels/:channelId/rewind', rewindSession),
+    r('POST', '/api/channels/:channelId/stop', stopSession),
 
     // DevLog CRUD
     r('GET',  '/api/devlogs', listDevLogs),

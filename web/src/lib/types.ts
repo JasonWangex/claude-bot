@@ -82,8 +82,8 @@ export interface GoalDriveState {
   pendingRollback?: PendingRollback;
 }
 
-// Session / Task
-export interface TaskSummary {
+// Channel
+export interface ChannelSummary {
   channel_id: string;
   name: string;
   cwd: string;
@@ -96,10 +96,10 @@ export interface TaskSummary {
   parent_channel_id: string | null;
   worktree_branch: string | null;
   status?: 'active' | 'archived';
-  children: TaskSummary[];
+  children: ChannelSummary[];
 }
 
-export interface TaskDetail extends TaskSummary {
+export interface ChannelDetail extends ChannelSummary {
   claude_session_id: string | null;
   plan_mode: boolean;
 }
@@ -149,6 +149,6 @@ export interface KnowledgeBaseEntry {
 export interface SystemStatus {
   default_cwd: string;
   default_model: string | null;
-  active_tasks: number;
-  tasks: TaskSummary[];
+  active_channels: number;
+  channels: ChannelSummary[];
 }

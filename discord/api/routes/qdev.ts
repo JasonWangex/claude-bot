@@ -1,5 +1,5 @@
 /**
- * POST /api/tasks/:threadId/qdev — 快速创建开发任务
+ * POST /api/channels/:channelId/qdev — 快速创建开发任务
  *
  * 流程:
  * 1. 从 parentChannelId 找到 root session

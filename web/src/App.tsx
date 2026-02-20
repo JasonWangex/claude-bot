@@ -5,8 +5,8 @@ import MainLayout from '@/layouts/MainLayout';
 import Dashboard from '@/pages/Dashboard';
 import Goals from '@/pages/Goals';
 import GoalDetail from '@/pages/GoalDetail';
-import Tasks from '@/pages/Tasks';
-import TaskDetail from '@/pages/TaskDetail';
+import Channels from '@/pages/Channels';
+import ChannelDetail from '@/pages/ChannelDetail';
 import DevLogs from '@/pages/DevLogs';
 import DevLogDetail from '@/pages/DevLogDetail';
 import Ideas from '@/pages/Ideas';
@@ -32,8 +32,8 @@ export default function App() {
             <Route index element={<Dashboard />} />
             <Route path="goals" element={<Goals />} />
             <Route path="goals/:goalId" element={<GoalDetail />} />
-            <Route path="tasks" element={<Tasks />} />
-            <Route path="tasks/:channelId" element={<TaskDetail />} />
+            <Route path="channels" element={<Channels />} />
+            <Route path="channels/:channelId" element={<ChannelDetail />} />
             <Route path="sessions" element={<Sessions />} />
             <Route path="sessions/:sessionId" element={<SessionDetail />} />
             <Route path="devlogs" element={<DevLogs />} />
