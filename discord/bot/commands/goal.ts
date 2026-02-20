@@ -95,7 +95,20 @@ async function handleGoal(
       const lines = allGoals.map((goal, i) => {
         const emoji = statusEmoji[goal.status] || '\u26AA';
         let line = `**${i + 1}.** ${emoji} ${goal.name}`;
-        if (goal.progress) line += `\n   Progress: ${goal.progress}`;
+        if (goal.progress) {
+          try {
+            const p = JSON.parse(goal.progress);
+            if (typeof p.completed === 'number' && typeof p.total === 'number') {
+              line += `\n   Progress: ${p.completed}/${p.total} 完成`;
+              if (p.running > 0) line += `, ${p.running} 进行中`;
+              if (p.failed > 0) line += `, ${p.failed} 失败`;
+            } else {
+              line += `\n   Progress: ${goal.progress}`;
+            }
+          } catch {
+            line += `\n   Progress: ${goal.progress}`;
+          }
+        }
         if (goal.next) line += `\n   Next: ${goal.next}`;
         if (goal.project) line += `\n   Project: \`${goal.project}\``;
         return line;

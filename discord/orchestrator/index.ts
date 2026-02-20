@@ -128,6 +128,81 @@ export class GoalOrchestrator {
     }
   }
 
+  /** 同步 Goal 元数据（progress / next / blockedBy / status） */
+  private async syncGoalMeta(state: GoalDriveState): Promise<void> {
+    try {
+      const meta = await this.deps.goalMetaRepo.get(state.goalId);
+      if (!meta) return;
+
+      // 进度（JSON 格式存储）
+      const total = state.tasks.filter(t => t.status !== 'cancelled' && t.status !== 'skipped').length;
+      const completed = state.tasks.filter(t => t.status === 'completed' && (!t.branchName || t.merged)).length;
+      const running = state.tasks.filter(t => t.status === 'dispatched' || t.status === 'running').length;
+      const failed = state.tasks.filter(t => t.status === 'failed').length;
+      meta.progress = JSON.stringify({ completed, total, running, failed });
+
+      // 状态 + next + blockedBy
+      if (isGoalComplete(state)) {
+        meta.status = 'Completed';
+        meta.next = `审查 ${state.goalBranch} 分支并合并到 main`;
+        meta.blockedBy = null;
+      } else if (isGoalStuck(state)) {
+        meta.status = 'Blocking';
+        meta.blockedBy = this.getStuckReason(state);
+        meta.next = null;
+      } else {
+        meta.status = 'Processing';
+        meta.blockedBy = null;
+        meta.next = this.getNextStepSummary(state);
+      }
+
+      await this.deps.goalMetaRepo.save(meta);
+    } catch (err: any) {
+      logger.warn(`[Orchestrator] Failed to sync goal meta: ${err.message}`);
+    }
+  }
+
+  /** 获取 Goal 卡住的原因描述 */
+  private getStuckReason(state: GoalDriveState): string {
+    const reasons: string[] = [];
+
+    const blockedFeedback = state.tasks.filter(t => t.status === 'blocked_feedback');
+    if (blockedFeedback.length > 0) {
+      reasons.push(`${blockedFeedback.length} 个任务有待处理反馈`);
+    }
+
+    const paused = state.tasks.filter(t => t.status === 'paused');
+    if (paused.length > 0) {
+      reasons.push(`${paused.length} 个任务已暂停`);
+    }
+
+    const unmerged = state.tasks.filter(t => t.status === 'completed' && t.branchName && !t.merged);
+    if (unmerged.length > 0) {
+      reasons.push(`${unmerged.length} 个任务完成但合并失败`);
+    }
+
+    const failed = state.tasks.filter(t => t.status === 'failed');
+    if (failed.length > 0) {
+      reasons.push(`${failed.length} 个任务执行失败`);
+    }
+
+    if (reasons.length === 0) {
+      reasons.push('存在无法满足的依赖关系');
+    }
+
+    return reasons.join('; ');
+  }
+
+  /** 获取下一步描述 */
+  private getNextStepSummary(state: GoalDriveState): string {
+    const running = state.tasks.filter(t => t.status === 'dispatched' || t.status === 'running');
+    if (running.length > 0) {
+      const labels = running.map(t => this.getTaskLabel(state, t.id)).join(', ');
+      return `正在执行: ${labels}`;
+    }
+    return getProgressSummary(state);
+  }
+
   /** 启动 Goal 自动推进 */
   async startDrive(params: StartDriveParams): Promise<GoalDriveState> {
     const { goalId, goalName, goalChannelId, baseCwd: inputCwd, tasks: rawTasks, maxConcurrent = 3 } = params;
@@ -1088,7 +1163,7 @@ export class GoalOrchestrator {
     if (isGoalComplete(state)) {
       state.status = 'completed';
       await this.saveState(state);
-      await this.syncGoalMetaStatus(state.goalId, 'Completed');
+      await this.syncGoalMeta(state);
       await this.archiveBrainChannel(state);
       await this.notify(state.goalChannelId,
         `**Goal "${state.goalName}" completed!**\n` +
@@ -1099,7 +1174,7 @@ export class GoalOrchestrator {
     }
 
     if (isGoalStuck(state)) {
-      await this.syncGoalMetaStatus(state.goalId, 'Blocking');
+      await this.syncGoalMeta(state);
       await this.notify(state.goalChannelId,
         `Goal "${state.goalName}" is stuck\n` +
         `May have unresolved dependencies or failed tasks\n` +
@@ -1127,6 +1202,9 @@ export class GoalOrchestrator {
     for (const task of batch) {
       await this.dispatchTask(state, task);
     }
+
+    // dispatch 后同步 Goal 元数据，确保 next 反映新启动的任务
+    await this.syncGoalMeta(state);
   }
 
   private async dispatchTask(state: GoalDriveState, task: GoalTask): Promise<void> {
@@ -2828,9 +2906,11 @@ export class GoalOrchestrator {
       const goalMeta = await this.deps.goalMetaRepo.get(state.goalId);
       if (goalMeta) {
         goalMeta.body = updateGoalBodyWithTasks(goalMeta.body, snapshotTasks);
-        const completed = snapshotTasks.filter(t => t.status === 'completed').length;
-        const active = snapshotTasks.filter(t => t.status !== 'cancelled' && t.status !== 'skipped').length;
-        goalMeta.progress = `${completed}/${active} 子任务完成`;
+        const total = snapshotTasks.filter(t => t.status !== 'cancelled' && t.status !== 'skipped').length;
+        const completed = snapshotTasks.filter(t => t.status === 'completed' && (!t.branchName || t.merged)).length;
+        const running = snapshotTasks.filter(t => t.status === 'dispatched' || t.status === 'running').length;
+        const failed = snapshotTasks.filter(t => t.status === 'failed').length;
+        goalMeta.progress = JSON.stringify({ completed, total, running, failed });
         await this.deps.goalMetaRepo.save(goalMeta);
       }
 

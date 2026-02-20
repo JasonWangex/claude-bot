@@ -76,7 +76,6 @@ export interface UpdateGoalData {
   type?: GoalType;
   project?: string;
   completion?: string;
-  progress?: string;
   next?: string;
   blocked_by?: string;
   body?: string;

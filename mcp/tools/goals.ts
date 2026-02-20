@@ -30,7 +30,6 @@ export function registerGoalTools(server: McpServer) {
       type: z.string().optional().describe('探索型 or 交付型'),
       completion: z.string().optional().describe('Completion criteria'),
       body: z.string().optional().describe('Body content (Markdown)'),
-      progress: z.string().optional().describe('Progress note (update)'),
       next: z.string().optional().describe('Next step (update)'),
       blocked_by: z.string().optional().describe('Blocker description (update)'),
       // drive params

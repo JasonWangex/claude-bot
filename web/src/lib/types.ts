@@ -10,7 +10,7 @@ export interface Goal {
   project: string | null;
   date: string | null;
   completion: string | null;
-  progress: string | null;
+  progress: { completed: number; total: number; running: number; failed: number } | null;
   next: string | null;
   blocked_by: string | null;
   body: string | null;

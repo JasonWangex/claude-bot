@@ -37,7 +37,6 @@ interface GoalEditFormValues {
   type?: GoalType;
   project?: string;
   completion?: string;
-  progress?: string;
   next?: string;
   blocked_by?: string;
   body?: string;
@@ -69,7 +68,6 @@ export default function GoalDetail() {
       type: goal.type ?? undefined,
       project: goal.project ?? '',
       completion: goal.completion ?? '',
-      progress: goal.progress ?? '',
       next: goal.next ?? '',
       blocked_by: goal.blocked_by ?? '',
       body: goal.body ?? '',
@@ -88,7 +86,6 @@ export default function GoalDetail() {
         type: values.type,
         project: values.project || undefined,
         completion: values.completion || undefined,
-        progress: values.progress || undefined,
         next: values.next || undefined,
         blocked_by: values.blocked_by || undefined,
         body: values.body || undefined,
@@ -183,8 +180,9 @@ export default function GoalDetail() {
         {goal.type && <Tag>{goal.type}</Tag>}
         {goal.project && <Tag>{goal.project}</Tag>}
         {goal.progress && (() => {
-          const m = goal.progress!.match(/(\d+)\s*\/\s*(\d+)/);
-          const text = (goal.status === 'Completed' || goal.status === 'Merged') && m ? `${m[2]}/${m[2]} 子任务完成` : goal.progress;
+          const p = goal.progress;
+          const isDone = goal.status === 'Completed' || goal.status === 'Merged';
+          const text = isDone ? `${p.total}/${p.total} 完成` : `${p.completed}/${p.total} 完成`;
           return <Text type="secondary">{text}</Text>;
         })()}
       </Space>
@@ -239,9 +237,7 @@ export default function GoalDetail() {
           <Form.Item name="completion" label="完成标准">
             <Input />
           </Form.Item>
-          <Form.Item name="progress" label="进度">
-            <Input placeholder="如: 3/5" />
-          </Form.Item>
+          {/* progress 由调度器自动计算，不可手动编辑 */}
           <Row gutter={16}>
             <Col span={12}>
               <Form.Item name="next" label="下一步">
