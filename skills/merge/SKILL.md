@@ -4,7 +4,7 @@ description: >
   Merge worktree branch to main and cleanup. Checks for uncommitted code,
   merges branch, removes worktree, deletes Discord thread.
   Auto-records Dev Log after successful merge.
-disable-model-invocation: true
+  Triggers: "merge <branch>", "/merge <branch>".
 ---
 
 # Merge & Cleanup
@@ -90,9 +90,9 @@ echo "- Branch: deleted"
 
 After script succeeds, find and delete the task via MCP:
 
-1. `bot_tasks(action="list")` to list all tasks
-2. Find the task whose `branch` matches TARGET_BRANCH (note: task's cwd may have been changed to main path, prefer matching by branch)
-3. `bot_tasks(action="delete", task_id="<channel_id>", cascade=true)` to delete
+1. `bot_channels(action="list")` to list all channels
+2. Find the channel whose `branch` matches TARGET_BRANCH (note: channel's cwd may have been changed to main path, prefer matching by branch)
+3. `bot_channels(action="delete", channel_id="<channel_id>", cascade=true)` to delete
 
 If no matching task found, skip this step.
 

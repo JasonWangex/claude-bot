@@ -111,6 +111,9 @@ do_deploy() {
   echo "==> Installing skills..."
   bash scripts/install-skills.sh
 
+  echo "==> Building MCP server..."
+  pnpm exec tsc --project tsconfig.json
+
   echo "==> Building web UI..."
   pnpm --dir web build
 
