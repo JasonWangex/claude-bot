@@ -1,5 +1,5 @@
 /**
- * POST /api/tasks/:threadId/message — 发消息到 Thread
+ * POST /api/channels/:channelId/message — 发消息到 Channel
  *
  * 流程:
  * 1. 通过 Discord 发送用户消息到 Thread（可见）

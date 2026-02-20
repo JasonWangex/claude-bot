@@ -64,9 +64,9 @@ export interface HealthData {
   api_port: number;
 }
 
-// ========== Task (Channel) ==========
+// ========== Channel ==========
 
-export interface TaskSummary {
+export interface ChannelSummary {
   channel_id: string;
   name: string;
   cwd: string;
@@ -79,27 +79,27 @@ export interface TaskSummary {
   parent_channel_id: string | null;
   worktree_branch: string | null;
   status: 'active' | 'archived';
-  children: TaskSummary[];
+  children: ChannelSummary[];
 }
 
-export interface TaskDetail extends TaskSummary {
+export interface ChannelDetail extends ChannelSummary {
   claude_session_id: string | null;
   plan_mode: boolean;
 }
 
-export interface CreateTaskRequest {
+export interface CreateChannelRequest {
   name: string;
   cwd?: string;
   category?: string;
 }
 
-export interface CreateTaskResponse {
+export interface CreateChannelResponse {
   channel_id: string;
   name: string;
   cwd: string;
 }
 
-export interface UpdateTaskRequest {
+export interface UpdateChannelRequest {
   name?: string;
   model?: string | null;
   cwd?: string;
@@ -143,15 +143,15 @@ export interface SetDefaultModelRequest {
   model: string;
 }
 
-// ========== Fork Task ==========
+// ========== Fork Channel ==========
 
-export interface ForkTaskRequest {
+export interface ForkChannelRequest {
   branch_name: string;
   category_id: string;
   thread_title?: string;
 }
 
-export interface ForkTaskResponse {
+export interface ForkChannelResponse {
   channel_id: string;
   channel_name: string;
   branch_name: string;
@@ -190,8 +190,8 @@ export interface UpdateIdeaRequest {
 export interface StatusResponse {
   default_cwd: string;
   default_model: string | null;
-  active_tasks: number;
-  tasks: TaskSummary[];
+  active_channels: number;
+  channels: ChannelSummary[];
 }
 
 // ========== Goal CRUD ==========

@@ -25,6 +25,13 @@ interface SessionListRow {
   cwd: string | null;
   git_branch: string | null;
   project_path: string | null;
+  // usage 字段
+  tokens_in: number;
+  tokens_out: number;
+  cache_read_in: number;
+  cache_write_in: number;
+  cost_usd: number;
+  turn_count: number;
   // JOIN 字段
   channel_name: string | null;
   task_description: string | null;
@@ -64,55 +71,67 @@ export const listSessions: RouteHandler = async (req, res, _params, deps) => {
     ? 'WHERE ' + conditions.join(' AND ')
     : '';
 
-  // COUNT 查询
-  const countSql = `SELECT COUNT(*) as total FROM claude_sessions cs ${whereClause}`;
-  const countRow = deps.db.prepare(countSql).get(...params) as { total: number };
-  const total = countRow.total;
+  try {
+    // COUNT 查询
+    const countSql = `SELECT COUNT(*) as total FROM claude_sessions cs ${whereClause}`;
+    const countRow = deps.db.prepare(countSql).get(...params) as { total: number };
+    const total = countRow.total;
 
-  // 数据查询（JOIN task/goal/channel）
-  const dataSql = `
-    SELECT cs.claude_session_id, cs.channel_id, cs.model, cs.plan_mode,
-           cs.status, cs.purpose, cs.title, cs.created_at, cs.closed_at,
-           cs.last_activity_at, cs.task_id, cs.goal_id, cs.cwd, cs.git_branch, cs.project_path,
-           ch.name AS channel_name,
-           t.description AS task_description,
-           t.pipeline_phase,
-           g.name AS goal_name,
-           g.project AS goal_project
-    FROM claude_sessions cs
-    LEFT JOIN channels ch ON cs.channel_id = ch.id
-    LEFT JOIN tasks t ON cs.task_id = t.id
-    LEFT JOIN goals g ON cs.goal_id = g.id
-    ${whereClause}
-    ORDER BY COALESCE(cs.last_activity_at, cs.created_at) DESC
-    LIMIT ? OFFSET ?
-  `;
+    // 数据查询（JOIN task/goal/channel）
+    const dataSql = `
+      SELECT cs.claude_session_id, cs.channel_id, cs.model, cs.plan_mode,
+             cs.status, cs.purpose, cs.title, cs.created_at, cs.closed_at,
+             cs.last_activity_at, cs.task_id, cs.goal_id, cs.cwd, cs.git_branch, cs.project_path,
+             cs.tokens_in, cs.tokens_out, cs.cache_read_in, cs.cache_write_in,
+             cs.cost_usd, cs.turn_count,
+             ch.name AS channel_name,
+             t.description AS task_description,
+             t.pipeline_phase,
+             g.name AS goal_name,
+             g.project AS goal_project
+      FROM claude_sessions cs
+      LEFT JOIN channels ch ON cs.channel_id = ch.id
+      LEFT JOIN tasks t ON cs.task_id = t.id
+      LEFT JOIN goals g ON cs.goal_id = g.id
+      ${whereClause}
+      ORDER BY COALESCE(cs.last_activity_at, cs.created_at) DESC
+      LIMIT ? OFFSET ?
+    `;
 
-  const rows = deps.db.prepare(dataSql).all(...params, limit, offset) as SessionListRow[];
+    const rows = deps.db.prepare(dataSql).all(...params, limit, offset) as SessionListRow[];
 
-  const data = rows.map(r => ({
-    claude_session_id: r.claude_session_id,
-    channel_id: r.channel_id,
-    channel_name: r.channel_name,
-    model: r.model,
-    status: r.status,
-    purpose: r.purpose,
-    title: r.title,
-    created_at: r.created_at,
-    closed_at: r.closed_at,
-    last_activity_at: r.last_activity_at,
-    task_id: r.task_id,
-    goal_id: r.goal_id,
-    task_description: r.task_description,
-    pipeline_phase: r.pipeline_phase,
-    goal_name: r.goal_name,
-    goal_project: r.goal_project,
-    cwd: r.cwd,
-    git_branch: r.git_branch,
-    project_path: r.project_path,
-  }));
+    const data = rows.map(r => ({
+      claude_session_id: r.claude_session_id,
+      channel_id: r.channel_id,
+      channel_name: r.channel_name,
+      model: r.model,
+      status: r.status,
+      purpose: r.purpose,
+      title: r.title,
+      created_at: r.created_at,
+      closed_at: r.closed_at,
+      last_activity_at: r.last_activity_at,
+      task_id: r.task_id,
+      goal_id: r.goal_id,
+      task_description: r.task_description,
+      pipeline_phase: r.pipeline_phase,
+      goal_name: r.goal_name,
+      goal_project: r.goal_project,
+      cwd: r.cwd,
+      git_branch: r.git_branch,
+      project_path: r.project_path,
+      tokens_in: r.tokens_in,
+      tokens_out: r.tokens_out,
+      cache_read_in: r.cache_read_in,
+      cache_write_in: r.cache_write_in,
+      cost_usd: r.cost_usd,
+      turn_count: r.turn_count,
+    }));
 
-  sendJson(res, 200, { ok: true, data, total, limit, offset });
+    sendJson(res, 200, { ok: true, data, total, limit, offset });
+  } catch (error: any) {
+    sendJson(res, 500, { ok: false, error: `Failed to list sessions: ${error.message}` });
+  }
 };
 
 // GET /api/sessions/:id/meta
@@ -126,50 +145,62 @@ export const getSessionMeta: RouteHandler = async (_req, res, params, deps) => {
     return;
   }
 
-  const sql = `
-    SELECT cs.claude_session_id, cs.channel_id, cs.model, cs.plan_mode,
-           cs.status, cs.purpose, cs.title, cs.created_at, cs.closed_at,
-           cs.last_activity_at, cs.task_id, cs.goal_id, cs.cwd, cs.git_branch, cs.project_path,
-           ch.name AS channel_name,
-           t.description AS task_description,
-           t.pipeline_phase,
-           g.name AS goal_name,
-           g.project AS goal_project
-    FROM claude_sessions cs
-    LEFT JOIN channels ch ON cs.channel_id = ch.id
-    LEFT JOIN tasks t ON cs.task_id = t.id
-    LEFT JOIN goals g ON cs.goal_id = g.id
-    WHERE cs.claude_session_id = ?
-  `;
+  try {
+    const sql = `
+      SELECT cs.claude_session_id, cs.channel_id, cs.model, cs.plan_mode,
+             cs.status, cs.purpose, cs.title, cs.created_at, cs.closed_at,
+             cs.last_activity_at, cs.task_id, cs.goal_id, cs.cwd, cs.git_branch, cs.project_path,
+             cs.tokens_in, cs.tokens_out, cs.cache_read_in, cs.cache_write_in,
+             cs.cost_usd, cs.turn_count,
+             ch.name AS channel_name,
+             t.description AS task_description,
+             t.pipeline_phase,
+             g.name AS goal_name,
+             g.project AS goal_project
+      FROM claude_sessions cs
+      LEFT JOIN channels ch ON cs.channel_id = ch.id
+      LEFT JOIN tasks t ON cs.task_id = t.id
+      LEFT JOIN goals g ON cs.goal_id = g.id
+      WHERE cs.claude_session_id = ?
+    `;
 
-  const row = deps.db.prepare(sql).get(sessionId) as SessionListRow | undefined;
-  if (!row) {
-    sendJson(res, 404, { ok: false, error: 'Session not found' });
-    return;
+    const row = deps.db.prepare(sql).get(sessionId) as SessionListRow | undefined;
+    if (!row) {
+      sendJson(res, 404, { ok: false, error: 'Session not found' });
+      return;
+    }
+
+    sendJson(res, 200, {
+      ok: true,
+      data: {
+        claude_session_id: row.claude_session_id,
+        channel_id: row.channel_id,
+        channel_name: row.channel_name,
+        model: row.model,
+        status: row.status,
+        purpose: row.purpose,
+        title: row.title,
+        created_at: row.created_at,
+        closed_at: row.closed_at,
+        last_activity_at: row.last_activity_at,
+        task_id: row.task_id,
+        goal_id: row.goal_id,
+        task_description: row.task_description,
+        pipeline_phase: row.pipeline_phase,
+        goal_name: row.goal_name,
+        goal_project: row.goal_project,
+        cwd: row.cwd,
+        git_branch: row.git_branch,
+        project_path: row.project_path,
+        tokens_in: row.tokens_in,
+        tokens_out: row.tokens_out,
+        cache_read_in: row.cache_read_in,
+        cache_write_in: row.cache_write_in,
+        cost_usd: row.cost_usd,
+        turn_count: row.turn_count,
+      },
+    });
+  } catch (error: any) {
+    sendJson(res, 500, { ok: false, error: `Failed to get session meta: ${error.message}` });
   }
-
-  sendJson(res, 200, {
-    ok: true,
-    data: {
-      claude_session_id: row.claude_session_id,
-      channel_id: row.channel_id,
-      channel_name: row.channel_name,
-      model: row.model,
-      status: row.status,
-      purpose: row.purpose,
-      title: row.title,
-      created_at: row.created_at,
-      closed_at: row.closed_at,
-      last_activity_at: row.last_activity_at,
-      task_id: row.task_id,
-      goal_id: row.goal_id,
-      task_description: row.task_description,
-      pipeline_phase: row.pipeline_phase,
-      goal_name: row.goal_name,
-      goal_project: row.goal_project,
-      cwd: row.cwd,
-      git_branch: row.git_branch,
-      project_path: row.project_path,
-    },
-  });
 };

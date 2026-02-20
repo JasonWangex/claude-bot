@@ -22,6 +22,12 @@ export interface SessionSummary {
   cwd: string | null;
   git_branch: string | null;
   project_path: string | null;
+  tokens_in: number;
+  tokens_out: number;
+  cache_read_in: number;
+  cache_write_in: number;
+  cost_usd: number;
+  turn_count: number;
 }
 
 // ========== JSONL Event Types (matching Claude Code format) ==========
@@ -89,9 +95,9 @@ export interface SessionEvent {
   };
 }
 
-export function useTaskSessions(channelId: string | null) {
+export function useChannelSessions(channelId: string | null) {
   return useSWR<SessionSummary[]>(
-    channelId ? `/api/tasks/${channelId}/sessions` : null,
+    channelId ? `/api/channels/${channelId}/sessions` : null,
     apiFetch,
   );
 }

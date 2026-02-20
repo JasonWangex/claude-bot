@@ -8,6 +8,7 @@ import { fetchSessionConversation } from '@/lib/hooks/use-sessions';
 import type { SessionSummary, SessionEvent } from '@/lib/hooks/use-sessions';
 import { apiFetch } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
+import { formatK } from '@/pages/Sessions';
 
 const { Title, Text } = Typography;
 
@@ -99,6 +100,12 @@ export default function SessionDetail() {
     cwd: null,
     git_branch: null,
     project_path: null,
+    tokens_in: 0,
+    tokens_out: 0,
+    cache_read_in: 0,
+    cache_write_in: 0,
+    cost_usd: 0,
+    turn_count: 0,
   };
 
   const conversationMap = new Map<string, SessionEvent[]>();
@@ -133,8 +140,8 @@ export default function SessionDetail() {
               </Descriptions.Item>
             )}
             {session.channel_name && (
-              <Descriptions.Item label="Task">
-                <Link to={`/tasks/${session.channel_id}`}>{session.channel_name}</Link>
+              <Descriptions.Item label="Channel">
+                <Link to={`/channels/${session.channel_id}`}>{session.channel_name}</Link>
                 {session.pipeline_phase && (
                   <Tag style={{ marginLeft: 8 }}>{session.pipeline_phase}</Tag>
                 )}
@@ -160,6 +167,28 @@ export default function SessionDetail() {
               <Descriptions.Item label="Purpose">
                 {session.purpose}
               </Descriptions.Item>
+            )}
+            {(session.cost_usd > 0 || session.tokens_in > 0) && (
+              <>
+                <Descriptions.Item label="Cost">
+                  ${session.cost_usd.toFixed(2)}
+                </Descriptions.Item>
+                <Descriptions.Item label="Tokens In">
+                  {formatK(session.tokens_in)}
+                </Descriptions.Item>
+                <Descriptions.Item label="Tokens Out">
+                  {formatK(session.tokens_out)}
+                </Descriptions.Item>
+                <Descriptions.Item label="Cache Read">
+                  {formatK(session.cache_read_in)}
+                </Descriptions.Item>
+                <Descriptions.Item label="Cache Write">
+                  {formatK(session.cache_write_in)}
+                </Descriptions.Item>
+                <Descriptions.Item label="Turns">
+                  {session.turn_count}
+                </Descriptions.Item>
+              </>
             )}
           </Descriptions>
         </Card>

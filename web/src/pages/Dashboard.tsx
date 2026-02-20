@@ -8,7 +8,7 @@ import {
 import { Link } from 'react-router';
 import { StatsCard } from '@/components/StatsCard';
 import { useGoals } from '@/lib/hooks/use-goals';
-import { useTasks } from '@/lib/hooks/use-tasks';
+import { useChannels } from '@/lib/hooks/use-channels';
 import { useDevLogs } from '@/lib/hooks/use-devlogs';
 import { useIdeas } from '@/lib/hooks/use-ideas';
 import { formatDateTime } from '@/lib/format';
@@ -17,12 +17,12 @@ const { Title, Text } = Typography;
 
 export default function Dashboard() {
   const { data: goals } = useGoals();
-  const { data: tasks } = useTasks();
+  const { data: channels } = useChannels();
   const { data: devlogs } = useDevLogs();
   const { data: ideas } = useIdeas();
 
   const activeGoals = goals?.filter(g => g.status === 'Processing' || g.status === 'Collecting' || g.status === 'Planned' || g.status === 'Blocking') ?? [];
-  const totalTasks = tasks?.length ?? 0;
+  const totalChannels = channels?.length ?? 0;
   const activeIdeas = ideas?.filter(i => i.status !== 'Done' && i.status !== 'Dropped') ?? [];
 
   return (
@@ -35,7 +35,7 @@ export default function Dashboard() {
           <StatsCard title="Active Goals" value={activeGoals.length} icon={<AimOutlined />} description={`/ ${goals?.length ?? 0}`} />
         </Col>
         <Col xs={12} lg={6}>
-          <StatsCard title="Tasks" value={totalTasks} icon={<UnorderedListOutlined />} description="活跃" />
+          <StatsCard title="Channels" value={totalChannels} icon={<UnorderedListOutlined />} description="活跃" />
         </Col>
         <Col xs={12} lg={6}>
           <StatsCard title="DevLogs" value={devlogs?.length ?? 0} icon={<FileTextOutlined />} />

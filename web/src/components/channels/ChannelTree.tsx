@@ -3,19 +3,19 @@ import { Typography, Space, Empty, Tag } from 'antd';
 import { RightOutlined, DownOutlined, BranchesOutlined, ClockCircleOutlined } from '@ant-design/icons';
 import { Link } from 'react-router';
 import { formatDistanceToNow } from '@/lib/format';
-import type { TaskSummary } from '@/lib/types';
+import type { ChannelSummary } from '@/lib/types';
 
 const { Text } = Typography;
 
-function TaskTreeNode({ task, depth = 0 }: { task: TaskSummary; depth?: number }) {
+function ChannelTreeNode({ channel, depth = 0 }: { channel: ChannelSummary; depth?: number }) {
   const [expanded, setExpanded] = useState(true);
-  const hasChildren = (task.children?.length ?? 0) > 0;
-  const isArchived = task.status === 'archived';
+  const hasChildren = (channel.children?.length ?? 0) > 0;
+  const isArchived = channel.status === 'archived';
 
   return (
     <div>
       <div
-        className="task-tree-node"
+        className="channel-tree-node"
         style={{
           display: 'flex',
           alignItems: 'center',
@@ -41,38 +41,38 @@ function TaskTreeNode({ task, depth = 0 }: { task: TaskSummary; depth?: number }
           <span style={{ width: 14 }} />
         )}
 
-        <Link to={`/tasks/${task.channel_id}`} style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+        <Link to={`/channels/${channel.channel_id}`} style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <Text strong style={{ fontSize: 14, color: isArchived ? '#999' : undefined }} ellipsis>{task.name}</Text>
+              <Text strong style={{ fontSize: 14, color: isArchived ? '#999' : undefined }} ellipsis>{channel.name}</Text>
               {isArchived && <Tag color="default">已归档</Tag>}
-              {!isArchived && task.has_session && (
+              {!isArchived && channel.has_session && (
                 <span style={{ width: 8, height: 8, borderRadius: '50%', background: '#52c41a', flexShrink: 0 }} title="有活跃 Session" />
               )}
             </div>
             <Space size={12} style={{ fontSize: 12, color: '#999', marginTop: 2 }}>
-              {task.worktree_branch && (
-                <span><BranchesOutlined /> {task.worktree_branch}</span>
+              {channel.worktree_branch && (
+                <span><BranchesOutlined /> {channel.worktree_branch}</span>
               )}
-              {task.model && <span>{task.model}</span>}
-              {task.last_message_at && (
-                <span><ClockCircleOutlined /> {formatDistanceToNow(task.last_message_at)}</span>
+              {channel.model && <span>{channel.model}</span>}
+              {channel.last_message_at && (
+                <span><ClockCircleOutlined /> {formatDistanceToNow(channel.last_message_at)}</span>
               )}
             </Space>
           </div>
         </Link>
 
-        {task.last_message && (
+        {channel.last_message && (
           <Text type="secondary" style={{ fontSize: 12, maxWidth: 200, flexShrink: 0 }} ellipsis>
-            {task.last_message.slice(0, 60)}
+            {channel.last_message.slice(0, 60)}
           </Text>
         )}
       </div>
 
       {expanded && hasChildren && (
         <div style={{ borderLeft: '1px solid #f0f0f0', marginLeft: 20 + depth * 24 }}>
-          {task.children.map(child => (
-            <TaskTreeNode key={child.channel_id} task={child} depth={depth + 1} />
+          {channel.children.map(child => (
+            <ChannelTreeNode key={child.channel_id} channel={child} depth={depth + 1} />
           ))}
         </div>
       )}
@@ -80,15 +80,15 @@ function TaskTreeNode({ task, depth = 0 }: { task: TaskSummary; depth?: number }
   );
 }
 
-export function TaskTree({ tasks }: { tasks: TaskSummary[] }) {
-  if (tasks.length === 0) {
-    return <Empty description="暂无 Task" />;
+export function ChannelTree({ channels }: { channels: ChannelSummary[] }) {
+  if (channels.length === 0) {
+    return <Empty description="暂无 Channel" />;
   }
 
   return (
     <div>
-      {tasks.map(task => (
-        <TaskTreeNode key={task.channel_id} task={task} />
+      {channels.map(channel => (
+        <ChannelTreeNode key={channel.channel_id} channel={channel} />
       ))}
     </div>
   );

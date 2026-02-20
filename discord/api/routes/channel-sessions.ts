@@ -1,14 +1,14 @@
 /**
- * Task Sessions API
+ * Channel Sessions API
  *
- * GET /api/tasks/:channelId/sessions — 列出指定 task 的所有 claude sessions
+ * GET /api/channels/:channelId/sessions — 列出指定 channel 的所有 claude sessions
  */
 
 import type { RouteHandler } from '../types.js';
 import { sendJson, requireAuth } from '../middleware.js';
 import { ClaudeSessionRepository } from '../../db/repo/claude-session-repo.js';
 
-export const listTaskSessions: RouteHandler = async (_req, res, params, deps) => {
+export const listChannelSessions: RouteHandler = async (_req, res, params, deps) => {
   const guildId = requireAuth(res);
   if (!guildId) return;
 
@@ -27,9 +27,16 @@ export const listTaskSessions: RouteHandler = async (_req, res, params, deps) =>
     model: s.model || null,
     status: s.status,
     purpose: s.purpose || null,
+    title: s.title || null,
     created_at: s.createdAt,
     closed_at: s.closedAt || null,
     last_activity_at: s.lastActivityAt || null,
+    tokens_in: s.tokensIn || 0,
+    tokens_out: s.tokensOut || 0,
+    cache_read_in: s.cacheReadIn || 0,
+    cache_write_in: s.cacheWriteIn || 0,
+    cost_usd: s.costUsd || 0,
+    turn_count: s.turnCount || 0,
   }));
 
   sendJson(res, 200, { ok: true, data });
