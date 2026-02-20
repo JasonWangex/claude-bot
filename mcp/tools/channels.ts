@@ -1,33 +1,33 @@
 /**
- * MCP 工具：Task 管理
+ * MCP 工具：Channel 管理（原 Task 管理，实际操作的是 Discord 频道）
  */
 
 import { z } from 'zod/v4';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { apiGet, apiPost, apiDelete } from '../api-client.js';
 
-export function registerTaskTools(server: McpServer) {
-  server.registerTool('bot_tasks', {
-    title: 'Tasks',
-    description: 'Task management. action: list (all tasks), get (by task_id), delete (by task_id, cascade optional).',
+export function registerChannelTools(server: McpServer) {
+  server.registerTool('bot_channels', {
+    title: 'Channels',
+    description: 'Channel management. action: list (all channels), get (by channel_id), delete (by channel_id, cascade optional).',
     inputSchema: {
       action: z.enum(['list', 'get', 'delete']).default('list').describe('Operation type'),
-      task_id: z.string().optional().describe('Task ID (get/delete)'),
-      cascade: z.boolean().optional().describe('Delete child tasks too (delete)'),
+      channel_id: z.string().optional().describe('Channel ID (get/delete)'),
+      cascade: z.boolean().optional().describe('Delete child channels too (delete)'),
     },
-  }, async ({ action, task_id, cascade }) => {
+  }, async ({ action, channel_id, cascade }) => {
     switch (action) {
       case 'list': {
         const r = await apiGet('/api/tasks');
         return { content: [{ type: 'text', text: JSON.stringify(r.data ?? r, null, 2) }] };
       }
       case 'get': {
-        const r = await apiGet(`/api/tasks/${task_id}`);
+        const r = await apiGet(`/api/tasks/${channel_id}`);
         return { content: [{ type: 'text', text: JSON.stringify(r.data ?? r, null, 2) }] };
       }
       case 'delete': {
         const qs = cascade ? '?cascade=true' : '';
-        const r = await apiDelete(`/api/tasks/${task_id}${qs}`);
+        const r = await apiDelete(`/api/tasks/${channel_id}${qs}`);
         return { content: [{ type: 'text', text: JSON.stringify(r.data ?? r, null, 2) }] };
       }
     }
@@ -35,13 +35,13 @@ export function registerTaskTools(server: McpServer) {
 
   server.registerTool('bot_send_message', {
     title: 'Send Message',
-    description: 'Send message to a task thread, triggering Claude to process it.',
+    description: 'Send message to a channel thread, triggering Claude to process it.',
     inputSchema: {
-      task_id: z.string().describe('Task ID'),
+      channel_id: z.string().describe('Channel ID'),
       text: z.string().describe('Message text'),
     },
-  }, async ({ task_id, text }) => {
-    const r = await apiPost(`/api/tasks/${task_id}/message`, { text });
+  }, async ({ channel_id, text }) => {
+    const r = await apiPost(`/api/tasks/${channel_id}/message`, { text });
     return { content: [{ type: 'text', text: JSON.stringify(r.data ?? r, null, 2) }] };
   });
 
@@ -49,11 +49,11 @@ export function registerTaskTools(server: McpServer) {
     title: 'Quick Dev',
     description: 'Quick-create dev sub-task: auto branch, worktree, Discord channel, trigger Claude.',
     inputSchema: {
-      task_id: z.string().describe('Task ID to create sub-task from'),
+      channel_id: z.string().describe('Parent channel ID to create sub-task from'),
       description: z.string().describe('Task description'),
     },
-  }, async ({ task_id, description }) => {
-    const r = await apiPost(`/api/tasks/${task_id}/qdev`, { description });
+  }, async ({ channel_id, description }) => {
+    const r = await apiPost(`/api/tasks/${channel_id}/qdev`, { description });
     return { content: [{ type: 'text', text: JSON.stringify(r.data ?? r, null, 2) }] };
   });
 }
