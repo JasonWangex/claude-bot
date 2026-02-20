@@ -18,16 +18,16 @@ export function registerChannelTools(server: McpServer) {
   }, async ({ action, channel_id, cascade }) => {
     switch (action) {
       case 'list': {
-        const r = await apiGet('/api/tasks');
+        const r = await apiGet('/api/channels');
         return { content: [{ type: 'text', text: JSON.stringify(r.data ?? r, null, 2) }] };
       }
       case 'get': {
-        const r = await apiGet(`/api/tasks/${channel_id}`);
+        const r = await apiGet(`/api/channels/${channel_id}`);
         return { content: [{ type: 'text', text: JSON.stringify(r.data ?? r, null, 2) }] };
       }
       case 'delete': {
         const qs = cascade ? '?cascade=true' : '';
-        const r = await apiDelete(`/api/tasks/${channel_id}${qs}`);
+        const r = await apiDelete(`/api/channels/${channel_id}${qs}`);
         return { content: [{ type: 'text', text: JSON.stringify(r.data ?? r, null, 2) }] };
       }
     }
@@ -41,7 +41,7 @@ export function registerChannelTools(server: McpServer) {
       text: z.string().describe('Message text'),
     },
   }, async ({ channel_id, text }) => {
-    const r = await apiPost(`/api/tasks/${channel_id}/message`, { text });
+    const r = await apiPost(`/api/channels/${channel_id}/message`, { text });
     return { content: [{ type: 'text', text: JSON.stringify(r.data ?? r, null, 2) }] };
   });
 
@@ -54,7 +54,7 @@ export function registerChannelTools(server: McpServer) {
       model: z.string().optional().describe('Claude model to use (e.g. claude-sonnet-4-6, claude-opus-4-6)'),
     },
   }, async ({ channel_id, description, model }) => {
-    const r = await apiPost(`/api/tasks/${channel_id}/qdev`, { description, model });
+    const r = await apiPost(`/api/channels/${channel_id}/qdev`, { description, model });
     return { content: [{ type: 'text', text: JSON.stringify(r.data ?? r, null, 2) }] };
   });
 }
