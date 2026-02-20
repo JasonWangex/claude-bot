@@ -7,9 +7,9 @@
  */
 
 import type Database from 'better-sqlite3';
-import { createReadStream, readdirSync, statSync } from 'fs';
+import { createReadStream, readdirSync, statSync, openSync, readSync, closeSync } from 'fs';
 import { createInterface } from 'readline';
-import { join } from 'path';
+import { join, dirname } from 'path';
 import type { PricingService } from './pricing-service.js';
 import { logger } from '../utils/logger.js';
 
@@ -144,6 +144,9 @@ export class UsageReconciler {
       logger.info(`[UsageReconciler] ${sessions.length} sessions in last 3 days`);
     }
 
+    // 预建旧格式 agent 文件索引：sessionId -> [filePaths]
+    const oldAgentIndex = this.buildOldAgentIndex();
+
     // 逐个全量重算
     for (const { claude_session_id: sessionId } of sessions) {
       result.sessionsScanned++;
@@ -152,6 +155,17 @@ export class UsageReconciler {
       if (!filePath) continue;
 
       const totals = await this.fullScan(filePath);
+
+      // 聚合子 agent 用量（新格式：<SESSION_ID>/subagents/ 目录）
+      const subagentsDir = join(dirname(filePath), sessionId, 'subagents');
+      const agentTotals = await this.scanSubagentsDir(subagentsDir);
+      mergeTotals(totals, agentTotals);
+
+      // 聚合子 agent 用量（旧格式：agent-*.jsonl 通过索引关联）
+      for (const agentFile of oldAgentIndex.get(sessionId) ?? []) {
+        const t = await this.fullScan(agentFile);
+        mergeTotals(totals, t);
+      }
 
       let fileSize: number;
       try {
@@ -272,5 +286,96 @@ export class UsageReconciler {
       }
     } catch { /* ignore */ }
     return null;
+  }
+
+  /**
+   * 扫描所有项目目录，建立旧格式 agent 文件的 sessionId 索引
+   * 旧格式：<PROJECT>/agent-*.jsonl，首行有 sessionId 字段
+   */
+  private buildOldAgentIndex(): Map<string, string[]> {
+    const index = new Map<string, string[]>();
+    try {
+      for (const projectEntry of readdirSync(this.claudeProjectsDir)) {
+        const projectDir = join(this.claudeProjectsDir, projectEntry);
+        try {
+          for (const entry of readdirSync(projectDir)) {
+            if (!entry.startsWith('agent-') || !entry.endsWith('.jsonl')) continue;
+            const filePath = join(projectDir, entry);
+            const sessionId = readFirstLineSessionId(filePath);
+            if (sessionId) {
+              if (!index.has(sessionId)) index.set(sessionId, []);
+              index.get(sessionId)!.push(filePath);
+            }
+          }
+        } catch { continue; }
+      }
+    } catch { /* ignore */ }
+    return index;
+  }
+
+  /**
+   * 扫描 subagents 目录下所有 agent-*.jsonl 文件，返回聚合用量
+   * 目录不存在时静默返回空统计
+   */
+  private async scanSubagentsDir(subagentsDir: string): Promise<UsageTotals> {
+    const totals: UsageTotals = {
+      tokensIn: 0, tokensOut: 0,
+      cacheReadIn: 0, cacheWriteIn: 0,
+      costUsd: 0, turnCount: 0,
+      byModel: {},
+    };
+
+    try {
+      const entries = readdirSync(subagentsDir);
+      for (const entry of entries) {
+        if (!entry.endsWith('.jsonl') || !entry.startsWith('agent-')) continue;
+        try {
+          const agentTotals = await this.fullScan(join(subagentsDir, entry));
+          mergeTotals(totals, agentTotals);
+        } catch { /* 单个 agent 文件失败不影响整体 */ }
+      }
+    } catch { /* subagents 目录不存在，正常情况 */ }
+
+    return totals;
+  }
+}
+
+/** 读取 agent 文件首行的 sessionId 字段（读前 512 字节） */
+function readFirstLineSessionId(filePath: string): string | null {
+  let fd: number | null = null;
+  try {
+    fd = openSync(filePath, 'r');
+    const buf = Buffer.alloc(512);
+    const bytesRead = readSync(fd, buf, 0, 512, 0);
+    const text = buf.toString('utf8', 0, bytesRead);
+    const newline = text.indexOf('\n');
+    const line = newline === -1 ? text : text.slice(0, newline);
+    const event = JSON.parse(line);
+    return typeof event.sessionId === 'string' ? event.sessionId : null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) try { closeSync(fd); } catch { /* ignore */ }
+  }
+}
+
+/** 将 src 的用量累加到 dst 中（in-place） */
+function mergeTotals(dst: UsageTotals, src: UsageTotals): void {
+  dst.tokensIn += src.tokensIn;
+  dst.tokensOut += src.tokensOut;
+  dst.cacheReadIn += src.cacheReadIn;
+  dst.cacheWriteIn += src.cacheWriteIn;
+  dst.costUsd += src.costUsd;
+  dst.turnCount += src.turnCount;
+  for (const [model, stats] of Object.entries(src.byModel)) {
+    if (!dst.byModel[model]) {
+      dst.byModel[model] = { tokensIn: 0, tokensOut: 0, cacheReadIn: 0, cacheWriteIn: 0, costUsd: 0, turnCount: 0 };
+    }
+    dst.byModel[model].tokensIn += stats.tokensIn;
+    dst.byModel[model].tokensOut += stats.tokensOut;
+    dst.byModel[model].cacheReadIn += stats.cacheReadIn;
+    dst.byModel[model].cacheWriteIn += stats.cacheWriteIn;
+    dst.byModel[model].costUsd += stats.costUsd;
+    dst.byModel[model].turnCount += stats.turnCount;
   }
 }

@@ -106,6 +106,7 @@ export default function SessionDetail() {
     cache_write_in: 0,
     cost_usd: 0,
     turn_count: 0,
+    model_usage: {},
   };
 
   const conversationMap = new Map<string, SessionEvent[]>();

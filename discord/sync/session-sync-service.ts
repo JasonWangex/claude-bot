@@ -639,8 +639,21 @@ export class SessionSyncService {
 
       if (fileSize <= row.usage_file_offset) return; // 无新增内容，跳过
 
-      // 有新内容 → 全量扫描整个文件后覆盖写
+      // 有新内容 → 全量扫描主文件 + 聚合子 agent 文件后覆盖写
       const totals = await this.fullScan(jsonlPath);
+
+      // 聚合子 agent 用量（新格式：<SESSION_ID>/subagents/ 目录）
+      const projectDir = dirname(jsonlPath);
+      const subagentsDir = join(projectDir, claudeSessionId, 'subagents');
+      const agentTotals = await this.scanSubagentsDir(subagentsDir);
+      mergeTotals(totals, agentTotals);
+
+      // 聚合子 agent 用量（旧格式：agent-*.jsonl 在项目根目录，通过 sessionId 字段关联）
+      const oldAgentFiles = findOldFormatAgentFiles(projectDir, claudeSessionId);
+      for (const agentFile of oldAgentFiles) {
+        const t = await this.fullScan(agentFile);
+        mergeTotals(totals, t);
+      }
 
       this.usageOverwriteStmt.run(
         totals.tokensIn,
@@ -656,6 +669,32 @@ export class SessionSyncService {
     } catch (e: any) {
       logger.debug(`[SessionSync] processUsageDelta failed: ${e.message}`);
     }
+  }
+
+  /**
+   * 扫描 subagents 目录下所有 agent-*.jsonl 文件，返回聚合用量
+   * 目录不存在时静默返回空统计
+   */
+  private async scanSubagentsDir(subagentsDir: string): Promise<UsageTotals> {
+    const totals: UsageTotals = {
+      tokensIn: 0, tokensOut: 0,
+      cacheReadIn: 0, cacheWriteIn: 0,
+      costUsd: 0, turnCount: 0,
+      byModel: {},
+    };
+
+    try {
+      const entries = readdirSync(subagentsDir);
+      for (const entry of entries) {
+        if (!entry.endsWith('.jsonl') || !entry.startsWith('agent-')) continue;
+        try {
+          const agentTotals = await this.fullScan(join(subagentsDir, entry));
+          mergeTotals(totals, agentTotals);
+        } catch { /* 单个 agent 文件失败不影响整体 */ }
+      }
+    } catch { /* subagents 目录不存在，正常情况 */ }
+
+    return totals;
   }
 
   /**
@@ -765,6 +804,8 @@ export class SessionSyncService {
     }
   }
 
+  // ==================== 工具函数 ====================
+
   /** 列出目录下的 JSONL 文件（可选：仅返回 mtime > cursorMs 的） */
   private listJsonlFiles(projectDir: string, cursorMs?: number): string[] {
     try {
@@ -800,5 +841,63 @@ export class SessionSyncService {
       logger.warn(`Failed to list JSONL files in ${projectDir}: ${e.message}`);
       return [];
     }
+  }
+}
+
+/**
+ * 在项目目录根层找旧格式 agent 文件（agent-*.jsonl），
+ * 通过读取首行的 sessionId 字段与给定 sessionId 匹配
+ */
+function findOldFormatAgentFiles(projectDir: string, sessionId: string): string[] {
+  const result: string[] = [];
+  try {
+    for (const entry of readdirSync(projectDir)) {
+      if (!entry.startsWith('agent-') || !entry.endsWith('.jsonl')) continue;
+      const filePath = join(projectDir, entry);
+      try {
+        const firstLine = readFirstJsonLine(filePath);
+        if (firstLine?.sessionId === sessionId) result.push(filePath);
+      } catch { /* ignore */ }
+    }
+  } catch { /* ignore */ }
+  return result;
+}
+
+/** 读取文件首行并解析为 JSON（读取前 512 字节足够） */
+function readFirstJsonLine(filePath: string): Record<string, unknown> | null {
+  let fd: number | null = null;
+  try {
+    fd = openSync(filePath, 'r');
+    const buf = Buffer.alloc(512);
+    const bytesRead = readSync(fd, buf, 0, 512, 0);
+    const text = buf.toString('utf8', 0, bytesRead);
+    const newline = text.indexOf('\n');
+    const line = newline === -1 ? text : text.slice(0, newline);
+    return JSON.parse(line);
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) try { closeSync(fd); } catch { /* ignore */ }
+  }
+}
+
+/** 将 src 的用量累加到 dst 中（in-place） */
+function mergeTotals(dst: UsageTotals, src: UsageTotals): void {
+  dst.tokensIn += src.tokensIn;
+  dst.tokensOut += src.tokensOut;
+  dst.cacheReadIn += src.cacheReadIn;
+  dst.cacheWriteIn += src.cacheWriteIn;
+  dst.costUsd += src.costUsd;
+  dst.turnCount += src.turnCount;
+  for (const [model, stats] of Object.entries(src.byModel)) {
+    if (!dst.byModel[model]) {
+      dst.byModel[model] = { tokensIn: 0, tokensOut: 0, cacheReadIn: 0, cacheWriteIn: 0, costUsd: 0, turnCount: 0 };
+    }
+    dst.byModel[model].tokensIn += stats.tokensIn;
+    dst.byModel[model].tokensOut += stats.tokensOut;
+    dst.byModel[model].cacheReadIn += stats.cacheReadIn;
+    dst.byModel[model].cacheWriteIn += stats.cacheWriteIn;
+    dst.byModel[model].costUsd += stats.costUsd;
+    dst.byModel[model].turnCount += stats.turnCount;
   }
 }
