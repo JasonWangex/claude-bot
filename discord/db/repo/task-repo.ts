@@ -304,7 +304,7 @@ function rowToTask(
   };
 }
 
-const VALID_PIPELINE_PHASES: PipelinePhase[] = ['plan', 'execute', 'audit', 'fix'];
+const VALID_PIPELINE_PHASES: PipelinePhase[] = ['execute'];
 
 function validatePipelinePhase(value: string | null): PipelinePhase | undefined {
   if (!value) return undefined;

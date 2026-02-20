@@ -41,12 +41,12 @@ export class GoalRepo implements IGoalRepo {
           id, name, status,
           drive_status, drive_branch, drive_thread_id, drive_base_cwd,
           drive_max_concurrent, drive_created_at, drive_updated_at,
-          drive_pending_json, drive_brain_channel_id
+          drive_pending_json
         ) VALUES (
           @id, @name, COALESCE((SELECT status FROM goals WHERE id = @id), 'Processing'),
           @drive_status, @drive_branch, @drive_thread_id, @drive_base_cwd,
           @drive_max_concurrent, @drive_created_at, @drive_updated_at,
-          @drive_pending_json, @drive_brain_channel_id
+          @drive_pending_json
         )
         ON CONFLICT(id) DO UPDATE SET
           name = @name,
@@ -57,8 +57,7 @@ export class GoalRepo implements IGoalRepo {
           drive_max_concurrent = @drive_max_concurrent,
           drive_created_at = @drive_created_at,
           drive_updated_at = @drive_updated_at,
-          drive_pending_json = @drive_pending_json,
-          drive_brain_channel_id = @drive_brain_channel_id
+          drive_pending_json = @drive_pending_json
       `),
 
       deleteGoal: this.db.prepare(`DELETE FROM goals WHERE id = ?`),
@@ -202,7 +201,6 @@ function goalDriveStateToGoalRow(state: GoalDriveState): Record<string, unknown>
     drive_created_at: state.createdAt,
     drive_updated_at: state.updatedAt,
     drive_pending_json: pendingJson,
-    drive_brain_channel_id: state.brainChannelId ?? null,
   };
 }
 
@@ -243,7 +241,6 @@ function rowsToGoalDriveState(
     maxConcurrent: goal.drive_max_concurrent ?? 2,
     pendingReplan,
     pendingRollback,
-    brainChannelId: goal.drive_brain_channel_id ?? undefined,
     tasks: tasks.map((t) => ({
       id: t.id,
       goalId: t.goal_id ?? undefined,

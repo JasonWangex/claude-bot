@@ -12,24 +12,10 @@ export const PROMPT_REQUIREMENTS: PromptRequirement[] = [
   // Orchestrator 层 — 主模板
   // ================================================================
   { key: 'orchestrator.task',                   variables: ['GOAL_NAME', 'TASK_LABEL', 'TASK_TYPE', 'TASK_DESCRIPTION'] },
-  { key: 'orchestrator.plan',                   variables: ['GOAL_NAME', 'TASK_LABEL', 'TASK_DESCRIPTION'] },
-  { key: 'orchestrator.execute_with_plan',      variables: ['GOAL_NAME', 'TASK_LABEL', 'TASK_DESCRIPTION'] },
-  { key: 'orchestrator.audit',                  variables: ['GOAL_NAME', 'TASK_LABEL', 'TASK_DESCRIPTION'] },
-  { key: 'orchestrator.fix',                    variables: ['GOAL_NAME', 'TASK_LABEL', 'TASK_DESCRIPTION'] },
-  { key: 'orchestrator.feedback_investigation', variables: ['GOAL_NAME', 'TASK_LABEL', 'TASK_DESCRIPTION', 'FEEDBACK_TYPE', 'FEEDBACK_REASON', 'FEEDBACK_DETAILS', 'DEP_SECTION', 'GOAL_BRANCH', 'TASK_ID'] },
-  { key: 'orchestrator.self_review',            variables: ['TASK_LABEL', 'TASK_DESCRIPTION', 'ISSUE_LIST', 'VERIFY_COMMANDS_SECTION', 'TASK_ID'] },
   { key: 'orchestrator.replan',                 variables: ['GOAL_NAME', 'GOAL_BODY', 'COMPLETION_CRITERIA', 'CURRENT_TASKS', 'TRIGGER_TASK_ID', 'FEEDBACK_TYPE', 'FEEDBACK_REASON', 'FEEDBACK_DETAILS', 'COMPLETED_DIFF_STATS', 'IMMUTABLE_COMPLETED', 'IMMUTABLE_RUNNING'] },
   { key: 'orchestrator.conflict_resolver',      variables: ['SUBTASK_BRANCH', 'TASK_DESCRIPTION', 'CONFLICT_FILES'] },
-
-  // Brain prompts（optional — brain 是增量功能，无 brain 时 fallback to DeepSeek）
-  { key: 'orchestrator.brain_init',              variables: ['GOAL_NAME', 'GOAL_BODY', 'COMPLETION_CRITERIA', 'CURRENT_TASKS'], optional: true },
-  { key: 'orchestrator.brain_post_eval',         variables: ['TASK_LABEL', 'TASK_DESCRIPTION', 'DIFF_STATS', 'TASK_ID'], optional: true },
-  { key: 'orchestrator.brain_failure',           variables: ['TASK_LABEL', 'TASK_DESCRIPTION', 'ERROR_MESSAGE', 'PIPELINE_PHASE', 'AUDIT_RETRIES', 'TASK_CONTEXT', 'TASK_ID'], optional: true },
-  { key: 'orchestrator.brain_replan',            variables: ['TRIGGER_TASK_ID', 'FEEDBACK_TYPE', 'FEEDBACK_REASON', 'FEEDBACK_DETAILS', 'CURRENT_TASKS', 'IMMUTABLE_COMPLETED', 'IMMUTABLE_RUNNING'], optional: true },
-
-  // Task readiness check (自动检查任务完成状态)
-  { key: 'orchestrator.task_readiness_check.execute', variables: ['TASK_DESCRIPTION', 'TASK_ID', 'TASK_LABEL', 'PIPELINE_PHASE'], optional: true },
-  { key: 'orchestrator.task_readiness_check.audit',   variables: ['TASK_DESCRIPTION', 'TASK_ID', 'TASK_LABEL', 'PIPELINE_PHASE'], optional: true },
+  { key: 'orchestrator.check_in',               variables: ['TASK_LABEL', 'REVIEW_ISSUES'] },
+  { key: 'orchestrator.phase_review',            variables: ['PHASE_NUMBER', 'GOAL_NAME', 'TASK_REVIEW_SUMMARIES', 'PROGRESS_SUMMARY', 'PHASE_TASK_ID'] },
 
   // ================================================================
   // Orchestrator 层 — Section 子模板（可选）
@@ -41,26 +27,5 @@ export const PROMPT_REQUIREMENTS: PromptRequirement[] = [
   { key: 'orchestrator.task.requirements',      variables: [],                     optional: true },
   { key: 'orchestrator.task.feedback_protocol', variables: ['TASK_ID'],            optional: true },
   { key: 'orchestrator.task.research_rules',    variables: ['TASK_ID'],            optional: true },
-  // when_to_feedback 已合并入 feedback_protocol
   { key: 'orchestrator.task.placeholder_rules', variables: [],                     optional: true },
-
-  // plan sections
-  { key: 'orchestrator.plan.detail_plan',       variables: ['DETAIL_PLAN_TEXT'],   optional: true },
-  { key: 'orchestrator.plan.dependencies',      variables: ['DEP_LIST'],           optional: true },
-  { key: 'orchestrator.plan.instructions',      variables: ['TASK_LABEL'],         optional: true },
-
-  // execute_with_plan sections
-  { key: 'orchestrator.execute_with_plan.detail_plan',  variables: ['DETAIL_PLAN_TEXT'], optional: true },
-  { key: 'orchestrator.execute_with_plan.instructions', variables: ['TASK_ID'],          optional: true },
-
-  // audit sections
-  { key: 'orchestrator.audit.detail_plan',      variables: ['DETAIL_PLAN_TEXT'],   optional: true },
-  { key: 'orchestrator.audit.instructions',     variables: ['GOAL_BRANCH', 'TASK_ID', 'TASK_LABEL'], optional: true },
-
-  // fix sections
-  { key: 'orchestrator.fix.detail_plan',        variables: ['DETAIL_PLAN_TEXT'],   optional: true },
-  { key: 'orchestrator.fix.audit_summary',      variables: ['AUDIT_SUMMARY'],      optional: true },
-  { key: 'orchestrator.fix.instructions',       variables: ['ISSUE_LIST'],         optional: true },
-  // verify_section + verify_fallback + critical_rules 合并为 fix.verify
-  { key: 'orchestrator.fix.verify',             variables: ['VERIFY_TEXT'],         optional: true },
 ];

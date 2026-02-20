@@ -14,14 +14,10 @@ import type Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
 
 export const EVENT_TYPES = [
-  'feedback.main',
-  'feedback.audit',
-  'feedback.self_review',
-  'feedback.investigate',
-  'feedback.readiness',
-  'brain.eval',
-  'brain.failure',
-  'brain.replan',
+  'task.completed',
+  'task.feedback',
+  'review.task_result',
+  'review.phase_result',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -88,7 +84,7 @@ export class TaskEventRepo {
     goalId: string | null,
     type: EventType,
     payload: unknown,
-    source: 'ai' | 'brain',
+    source: 'ai',
   ): void {
     this.stmts.write.run({
       id: randomUUID(),
@@ -133,5 +129,17 @@ export class TaskEventRepo {
   /** 标记事件为已处理 */
   markProcessed(id: string): void {
     this.stmts.markProcessed.run(Date.now(), id);
+  }
+
+  /** 按 task_id + event_type 标记事件为已处理（UNIQUE 约束保证最多一条） */
+  markProcessedByTask(taskId: string, eventType: EventType): void {
+    this.db
+      .prepare(`UPDATE task_events SET processed_at = ? WHERE task_id = ? AND event_type = ?`)
+      .run(Date.now(), taskId, eventType);
+  }
+
+  /** 清除指定 task 的所有事件（retry 时调用，防止旧事件干扰新一轮执行） */
+  clearByTask(taskId: string): void {
+    this.db.prepare(`DELETE FROM task_events WHERE task_id = ?`).run(taskId);
   }
 }

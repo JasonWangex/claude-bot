@@ -287,7 +287,7 @@ export interface TaskFeedback {
 }
 
 export type TaskComplexity = 'simple' | 'complex';
-export type PipelinePhase = 'plan' | 'execute' | 'audit' | 'fix';
+export type PipelinePhase = 'execute';
 
 export interface Task {
   id: string;
@@ -299,8 +299,8 @@ export interface Task {
 
   // 多模型流水线
   complexity?: TaskComplexity;   // 代码任务复杂度，Goal 创建时标注
-  pipelinePhase?: PipelinePhase; // 当前阶段: 'plan' | 'execute' | 'audit' | 'fix'
-  auditRetries?: number;         // audit 重试计数（最多 2）
+  pipelinePhase?: PipelinePhase; // 当前阶段: 'execute'
+  auditRetries?: number;         // refix 重试计数（最多 3）
 
   // 执行状态
   status: TaskStatus;
@@ -387,9 +387,6 @@ export interface GoalDriveState {
 
   /** 待用户确认的回滚操作 */
   pendingRollback?: PendingRollback;
-
-  /** Brain 专属 Discord channel ID（持久化 Opus 战略大脑） */
-  brainChannelId?: string;
 }
 
 // Goal 快照检查点

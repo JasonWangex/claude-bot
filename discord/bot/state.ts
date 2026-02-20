@@ -694,6 +694,15 @@ export class StateManager {
     this.persistSession(guildId, channelId);
   }
 
+  /** 查询 channel 最新 Claude session 的状态（用于 check-in 监工） */
+  getChannelSessionStatus(channelId: string): 'active' | 'waiting' | 'idle' | 'closed' | null {
+    if (!this.claudeSessionRepo) return null;
+    const sessions = this.claudeSessionRepo.getByChannel(channelId);
+    if (sessions.length === 0) return null;
+    // getByChannel 按 created_at DESC 排序，第一条是最新的
+    return sessions[0].status as 'active' | 'waiting' | 'idle' | 'closed';
+  }
+
   // ========== Session 状态追踪（hooks 事件处理）==========
 
   setWaitingMessageId(channelId: string, msgId: string): void {

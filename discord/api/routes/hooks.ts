@@ -393,10 +393,8 @@ async function checkGoalTaskCompletion(
       return;
     }
 
-    // 调用 orchestrator 进行任务完成检查
-    await deps.orchestrator.checkTaskReadiness(runningTask.goalId, runningTask.id, channelId);
-
-    logger.debug(`[Hook] Triggered task completion check for task ${runningTask.id}`);
+    // Session stopped — check_in 机制会在事件扫描器中处理
+    logger.debug(`[Hook] Session stopped for goal task ${runningTask.id}, check_in will handle`);
   } catch (err) {
     logger.error('[Hook] Failed to check task completion:', err);
   }

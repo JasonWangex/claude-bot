@@ -118,6 +118,33 @@ export function isGoalStuck(state: GoalDriveState): boolean {
   return getDispatchableTasks(state).length === 0;
 }
 
+/** 获取任务所属 phase 编号（未设置 phase 视为 phase 1） */
+export function getPhaseNumber(task: GoalTask): number {
+  return task.phase ?? 1;
+}
+
+/** 判断指定 phase 是否全部终结（completed+merged / skipped / cancelled） */
+export function isPhaseFullyMerged(state: GoalDriveState, phase: number): boolean {
+  const phaseTasks = state.tasks.filter(t => getPhaseNumber(t) === phase);
+  return phaseTasks.length > 0 && phaseTasks.every(t => isTerminal(t));
+}
+
+/** 获取 phase 内所有已完成的任务（不要求 merged） */
+export function getPhaseCompletedTasks(state: GoalDriveState, phase: number): GoalTask[] {
+  return state.tasks.filter(t => getPhaseNumber(t) === phase && t.status === 'completed');
+}
+
+/** 获取当前正在执行的 phase 编号（最低的尚有 non-terminal 任务的 phase） */
+export function getCurrentPhase(state: GoalDriveState): number {
+  const phases = [...new Set(state.tasks.map(t => getPhaseNumber(t)))].sort((a, b) => a - b);
+  for (const phase of phases) {
+    const phaseTasks = state.tasks.filter(t => getPhaseNumber(t) === phase);
+    if (!phaseTasks.every(t => isTerminal(t))) return phase;
+  }
+  // 所有 phase 都终结了
+  return phases[phases.length - 1] ?? 1;
+}
+
 /** 生成进度摘要 */
 export function getProgressSummary(state: GoalDriveState): string {
   const total = state.tasks.length;

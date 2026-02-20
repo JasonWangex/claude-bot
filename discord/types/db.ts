@@ -87,8 +87,6 @@ export interface GoalRow {
   drive_updated_at: number | null;
   /** JSON: pendingReplan + pendingRollback（重启恢复用） */
   drive_pending_json: string | null;
-  /** Brain 专属 Discord channel ID */
-  drive_brain_channel_id: string | null;
 }
 
 // ================================================================

@@ -13,15 +13,14 @@ import { StateManager } from '../bot/state.js';
 import type { ClaudeClient } from '../claude/client.js';
 import type { MessageHandler } from '../bot/handlers.js';
 import { type MessageQueue, EmbedColors, type EmbedColor } from '../bot/message-queue.js';
-import type { DiscordBotConfig, GoalDriveState, GoalTask, GoalTaskFeedback, GoalPipelinePhase, PendingRollback, ChatUsageResult } from '../types/index.js';
+import type { DiscordBotConfig, GoalDriveState, GoalTask, GoalTaskFeedback, PipelinePhase, PendingRollback, ChatUsageResult } from '../types/index.js';
 import type { IGoalRepo } from '../types/repository.js';
-import { stat, readFile, access } from 'fs/promises';
-import { join } from 'path';
+import { stat } from 'fs/promises';
 import { getAuthorizedGuildId, getGoalLogChannelId } from '../utils/env.js';
 import { generateTopicTitle } from '../utils/llm.js';
 import { execGit, resolveMainWorktree } from './git-ops.js';
 import { parseTasks, goalNameToBranch, translateToBranchName } from './goal-state.js';
-import { getNextBatch, isGoalComplete, isGoalStuck, getProgressSummary } from './task-scheduler.js';
+import { getNextBatch, isGoalComplete, isGoalStuck, getProgressSummary, getPhaseNumber, isPhaseFullyMerged, getCurrentPhase } from './task-scheduler.js';
 import { parseTaskDetailPlans, formatDetailPlanForPrompt } from './goal-body-parser.js';
 import {
   createGoalBranch,
@@ -48,7 +47,6 @@ import {
   buildReplanRollbackButton,
   buildRollbackConfirmButtons,
   buildTaskFailedButtons,
-  buildFailureButtons,
 } from './goal-buttons.js';
 import type { IGoalMetaRepo, ITaskRepo, IGoalCheckpointRepo, IGoalTodoRepo } from '../types/repository.js';
 import type { PromptConfigService } from '../services/prompt-config-service.js';
@@ -92,6 +90,10 @@ export class GoalOrchestrator {
   private mergeLocks = new Map<string, Promise<void>>();
   private stateLocks = new Map<string, Promise<void>>();
   private activeDrives = new Map<string, GoalDriveState>();
+
+  // Check-in 监工状态
+  private checkInCounts = new Map<string, number>();    // taskId → check-in 次数
+  private lastCheckInAt = new Map<string, number>();    // taskId → 上次 check-in 时间
 
   constructor(deps: OrchestratorDeps) {
     this.deps = deps;
@@ -271,6 +273,12 @@ export class GoalOrchestrator {
     this.activeDrives.set(goalId, state);
     await this.syncGoalMetaStatus(goalId, 'Processing');
 
+    // 为 Goal Channel 创建 Opus 审核会话
+    const guildId = this.getGuildId();
+    if (guildId) {
+      this.ensureGoalChannelSession(state, guildId);
+    }
+
     await this.notify(goalChannelId,
       `**Goal Drive started:** ${goalName}\n` +
       `Branch: \`${goalBranch}\`\n` +
@@ -278,9 +286,6 @@ export class GoalOrchestrator {
       `Max concurrent: ${maxConcurrent}`,
       'success'
     );
-
-    // 创建 Brain（持久化 Opus 战略大脑）
-    await this.createBrain(state, goalMeta);
 
     await this.reviewAndDispatch(state);
     return state;
@@ -376,6 +381,9 @@ export class GoalOrchestrator {
     task.cacheWriteIn = undefined;
     task.costUsd = undefined;
     task.durationMs = undefined;
+    // 清除旧事件，防止 check-in 监工误判新一轮执行已上报
+    this.deps.taskEventRepo.clearByTask(taskId);
+    this.clearCheckInState(taskId);
     await this.saveState(state);
     await this.notify(state.goalChannelId, `Retrying task: ${this.getTaskLabel(state, task.id)} - ${task.description}`, 'warning');
     if (state.status === 'running') await this.reviewAndDispatch(state);
@@ -401,11 +409,11 @@ export class GoalOrchestrator {
     const lockKey = StateManager.channelLockKey(guildId, task.channelId);
     this.deps.claudeClient.abort(lockKey);
 
-    // 保留 branch/thread/dispatchedAt，只重置 fix 相关状态
+    // 保留 branch/thread/dispatchedAt，重置状态
     task.status = 'running';
     task.error = undefined;
-    task.pipelinePhase = 'fix';
-    task.auditRetries = 0;
+    task.pipelinePhase = 'execute';
+    task.auditRetries = (task.auditRetries ?? 0) + 1;
     await this.saveState(state);
 
     await this.notify(state.goalChannelId,
@@ -413,8 +421,8 @@ export class GoalOrchestrator {
       'warning',
     );
 
-    // 直接触发 audit → fix 循环（不经过 reviewAndDispatch）
-    this.startRefixPipeline(goalId, taskId, guildId, task.channelId, task, state);
+    // 重新执行 pipeline（在已有 thread 中继续）
+    this.executeTaskPipeline(goalId, taskId, guildId, task.channelId, task, state);
     return true;
   }
 
@@ -446,46 +454,6 @@ export class GoalOrchestrator {
     return true;
   }
 
-  /**
-   * refix 流水线：在已有 thread 上重新 audit → fix 循环
-   */
-  private startRefixPipeline(
-    goalId: string, taskId: string, guildId: string, channelId: string,
-    task: GoalTask, state: GoalDriveState,
-  ): void {
-    (async () => {
-      const usage = this.emptyUsage();
-      try {
-        // 初始化 usage 累积器
-        const usage: ChatUsageResult = {
-          input_tokens: 0,
-          output_tokens: 0,
-          cache_read_input_tokens: 0,
-          cache_creation_input_tokens: 0,
-          total_cost_usd: 0,
-          duration_ms: 0,
-        };
-
-        // 先跑一次 audit，拿到最新 issues
-        const auditResult = await this.runAudit(goalId, taskId, guildId, channelId, task, state, usage);
-        if (auditResult.verdict === 'pass') {
-          await this.onTaskCompleted(goalId, taskId, usage);
-          return;
-        }
-        // 进入标准 fix 循环
-        await this.auditFixLoop(goalId, taskId, guildId, channelId, task, state, auditResult.summary, auditResult.issues, auditResult.verifyCommands, usage);
-      } catch (err: any) {
-        const stillRunning = await this.isTaskStillRunning(goalId, taskId);
-        if (!stillRunning) return;
-        try {
-          await this.onTaskFailed(goalId, taskId, err.message, usage);
-        } catch (cbErr: any) {
-          logger.error(`[Orchestrator] startRefixPipeline onTaskFailed also failed:`, cbErr.message);
-        }
-      }
-    })();
-  }
-
   // ========== Feedback 智能调查 ==========
 
   /**
@@ -494,7 +462,7 @@ export class GoalOrchestrator {
    * 流程：
    * 1. 在已有 thread 中发送调查 prompt（Sonnet 快速分析）
    * 2. Claude 分析 blocked 原因、检查依赖状态/代码上下文
-   * 3. 调用 bot_task_event MCP 写结论（feedback.investigate 事件）
+   * 3. 调用 bot_task_event MCP 写结论（task.feedback 事件）
    * 4. 根据结论自动路由：continue（继续修复）/ retry / replan / escalate
    */
   private startFeedbackInvestigation(
@@ -510,8 +478,8 @@ export class GoalOrchestrator {
       try {
         // 使用 Sonnet 做调查（快速且够用）
         const { pipelineSonnetModel: sonnetModel } = this.deps.config;
-        this.switchSessionModel(guildId, channelId, sonnetModel, 'fix');
-        await this.updatePipelinePhase(goalId, taskId, 'fix');
+        this.switchSessionModel(guildId, channelId, sonnetModel, 'execute');
+        await this.updatePipelinePhase(goalId, taskId, 'execute');
 
         await this.notify(state.goalChannelId,
           `[GoalOrchestrator] ${taskId}: AI 调查 blocked feedback...`,
@@ -532,11 +500,12 @@ export class GoalOrchestrator {
           case 'continue':
             // Claude 已在调查中修复了问题 → 走 audit → fix 循环验证
             await this.notify(state.goalChannelId,
-              `[GoalOrchestrator] ${taskId}: 调查结论 — 问题已修复，进入审计验证`,
+              `[GoalOrchestrator] ${taskId}: 调查结论 — 问题已修复，继续执行`,
               'info',
               { logOnly: true },
             );
-            this.startRefixPipeline(goalId, taskId, guildId, channelId, task, state);
+            // 调查中已修复 → 重新执行 pipeline 让 Claude 确认并上报完成
+            this.executeTaskPipeline(goalId, taskId, guildId, channelId, task, state);
             break;
 
           case 'retry':
@@ -635,10 +604,9 @@ export class GoalOrchestrator {
    * 构建 feedback 调查 prompt
    */
   private buildFeedbackInvestigationPrompt(task: GoalTask, state: GoalDriveState): string {
-    const ps = this.deps.promptService;
     const fb = task.feedback!;
+    const label = this.getTaskLabel(state, task.id);
 
-    // 构建依赖 section 文本
     let depSection = '';
     if (task.depends.length > 0) {
       const depInfos = task.depends.map(depId => {
@@ -646,27 +614,35 @@ export class GoalOrchestrator {
         if (!dep) return `  - ${depId}: (unknown)`;
         return `  - ${this.getTaskLabel(state, dep.id)}: ${dep.description} (status: ${dep.status}, merged: ${dep.merged ?? false})`;
       });
-      depSection = `## Dependencies\n${depInfos.join('\n')}\n\n`;
+      depSection = `\n## Dependencies\n${depInfos.join('\n')}\n`;
     }
 
-    // 构建 feedback details 文本
-    const feedbackDetails = fb.details ? `Details: ${fb.details}` : '';
+    return `Task ${label} reported feedback and needs investigation.
 
-    return ps.render('orchestrator.feedback_investigation', {
-      GOAL_NAME: state.goalName,
-      TASK_LABEL: this.getTaskLabel(state, task.id),
-      TASK_DESCRIPTION: task.description,
-      FEEDBACK_TYPE: fb.type,
-      FEEDBACK_REASON: fb.reason,
-      FEEDBACK_DETAILS: feedbackDetails,
-      DEP_SECTION: depSection,
-      GOAL_BRANCH: state.goalBranch,
-      TASK_ID: task.id,
-    });
+## Task
+Description: ${task.description}
+Goal branch: ${state.goalBranch}
+${depSection}
+## Feedback
+Type: ${fb.type}
+Reason: ${fb.reason}
+${fb.details ? `Details: ${fb.details}` : ''}
+
+## Your Job
+Investigate the feedback, check the codebase, and determine the best action:
+- **continue**: The issue can be resolved in the current context — fix it and continue
+- **retry**: The task needs a fresh start
+- **replan**: The feedback reveals a structural issue requiring task plan changes
+- **escalate**: Cannot determine the right action — needs human judgment
+
+Call \`bot_task_event\` with:
+- \`task_id\`: "${task.id}"
+- \`event_type\`: "task.feedback"
+- \`payload\`: \`{ "action": "continue|retry|replan|escalate", "reason": "..." }\``;
   }
 
   /**
-   * 读取调查结论事件 feedback.investigate
+   * 读取调查结论事件 task.feedback
    */
   private async readInvestigationResult(
     _state: GoalDriveState,
@@ -675,7 +651,7 @@ export class GoalOrchestrator {
     const defaultResult = { action: 'escalate', reason: 'No investigation event found in DB' };
 
     const result = this.deps.taskEventRepo.read<{ action: string; reason: string; details?: string }>(
-      task.id, 'feedback.investigate',
+      task.id, 'task.feedback',
     );
     if (!result) return defaultResult;
 
@@ -685,27 +661,6 @@ export class GoalOrchestrator {
       reason: result.reason || 'No reason provided',
       details: result.details,
     };
-  }
-
-  // ========== Brain 战略大脑 ==========
-
-  /**
-   * 向 Brain channel 发送事件消息
-   */
-  private async sendToBrain(
-    state: GoalDriveState,
-    message: string,
-  ): Promise<void> {
-    if (!state.brainChannelId) return;
-    const guildId = this.getGuildId();
-    if (!guildId) return;
-    try {
-      await this.deps.messageHandler.handleBackgroundChat(
-        guildId, state.brainChannelId, message,
-      );
-    } catch (err: any) {
-      logger.warn(`[Orchestrator] sendToBrain failed: ${err.message}`);
-    }
   }
 
   /**
@@ -729,67 +684,6 @@ export class GoalOrchestrator {
   }
 
   /**
-   * 创建 Brain channel + session 并发送初始化消息
-   */
-  private async createBrain(
-    state: GoalDriveState,
-    goalMeta: { body?: string | null; completion?: string | null } | null,
-  ): Promise<void> {
-    const guildId = this.getGuildId();
-    if (!guildId) return;
-
-    const categoryId = await this.findCategoryId(state.goalChannelId);
-    if (!categoryId) {
-      logger.warn(`[Orchestrator] createBrain: cannot find category, skipping brain creation`);
-      return;
-    }
-
-    try {
-      const guild = await this.deps.client.guilds.fetch(guildId);
-      const brainChannel = await guild.channels.create({
-        name: `brain-${state.goalName}`.slice(0, 100),
-        type: ChannelType.GuildText,
-        parent: categoryId,
-        reason: `Goal brain: ${state.goalName}`,
-      });
-
-      // 创建 Opus session
-      const goalWorktreeDir = await this.getGoalWorktreeDir(state);
-      const cwd = goalWorktreeDir ?? state.baseCwd;
-      this.deps.stateManager.getOrCreateSession(guildId, brainChannel.id, {
-        name: `brain-${state.goalName}`,
-        cwd,
-      });
-      this.switchSessionModel(guildId, brainChannel.id, this.deps.config.pipelineOpusModel);
-
-      state.brainChannelId = brainChannel.id;
-      await this.saveState(state);
-
-      // 发送初始化消息
-      const ps = this.deps.promptService;
-      const tasksSummary = state.tasks.map(t =>
-        `- ${this.getTaskLabel(state, t.id)}: [${t.type}] ${t.description} (${t.status})`,
-      ).join('\n');
-
-      const initPrompt = ps.render('orchestrator.brain_init', {
-        GOAL_NAME: state.goalName,
-        GOAL_BODY: goalMeta?.body || '(no body)',
-        COMPLETION_CRITERIA: goalMeta?.completion || '(not specified)',
-        CURRENT_TASKS: tasksSummary,
-      });
-
-      await this.sendToBrain(state, initPrompt);
-
-      await this.notify(state.goalChannelId,
-        `Brain created for "${state.goalName}"`,
-        'info',
-      );
-    } catch (err: any) {
-      logger.error(`[Orchestrator] createBrain failed: ${err.message}`);
-    }
-  }
-
-  /**
    * 获取 goal worktree 目录
    */
   private async getGoalWorktreeDir(state: GoalDriveState): Promise<string | null> {
@@ -803,27 +697,6 @@ export class GoalOrchestrator {
     } catch {
       return null;
     }
-  }
-
-  /**
-   * 归档 Brain channel（goal 完成时调用）
-   */
-  private async archiveBrainChannel(state: GoalDriveState): Promise<void> {
-    if (!state.brainChannelId) return;
-    const guildId = this.getGuildId();
-    if (!guildId) return;
-
-    try {
-      this.deps.stateManager.archiveSession(guildId, state.brainChannelId, undefined, 'completed');
-      const channel = await this.deps.client.channels.fetch(state.brainChannelId);
-      if (channel && 'delete' in channel) {
-        await (channel as any).delete('Goal completed — brain archived');
-      }
-    } catch (err: any) {
-      logger.warn(`[Orchestrator] archiveBrainChannel: ${err.message}`);
-    }
-    state.brainChannelId = undefined;
-    await this.saveState(state);
   }
 
   /**
@@ -946,19 +819,6 @@ export class GoalOrchestrator {
           }
         }
       }
-      // Brain channel 恢复检查
-      if (state.brainChannelId) {
-        try {
-          const ch = await this.deps.client.channels.fetch(state.brainChannelId);
-          if (!ch) throw new Error('Channel not found');
-          logger.info(`[Orchestrator] Brain channel restored: ${state.brainChannelId}`);
-        } catch {
-          logger.warn(`[Orchestrator] Brain channel ${state.brainChannelId} missing, clearing`);
-          state.brainChannelId = undefined;
-          stateModified = true;
-        }
-      }
-
       if (stateModified) await this.saveState(state);
 
       this.activeDrives.set(state.goalId, state);
@@ -1080,7 +940,7 @@ export class GoalOrchestrator {
             const guildId = this.getGuildId();
             if (guildId) {
               task.status = 'running';
-              task.pipelinePhase = 'fix';
+              task.pipelinePhase = 'execute';
               await this.saveState(state);
               this.startFeedbackInvestigation(state, task, guildId);
               // 不 return —— 继续处理其他任务，调查异步进行
@@ -1123,7 +983,6 @@ export class GoalOrchestrator {
       state.status = 'completed';
       await this.saveState(state);
       await this.syncGoalMeta(state);
-      await this.archiveBrainChannel(state);
 
       // 检查未完成的 todo
       let todoWarning = '';
@@ -1311,59 +1170,25 @@ export class GoalOrchestrator {
 
   /**
    * 切换 session 到新模型，智能复用已有 session
-   * - execute: 创建新 sonnet/opus session
-   * - audit: 创建新 opus session（独立）
-   * - fix: 复用 execute 的 sonnet session ← 关键优化
-   * - plan: 创建新 opus session
+   * 设置 session 模型
    */
   private switchSessionModel(
     guildId: string,
     channelId: string,
     model: string,
-    phase?: GoalPipelinePhase
+    _phase?: PipelinePhase
   ): void {
-    // 判断模型槽位（opus 或 其他都归为 sonnet）
-    const modelSlot: 'sonnet' | 'opus' =
-      model.toLowerCase().includes('opus') ? 'opus' : 'sonnet';
-
-    // Fix 阶段：复用 execute 阶段的 sonnet session（通过 link 查找）
-    if (phase === 'fix' && modelSlot === 'sonnet') {
-      const activeLinks = this.deps.stateManager.getActiveLinks(channelId);
-      const sonnetLink = activeLinks.find(l => l.model && !l.model.toLowerCase().includes('opus'));
-      const existingSessionId = sonnetLink?.claudeSessionId;
-      if (existingSessionId) {
-        // 恢复到已有的 sonnet session
-        this.deps.stateManager.setSessionClaudeId(guildId, channelId, existingSessionId);
-        this.deps.stateManager.setSessionModel(guildId, channelId, model);
-        logger.info(`[Orchestrator] Reusing Sonnet session for fix: ${existingSessionId.slice(0, 8)}`);
-        return;
-      }
-      logger.warn(`[Orchestrator] No saved Sonnet session, creating new one for fix`);
-    }
-
-    // 其他阶段：清除并创建新 session
     this.deps.stateManager.clearSessionClaudeId(guildId, channelId);
     this.deps.stateManager.setSessionModel(guildId, channelId, model);
   }
 
-  private async updatePipelinePhase(goalId: string, taskId: string, phase: GoalPipelinePhase): Promise<void> {
+  private async updatePipelinePhase(goalId: string, taskId: string, phase: PipelinePhase): Promise<void> {
     await this.withStateLock(goalId, async () => {
       const state = await this.getState(goalId);
       if (!state) return;
       const task = state.tasks.find(t => t.id === taskId);
       if (!task) return;
       task.pipelinePhase = phase;
-      await this.saveState(state);
-    });
-  }
-
-  private async updateAuditRetries(goalId: string, taskId: string, count: number): Promise<void> {
-    await this.withStateLock(goalId, async () => {
-      const state = await this.getState(goalId);
-      if (!state) return;
-      const task = state.tasks.find(t => t.id === taskId);
-      if (!task) return;
-      task.auditRetries = count;
       await this.saveState(state);
     });
   }
@@ -1400,18 +1225,33 @@ export class GoalOrchestrator {
     const usage = this.emptyUsage();
     (async () => {
       try {
-        if (task.type === '调研') {
-          await this.pipelineResearch(goalId, taskId, guildId, channelId, task, state, usage);
-        } else if (task.type === '代码' && task.complexity === 'complex') {
-          await this.pipelineComplexCode(goalId, taskId, guildId, channelId, task, state, usage);
-        } else {
-          // 默认路径：代码(simple/无标注) 和其他类型
-          await this.pipelineSimpleCode(goalId, taskId, guildId, channelId, task, state, usage);
+        // 统一 pipeline：单次执行，Claude 自驱动
+        const model = task.type === '调研'
+          ? this.deps.config.pipelineOpusModel
+          : this.deps.config.pipelineSonnetModel;
+        this.switchSessionModel(guildId, channelId, model, 'execute');
+        await this.updatePipelinePhase(goalId, taskId, 'execute');
+
+        await this.notify(state.goalChannelId,
+          `[GoalOrchestrator] ${taskId}: ${task.type === '调研' ? 'Opus' : 'Sonnet'} 执行`,
+          'pipeline',
+        );
+
+        const taskPrompt = this.buildTaskPrompt(task, state);
+        logger.info(`[Orchestrator] Pipeline ${taskId}: ${task.type} → single execute`);
+        const u = await this.deps.messageHandler.handleBackgroundChat(guildId, channelId, taskPrompt);
+        this.accumulateUsage(usage, u);
+
+        if (!await this.isTaskStillRunning(goalId, taskId)) {
+          logger.info(`[Orchestrator] Pipeline ${taskId}: task no longer running after execute, aborting`);
+          return;
         }
+
+        // Claude 应已通过 bot_task_event 上报 task.completed 或 task.feedback
+        // 事件扫描器会处理，这里作为 fallback 直接调用
+        await this.onTaskCompleted(goalId, taskId, usage);
       } catch (err: any) {
         logger.error(`[Orchestrator] Pipeline ${taskId} failed:`, err.message);
-        // 检查任务是否已被用户操作修改（skip/pause/retry）
-        // 如果已不是 running 状态，不要用 onTaskFailed 覆盖
         const stillRunning = await this.isTaskStillRunning(goalId, taskId);
         if (!stillRunning) {
           logger.info(`[Orchestrator] Pipeline ${taskId}: task already ${await this.getTaskStatus(goalId, taskId)}, skipping onTaskFailed`);
@@ -1426,628 +1266,7 @@ export class GoalOrchestrator {
     })();
   }
 
-  /**
-   * 调研路径：Opus 执行 → onTaskCompleted
-   */
-  private async pipelineResearch(
-    goalId: string,
-    taskId: string,
-    guildId: string,
-    channelId: string,
-    task: GoalTask,
-    state: GoalDriveState,
-    usage: ChatUsageResult,
-  ): Promise<void> {
-    const opusModel = this.deps.config.pipelineOpusModel;
-    this.switchSessionModel(guildId, channelId, opusModel, 'execute');
-    await this.updatePipelinePhase(goalId, taskId, 'execute');
 
-    await this.notify(state.goalChannelId,
-      `[GoalOrchestrator] ${taskId}: 调研路径 → Opus 执行`,
-      'pipeline',
-    );
-
-    const taskPrompt = this.buildTaskPrompt(task, state);
-    logger.info(`[Orchestrator] Pipeline ${taskId}: research → Opus execute`);
-    const u = await this.deps.messageHandler.handleBackgroundChat(guildId, channelId, taskPrompt);
-    this.accumulateUsage(usage, u);
-
-    if (!await this.isTaskStillRunning(goalId, taskId)) {
-      logger.info(`[Orchestrator] Pipeline ${taskId}: task no longer running after execute, aborting pipeline`);
-      return;
-    }
-    await this.onTaskCompleted(goalId, taskId, usage);
-  }
-
-  /**
-   * 简单代码路径：Sonnet 执行 → Opus audit → [pass: 完成 / fail: Sonnet 修复(≤2次)]
-   */
-  private async pipelineSimpleCode(
-    goalId: string,
-    taskId: string,
-    guildId: string,
-    channelId: string,
-    task: GoalTask,
-    state: GoalDriveState,
-    usage: ChatUsageResult,
-  ): Promise<void> {
-    const { pipelineSonnetModel: sonnetModel } = this.deps.config;
-
-    // Phase 1: Sonnet 执行
-    this.switchSessionModel(guildId, channelId, sonnetModel, 'execute');
-    await this.updatePipelinePhase(goalId, taskId, 'execute');
-
-    await this.notify(state.goalChannelId,
-      `[GoalOrchestrator] ${taskId}: 简单代码 → Sonnet 执行`,
-      'pipeline',
-    );
-
-    const taskPrompt = this.buildTaskPrompt(task, state);
-    logger.info(`[Orchestrator] Pipeline ${taskId}: simple code → Sonnet execute`);
-    const execUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, channelId, taskPrompt);
-    this.accumulateUsage(usage, execUsage);
-
-    // 检查任务是否仍在 running（可能被 skip/cancel/retry）
-    if (!await this.isTaskStillRunning(goalId, taskId)) {
-      logger.info(`[Orchestrator] Pipeline ${taskId}: task no longer running after execute, aborting pipeline`);
-      return;
-    }
-
-    // 检查 feedback 文件：如果 Sonnet 写了 feedback（blocked/clarify），跳过 audit
-    const preFeedback = await this.checkFeedbackFile(state, task);
-    if (preFeedback) {
-      logger.info(`[Orchestrator] Pipeline ${taskId}: feedback detected after execute, skipping audit`);
-      await this.onTaskCompleted(goalId, taskId);
-      return;
-    }
-
-    // Phase 2: Opus audit
-    const auditResult = await this.runAudit(goalId, taskId, guildId, channelId, task, state, usage);
-
-    if (auditResult.verdict === 'pass') {
-      await this.onTaskCompleted(goalId, taskId, usage);
-      return;
-    }
-
-    // Audit 失败 → Sonnet 修复（最多 2 次）
-    await this.auditFixLoop(goalId, taskId, guildId, channelId, task, state, auditResult.summary, auditResult.issues, auditResult.verifyCommands, usage);
-  }
-
-  /**
-   * 复杂代码路径：Opus plan → Sonnet 执行 → Opus audit → [同上重试]
-   */
-  private async pipelineComplexCode(
-    goalId: string,
-    taskId: string,
-    guildId: string,
-    channelId: string,
-    task: GoalTask,
-    state: GoalDriveState,
-    usage: ChatUsageResult,
-  ): Promise<void> {
-    const { pipelineOpusModel: opusModel, pipelineSonnetModel: sonnetModel } = this.deps.config;
-
-    // Phase 1: Opus plan
-    this.switchSessionModel(guildId, channelId, opusModel, 'plan');
-    await this.updatePipelinePhase(goalId, taskId, 'plan');
-
-    await this.notify(state.goalChannelId,
-      `[GoalOrchestrator] ${taskId}: 复杂代码 → Opus 规划`,
-      'pipeline',
-    );
-
-    const planPrompt = this.buildPlanPrompt(task, state);
-    logger.info(`[Orchestrator] Pipeline ${taskId}: complex code → Opus plan`);
-    const planUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, channelId, planPrompt);
-    this.accumulateUsage(usage, planUsage);
-
-    if (!await this.isTaskStillRunning(goalId, taskId)) {
-      logger.info(`[Orchestrator] Pipeline ${taskId}: task no longer running after plan, aborting pipeline`);
-      return;
-    }
-
-    // 验证 plan 文件是否写入
-    const planExists = await this.checkPlanFileExists(state, task);
-    if (!planExists) {
-      logger.warn(`[Orchestrator] Pipeline ${taskId}: .task-plan.md not found after plan phase, Sonnet will execute without plan`);
-      await this.notify(state.goalChannelId,
-        `[GoalOrchestrator] ${taskId}: Opus 未写入 .task-plan.md，Sonnet 将自行理解任务执行`,
-        'warning',
-        { logOnly: true },
-      );
-    }
-
-    // Phase 2: Sonnet 执行（读 plan）
-    this.switchSessionModel(guildId, channelId, sonnetModel, 'execute');
-    await this.updatePipelinePhase(goalId, taskId, 'execute');
-
-    await this.notify(state.goalChannelId,
-      `[GoalOrchestrator] ${taskId}: 复杂代码 → Sonnet 执行${planExists ? '（按 plan）' : '（无 plan fallback）'}`,
-      'pipeline',
-    );
-
-    // 根据 plan 是否存在选择不同的 prompt
-    const executePrompt = planExists
-      ? this.buildExecuteWithPlanPrompt(task, state)
-      : this.buildTaskPrompt(task, state);
-    logger.info(`[Orchestrator] Pipeline ${taskId}: complex code → Sonnet execute with plan`);
-    const execUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, channelId, executePrompt);
-    this.accumulateUsage(usage, execUsage);
-
-    if (!await this.isTaskStillRunning(goalId, taskId)) {
-      logger.info(`[Orchestrator] Pipeline ${taskId}: task no longer running after execute, aborting pipeline`);
-      return;
-    }
-
-    // 检查 feedback 文件：如果 Sonnet 写了 feedback（blocked/clarify），跳过 audit
-    const preFeedback = await this.checkFeedbackFile(state, task);
-    if (preFeedback) {
-      logger.info(`[Orchestrator] Pipeline ${taskId}: feedback detected after execute, skipping audit`);
-      await this.onTaskCompleted(goalId, taskId);
-      return;
-    }
-
-    // Phase 3: Opus audit
-    const auditResult = await this.runAudit(goalId, taskId, guildId, channelId, task, state, usage);
-
-    if (auditResult.verdict === 'pass') {
-      await this.onTaskCompleted(goalId, taskId, usage);
-      return;
-    }
-
-    // Audit 失败 → Sonnet 修复
-    await this.auditFixLoop(goalId, taskId, guildId, channelId, task, state, auditResult.summary, auditResult.issues, auditResult.verifyCommands, usage);
-  }
-
-  /**
-   * Audit 失败后的修复循环：Sonnet fix → re-audit（最多 2 次）
-   */
-  private async auditFixLoop(
-    goalId: string,
-    taskId: string,
-    guildId: string,
-    channelId: string,
-    task: GoalTask,
-    state: GoalDriveState,
-    auditSummary: string | undefined,
-    issues: string[],
-    verifyCommands: string[] = [],
-    usage: ChatUsageResult,
-  ): Promise<void> {
-    const { pipelineSonnetModel: sonnetModel } = this.deps.config;
-    const maxRetries = 2;
-    const maxSelfReviewRetries = 1;  // Self-review 失败后的 refix 次数上限
-
-    for (let retry = 1; retry <= maxRetries; retry++) {
-      if (!await this.isTaskStillRunning(goalId, taskId)) {
-        logger.info(`[Orchestrator] Pipeline ${taskId}: task no longer running in fix loop, aborting`);
-        return;
-      }
-
-      await this.updateAuditRetries(goalId, taskId, retry);
-
-      // Sonnet fix
-      this.switchSessionModel(guildId, channelId, sonnetModel, 'fix');
-      await this.updatePipelinePhase(goalId, taskId, 'fix');
-
-      await this.notify(state.goalChannelId,
-        `[GoalOrchestrator] ${taskId}: Audit 失败 → Sonnet 修复 (${retry}/${maxRetries})`,
-        'pipeline',
-      );
-
-      const fixPrompt = this.buildFixPrompt(task, state, auditSummary, issues, verifyCommands);
-      logger.info(`[Orchestrator] Pipeline ${taskId}: Sonnet fix attempt ${retry}`);
-      const fixUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, channelId, fixPrompt);
-      this.accumulateUsage(usage, fixUsage);
-
-      // Self-review（在同一 Sonnet session 中自查修复质量）
-      const selfReviewResult = await this.runSelfReview(
-        goalId, taskId, guildId, channelId, task, state, issues, verifyCommands, usage
-      );
-
-      if (selfReviewResult.hasRemainingIssues) {
-        logger.info(`[Orchestrator] Pipeline ${taskId}: Self-review found ${selfReviewResult.remainingIssues.length} issues`);
-
-        // Self-review 失败：允许有限次 refix，避免耗尽重试机会
-        if (retry < maxRetries) {
-          logger.info(`[Orchestrator] Pipeline ${taskId}: Attempting refix based on self-review feedback`);
-          issues = selfReviewResult.remainingIssues;
-          continue;  // 继续下一轮 fix
-        } else {
-          logger.warn(`[Orchestrator] Pipeline ${taskId}: Self-review still found issues but retries exhausted, proceeding to Opus audit anyway`);
-          // 最后一次重试：即使 self-review 失败也进入 Opus audit（让 Opus 做最终判断）
-        }
-      }
-
-      // Self-review 通过 → Opus re-audit
-      await this.notify(state.goalChannelId,
-        `[GoalOrchestrator] ${taskId}: Self-review 通过 → Opus 二次审查`,
-        'pipeline',
-      );
-
-      const reAudit = await this.runAudit(goalId, taskId, guildId, channelId, task, state, usage);
-      if (reAudit.verdict === 'pass') {
-        await this.onTaskCompleted(goalId, taskId, usage);
-        return;
-      }
-      // 更新所有变量（包括 summary）
-      auditSummary = reAudit.summary;
-      issues = reAudit.issues;
-      verifyCommands = reAudit.verifyCommands;
-    }
-
-    // 所有重试耗尽 → 标记失败
-    logger.warn(`[Orchestrator] Pipeline ${taskId}: audit fix exhausted after ${maxRetries} retries`);
-    await this.onTaskFailed(goalId, taskId, `Audit failed after ${maxRetries} fix attempts. Issues: ${issues.join('; ')}`, usage);
-  }
-
-  /**
-   * Sonnet self-review：在同一 session 中自查修复质量
-   */
-  private async runSelfReview(
-    goalId: string,
-    taskId: string,
-    guildId: string,
-    channelId: string,
-    task: GoalTask,
-    state: GoalDriveState,
-    originalIssues: string[],
-    verifyCommands: string[],
-    usage: ChatUsageResult,
-  ): Promise<{ hasRemainingIssues: boolean; remainingIssues: string[] }> {
-    await this.notify(state.goalChannelId, `[GoalOrchestrator] ${taskId}: Sonnet 自查中...`, 'pipeline');
-
-    const selfReviewPrompt = this.buildSelfReviewPrompt(task, state, originalIssues, verifyCommands);
-    const reviewUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, channelId, selfReviewPrompt);
-    this.accumulateUsage(usage, reviewUsage);
-
-    const result = await this.readSelfReviewResult(state, task);
-
-    if (!result.hasRemainingIssues) {
-      await this.notify(state.goalChannelId, `[GoalOrchestrator] ${taskId}: Self-review 通过 ✓`, 'success', { logOnly: true });
-    } else {
-      await this.notify(state.goalChannelId,
-        `[GoalOrchestrator] ${taskId}: Self-review 发现 ${result.remainingIssues.length} 个遗留问题`,
-        'warning',
-        { logOnly: true },
-      );
-    }
-
-    return result;
-  }
-
-  /**
-   * 构建 Self-review prompt
-   */
-  private buildSelfReviewPrompt(
-    task: GoalTask,
-    state: GoalDriveState,
-    originalIssues: string[],
-    verifyCommands: string[],
-  ): string {
-    const ps = this.deps.promptService;
-    const issueList = originalIssues.map((issue, i) => `  ${i + 1}. ${issue}`).join('\n');
-
-    const verifyCmdsSection = verifyCommands.length > 0
-      ? `3. Run these verification commands:\n${verifyCommands.map(c => `   - \`${c}\``).join('\n')}`
-      : `3. Run build and test commands`;
-
-    return ps.render('orchestrator.self_review', {
-      TASK_LABEL: this.getTaskLabel(state, task.id),
-      TASK_DESCRIPTION: task.description,
-      ISSUE_LIST: issueList,
-      VERIFY_COMMANDS_SECTION: verifyCmdsSection,
-      TASK_ID: task.id,
-    });
-  }
-
-  /**
-   * 读取 self-review 事件 feedback.self_review
-   */
-  private async readSelfReviewResult(
-    _state: GoalDriveState,
-    task: GoalTask,
-  ): Promise<{ hasRemainingIssues: boolean; remainingIssues: string[] }> {
-    const parsed = this.deps.taskEventRepo.read<{
-      allIssuesFixed?: boolean;
-      remainingIssues?: string[];
-    }>(task.id, 'feedback.self_review');
-
-    if (!parsed) {
-      logger.warn(`[Orchestrator] Self-review ${task.id}: No event in DB`);
-      return { hasRemainingIssues: true, remainingIssues: ['No self-review event in DB'] };
-    }
-
-    const remainingIssues = Array.isArray(parsed.remainingIssues) ? parsed.remainingIssues : [];
-    return {
-      hasRemainingIssues: parsed.allIssuesFixed !== true || remainingIssues.length > 0,
-      remainingIssues,
-    };
-  }
-
-  /**
-   * 运行 Opus audit：读取 git diff → 审查 → 返回 pass/fail
-   */
-  private async runAudit(
-    goalId: string,
-    taskId: string,
-    guildId: string,
-    channelId: string,
-    task: GoalTask,
-    state: GoalDriveState,
-    usage: ChatUsageResult,
-  ): Promise<{ verdict: 'pass' | 'fail'; summary?: string; issues: string[]; verifyCommands: string[] }> {
-    const { pipelineOpusModel: opusModel } = this.deps.config;
-
-    this.switchSessionModel(guildId, channelId, opusModel, 'audit');
-    await this.updatePipelinePhase(goalId, taskId, 'audit');
-
-    await this.notify(state.goalChannelId,
-      `[GoalOrchestrator] ${taskId}: Opus 审查中...`,
-      'pipeline',
-    );
-
-    const auditPrompt = this.buildAuditPrompt(task, state);
-    logger.info(`[Orchestrator] Pipeline ${taskId}: Opus audit`);
-    const auditUsage = await this.deps.messageHandler.handleBackgroundChat(guildId, channelId, auditPrompt);
-    this.accumulateUsage(usage, auditUsage);
-
-    // 读取 audit 结果文件
-    const result = await this.readAuditResult(state, task);
-
-    if (result.verdict === 'pass') {
-      await this.notify(state.goalChannelId,
-        `[GoalOrchestrator] ${taskId}: Audit 通过 ✓`,
-        'success',
-        { logOnly: true },
-      );
-    } else {
-      await this.notify(state.goalChannelId,
-        `[GoalOrchestrator] ${taskId}: Audit 未通过 — ${result.issues.length} 个问题`,
-        'warning',
-        { logOnly: true },
-      );
-    }
-
-    return result;
-  }
-
-  /**
-   * 读取 audit 结果文件 feedback/<taskId>-audit.json
-   *
-   * 安全策略：
-   * - 文件不存在 → fail（Opus 没写 audit 结果，不能默认通过）
-   * - 文件存在但解析失败 → fail
-   * - verdict 缺失 → fail
-   * - 只有明确 verdict="pass" 才算通过
-   */
-
-  /**
-   * 检查 .task-plan.md 是否存在于子任务 worktree 中
-   */
-  private async checkPlanFileExists(state: GoalDriveState, task: GoalTask): Promise<boolean> {
-    if (!task.branchName) return false;
-    try {
-      const stdout = await execGit(
-        ['worktree', 'list', '--porcelain'],
-        state.baseCwd,
-        `checkPlanFileExists(${task.id}): list worktrees`,
-      );
-      const subtaskDir = this.findWorktreeDir(stdout, task.branchName);
-      if (!subtaskDir) return false;
-      await access(join(subtaskDir, '.task-plan.md'));
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  private async readAuditResult(
-    _state: GoalDriveState,
-    task: GoalTask,
-  ): Promise<{ verdict: 'pass' | 'fail'; summary?: string; issues: string[]; verifyCommands: string[] }> {
-    const defaultFail = { verdict: 'fail' as const, issues: ['No audit event in DB'], verifyCommands: [] };
-
-    const parsed = this.deps.taskEventRepo.read<{
-      verdict?: string;
-      summary?: string;
-      issues?: unknown[];
-      verifyCommands?: unknown[];
-    }>(task.id, 'feedback.audit');
-
-    if (!parsed) {
-      logger.warn(`[Orchestrator] readAuditResult(${task.id}): No audit event in DB`);
-      return defaultFail;
-    }
-
-    if (!parsed.verdict) {
-      logger.warn(`[Orchestrator] readAuditResult(${task.id}): verdict field missing`);
-      return { verdict: 'fail', issues: ['Audit event missing verdict field'], verifyCommands: [] };
-    }
-
-    const issues = Array.isArray(parsed.issues)
-      ? parsed.issues.map((i: any) => {
-          if (typeof i === 'string') return i;
-          const sev = i.severity || 'error';
-          const loc = i.file ? ` (${i.file}${i.line ? ':' + i.line : ''})` : '';
-          const desc = i.description || JSON.stringify(i);
-          return `[${sev}]${loc} ${desc}`;
-        })
-      : [];
-
-    const verifyCommands = Array.isArray(parsed.verifyCommands)
-      ? parsed.verifyCommands.filter((c: any) => typeof c === 'string')
-      : [];
-
-    return {
-      verdict: parsed.verdict === 'pass' ? 'pass' : 'fail',
-      summary: typeof parsed.summary === 'string' ? parsed.summary : undefined,
-      issues,
-      verifyCommands,
-    };
-  }
-
-  // ========== 流水线 Prompts ==========
-
-  /**
-   * buildPlanPrompt — Opus plan phase（复杂代码）
-   * 分析代码 → 写 .task-plan.md → commit → 不写实现代码
-   */
-  private buildPlanPrompt(task: GoalTask, state: GoalDriveState): string {
-    const ps = this.deps.promptService;
-    const label = this.getTaskLabel(state, task.id);
-    const parts: string[] = [];
-
-    // 主模板
-    parts.push(ps.render('orchestrator.plan', {
-      GOAL_NAME: state.goalName,
-      TASK_LABEL: label,
-      TASK_DESCRIPTION: task.description,
-    }));
-
-    // 条件 section：详细计划
-    if (task.detailPlan) {
-      const s = ps.tryRender('orchestrator.plan.detail_plan', {
-        DETAIL_PLAN_TEXT: task.detailPlan,
-      });
-      if (s) parts.push(s);
-    }
-
-    // 条件 section：依赖
-    if (task.depends.length > 0) {
-      const depList = task.depends.map(depId => {
-        const dep = state.tasks.find(t => t.id === depId);
-        return dep ? `  - ${this.getTaskLabel(state, dep.id)}: ${dep.description} (${dep.status})` : `  - ${depId}: (unknown)`;
-      }).join('\n');
-      const s = ps.tryRender('orchestrator.plan.dependencies', { DEP_LIST: depList });
-      if (s) parts.push(s);
-    }
-
-    // 固定 section：指令
-    const instr = ps.tryRender('orchestrator.plan.instructions', { TASK_LABEL: label });
-    if (instr) parts.push(instr);
-
-    return parts.join('\n\n');
-  }
-
-  /**
-   * buildExecuteWithPlanPrompt — Sonnet execute (复杂代码)
-   * 先读 .task-plan.md → 按步骤实施 → 不偏离方向
-   */
-  private buildExecuteWithPlanPrompt(task: GoalTask, state: GoalDriveState): string {
-    const ps = this.deps.promptService;
-    const label = this.getTaskLabel(state, task.id);
-    const parts: string[] = [];
-
-    // 主模板
-    parts.push(ps.render('orchestrator.execute_with_plan', {
-      GOAL_NAME: state.goalName,
-      TASK_LABEL: label,
-      TASK_DESCRIPTION: task.description,
-    }));
-
-    // 条件 section：详细计划
-    if (task.detailPlan) {
-      const s = ps.tryRender('orchestrator.execute_with_plan.detail_plan', {
-        DETAIL_PLAN_TEXT: task.detailPlan,
-      });
-      if (s) parts.push(s);
-    }
-
-    // 固定 section：指令 + feedback 协议
-    const instr = ps.tryRender('orchestrator.execute_with_plan.instructions', { TASK_ID: task.id });
-    if (instr) parts.push(instr);
-
-    return parts.join('\n\n');
-  }
-
-  /**
-   * buildAuditPrompt — Opus audit phase
-   * 运行 build/test 验证 + 读 git diff → 审查正确性/完整性/bug → 写 audit verdict 文件
-   */
-  private buildAuditPrompt(task: GoalTask, state: GoalDriveState): string {
-    const ps = this.deps.promptService;
-    const label = this.getTaskLabel(state, task.id);
-    const parts: string[] = [];
-
-    // 主模板
-    parts.push(ps.render('orchestrator.audit', {
-      GOAL_NAME: state.goalName,
-      TASK_LABEL: label,
-      TASK_DESCRIPTION: task.description,
-    }));
-
-    // 条件 section：详细计划
-    if (task.detailPlan) {
-      const s = ps.tryRender('orchestrator.audit.detail_plan', {
-        DETAIL_PLAN_TEXT: task.detailPlan,
-      });
-      if (s) parts.push(s);
-    }
-
-    // 固定 section：指令
-    const instr = ps.tryRender('orchestrator.audit.instructions', {
-      GOAL_BRANCH: state.goalBranch,
-      TASK_ID: task.id,
-      TASK_LABEL: label,
-    });
-    if (instr) parts.push(instr);
-
-    return parts.join('\n\n');
-  }
-
-  /**
-   * buildFixPrompt — Sonnet fix phase
-   * 读 audit issues → 逐条修复 error 级别 → 运行验证命令 → 只修不加新功能
-   */
-  private buildFixPrompt(
-    task: GoalTask,
-    state: GoalDriveState,
-    auditSummary: string | undefined,
-    issues: string[],
-    verifyCommands: string[] = [],
-  ): string {
-    const ps = this.deps.promptService;
-    const label = this.getTaskLabel(state, task.id);
-    const issueList = issues.map((issue, i) => `  ${i + 1}. ${issue}`).join('\n');
-    const parts: string[] = [];
-
-    // 主模板
-    parts.push(ps.render('orchestrator.fix', {
-      GOAL_NAME: state.goalName,
-      TASK_LABEL: label,
-      TASK_DESCRIPTION: task.description,
-    }));
-
-    // 条件 section：详细计划
-    if (task.detailPlan) {
-      const s = ps.tryRender('orchestrator.fix.detail_plan', {
-        DETAIL_PLAN_TEXT: task.detailPlan,
-      });
-      if (s) parts.push(s);
-    }
-
-    // 条件 section：审查摘要
-    if (auditSummary) {
-      const s = ps.tryRender('orchestrator.fix.audit_summary', {
-        AUDIT_SUMMARY: auditSummary,
-      });
-      if (s) parts.push(s);
-    }
-
-    // 固定 section：指令（含 issue 列表）
-    const instr = ps.tryRender('orchestrator.fix.instructions', { ISSUE_LIST: issueList });
-    if (instr) parts.push(instr);
-
-    // 合并的验证 + 规则 section
-    const verifyText = verifyCommands.length > 0
-      ? `After all fixes, run these verification commands:\n${verifyCommands.map(cmd => `- \`${cmd}\``).join('\n')}\nFix any failures before committing.`
-      : `After all fixes, run the project's build and test commands to verify. Fix any failures before committing.`;
-    const verify = ps.tryRender('orchestrator.fix.verify', { VERIFY_TEXT: verifyText });
-    if (verify) parts.push(verify);
-
-    return parts.join('\n\n');
-  }
 
   private async onTaskCompleted(goalId: string, taskId: string, usage?: ChatUsageResult): Promise<void> {
     await this.withStateLock(goalId, async () => {
@@ -2057,6 +1276,9 @@ export class GoalOrchestrator {
       if (!task) return;
       // 防止扫描器与正常流竞争时重复处理同一任务
       if (task.status !== 'running') return;
+
+      // 清除 check-in 追踪
+      this.clearCheckInState(taskId);
 
       // 写入 usage 数据
       if (usage) {
@@ -2119,62 +1341,16 @@ export class GoalOrchestrator {
       const costInfo = usage ? ` ($${usage.total_cost_usd.toFixed(4)}, ${Math.round(usage.duration_ms / 1000)}s)` : '';
       await this.notify(state.goalChannelId, `Completed: ${this.getTaskLabel(state, task.id)} - ${task.description}${costInfo}`, 'success');
 
-      // Brain eval 需要在 merge 前获取 diff stat（merge 后分支被删除）
-      let preMergeDiffStat: string | undefined;
-      if (task.type === '代码' && state.brainChannelId && task.branchName) {
-        try {
-          const goalDir = await this.getGoalWorktreeDir(state);
-          if (goalDir) {
-            const stat = await execGit(
-              ['diff', '--stat', `${state.goalBranch}...${task.branchName}`],
-              goalDir,
-              `brain pre-merge diff stat for ${task.id}`,
-            );
-            preMergeDiffStat = stat.trim() || undefined;
-          }
-        } catch { /* ignore — best effort */ }
+      // Phase Review: 不立即 merge，先触发 per-task 审核
+      const guildId = this.getGuildId();
+      if (guildId && task.branchName) {
+        this.triggerTaskReview(state, task, guildId);
+      } else {
+        // 无分支（调研等）→ 直接 merge/dispatch
+        if (task.branchName) await this.mergeAndCleanup(state, task);
+        const refreshed = await this.getState(goalId);
+        if (refreshed && refreshed.status === 'running') await this.reviewAndDispatch(refreshed, taskId);
       }
-
-      if (task.branchName) await this.mergeAndCleanup(state, task);
-
-      // Post-task evaluation via Brain（代码任务 + 有 brain 时触发）
-      if (task.type === '代码' && state.brainChannelId) {
-        try {
-          const ps = this.deps.promptService;
-          const taskDiff = preMergeDiffStat ?? '(no diff available)';
-
-          const evalPrompt = ps.render('orchestrator.brain_post_eval', {
-            TASK_LABEL: this.getTaskLabel(state, task.id),
-            TASK_DESCRIPTION: task.description,
-            DIFF_STATS: taskDiff,
-            TASK_ID: task.id,
-          });
-          await this.sendToBrain(state, evalPrompt);
-
-          const evalResult = this.deps.taskEventRepo.read<{
-            needsReplan: boolean; reason: string;
-          }>(task.id, 'brain.eval');
-
-          if (evalResult?.needsReplan) {
-            await this.notify(state.goalChannelId,
-              `**Brain eval:** ${evalResult.reason}`,
-              'info',
-            );
-            await this.triggerReplan(state, taskId, {
-              type: 'replan',
-              reason: `Post-task review: ${evalResult.reason}`,
-            });
-            const refreshed2 = await this.getState(goalId);
-            if (refreshed2?.status === 'running') await this.reviewAndDispatch(refreshed2, taskId);
-            return;
-          }
-        } catch (err: any) {
-          logger.warn(`[Orchestrator] Brain post-eval failed, continuing: ${err.message}`);
-        }
-      }
-
-      const refreshed = await this.getState(goalId);
-      if (refreshed && refreshed.status === 'running') await this.reviewAndDispatch(refreshed, taskId);
     });
   }
 
@@ -2184,6 +1360,10 @@ export class GoalOrchestrator {
       if (!state) return;
       const task = state.tasks.find(t => t.id === taskId);
       if (!task) return;
+
+      // 清除 check-in 追踪
+      this.clearCheckInState(taskId);
+
       task.status = 'failed';
       task.error = error;
 
@@ -2202,68 +1382,6 @@ export class GoalOrchestrator {
       const costInfo = usage ? ` ($${usage.total_cost_usd.toFixed(4)})` : '';
       const hasContext = !!task.channelId;
 
-      // Brain failure analysis
-      if (state.brainChannelId) {
-        try {
-          const ps = this.deps.promptService;
-          const taskContext = hasContext
-            ? `Has code context: yes (branch: ${task.branchName}, channel: ${task.channelId})`
-            : 'Has code context: no';
-
-          const failurePrompt = ps.render('orchestrator.brain_failure', {
-            TASK_LABEL: this.getTaskLabel(state, task.id),
-            TASK_DESCRIPTION: task.description,
-            ERROR_MESSAGE: error,
-            PIPELINE_PHASE: task.pipelinePhase ?? 'unknown',
-            AUDIT_RETRIES: String(task.auditRetries ?? 0),
-            TASK_CONTEXT: taskContext,
-            TASK_ID: task.id,
-          });
-          await this.sendToBrain(state, failurePrompt);
-
-          const analysis = this.deps.taskEventRepo.read<{
-            recommendation: string; reason: string; confidence: string;
-          }>(task.id, 'brain.failure');
-
-          if (analysis) {
-            // 高置信度 retry + 未超限 → 自动重试
-            if (analysis.confidence === 'high' && analysis.recommendation === 'retry'
-                && (task.auditRetries ?? 0) < 3) {
-              await this.notify(state.goalChannelId,
-                `Failed: ${this.getTaskLabel(state, task.id)} - ${task.description}${costInfo}\n` +
-                `Error: ${error}\n\n**Brain:** ${analysis.reason}\nAuto-retrying...`,
-                'info',
-              );
-              // 重置 task 为 pending
-              task.status = 'pending';
-              task.error = undefined;
-              task.branchName = undefined;
-              task.channelId = undefined;
-              task.dispatchedAt = undefined;
-              task.pipelinePhase = undefined;
-              task.auditRetries = (task.auditRetries ?? 0) + 1;
-              await this.saveState(state);
-              if (state.status === 'running') await this.reviewAndDispatch(state);
-              return;
-            }
-
-            // 其他：Brain 推荐 + 增强按钮
-            const buttons = buildFailureButtons(goalId, task.id, analysis.recommendation, hasContext);
-            await this.notify(state.goalChannelId,
-              `Failed: ${this.getTaskLabel(state, task.id)} - ${task.description}${costInfo}\n` +
-              `Error: ${error}\n\n**Brain:** ${analysis.recommendation} (${analysis.confidence})\n${analysis.reason}`,
-              'error',
-              { components: buttons },
-            );
-            if (state.status === 'running') await this.reviewAndDispatch(state);
-            return;
-          }
-        } catch (err: any) {
-          logger.warn(`[Orchestrator] Brain failure analysis failed, using fallback: ${err.message}`);
-        }
-      }
-
-      // Fallback: 原有按钮（无 brain 或 brain 失败时）
       const hint = hasContext
         ? `Reply "retry ${task.id}" to restart, or "refix ${task.id}" to fix in-place.`
         : `Reply "retry ${task.id}" to retry.`;
@@ -2300,54 +1418,16 @@ export class GoalOrchestrator {
       // 2. 获取 Goal 元数据
       const goalMeta = await this.deps.goalMetaRepo.get(state.goalId);
 
-      let result: ReplanResult | null = null;
-
-      // 3a. 优先通过 Brain 重规划
-      if (state.brainChannelId) {
-        try {
-          const ps = this.deps.promptService;
-          const tasksSummary = state.tasks.map(t =>
-            `- ${t.id}: [${t.type}] ${t.description} (${t.status})` +
-            (t.depends.length > 0 ? ` depends: ${t.depends.join(', ')}` : ''),
-          ).join('\n');
-          const immutableCompleted = state.tasks
-            .filter(t => t.status === 'completed' || t.status === 'skipped')
-            .map(t => t.id).join(', ') || '(none)';
-          const immutableRunning = state.tasks
-            .filter(t => t.status === 'running' || t.status === 'dispatched')
-            .map(t => t.id).join(', ') || '(none)';
-
-          const replanPrompt = ps.render('orchestrator.brain_replan', {
-            TRIGGER_TASK_ID: triggerTaskId,
-            FEEDBACK_TYPE: feedback.type,
-            FEEDBACK_REASON: feedback.reason,
-            FEEDBACK_DETAILS: feedback.details ? `Details: ${feedback.details}` : '',
-            CURRENT_TASKS: tasksSummary,
-            IMMUTABLE_COMPLETED: immutableCompleted,
-            IMMUTABLE_RUNNING: immutableRunning,
-          });
-          await this.sendToBrain(state, replanPrompt);
-          result = this.deps.taskEventRepo.read<ReplanResult>(triggerTaskId, 'brain.replan');
-          if (result) {
-            logger.info(`[Orchestrator] Brain replan succeeded`);
-          }
-        } catch (err: any) {
-          logger.warn(`[Orchestrator] Brain replan failed, falling back to DeepSeek: ${err.message}`);
-        }
-      }
-
-      // 3b. Fallback: DeepSeek replan
-      if (!result) {
-        const ctx: ReplanContext = {
-          state,
-          goalMeta,
-          triggerTaskId,
-          feedback,
-          completedDiffStats,
-          promptService: this.deps.promptService,
-        };
-        result = await replanTasks(ctx);
-      }
+      // 调用 LLM replan
+      const ctx: ReplanContext = {
+        state,
+        goalMeta,
+        triggerTaskId,
+        feedback,
+        completedDiffStats,
+        promptService: this.deps.promptService,
+      };
+      const result = await replanTasks(ctx);
 
       if (!result) {
         await this.notify(state.goalChannelId,
@@ -2967,14 +2047,14 @@ export class GoalOrchestrator {
   // ========== Feedback 检测 ==========
 
   /**
-   * 检测任务的 feedback.main 事件（从 DB 读取）
+   * 检测任务的 task.feedback 事件（从 DB 读取）
    */
   private async checkFeedbackFile(_state: GoalDriveState, task: GoalTask): Promise<GoalTaskFeedback | null> {
     const parsed = this.deps.taskEventRepo.read<{
       type?: string;
       reason?: string;
       details?: string;
-    }>(task.id, 'feedback.main');
+    }>(task.id, 'task.feedback');
 
     if (!parsed || !parsed.type || !parsed.reason) return null;
 
@@ -3236,291 +2316,6 @@ export class GoalOrchestrator {
     return getAuthorizedGuildId() ?? null;
   }
 
-  /**
-   * 检查 Goal task 完成准备状态（Stop hook 触发）
-   * 向 Claude 发送 3 个检查问题，根据回答自动推进 pipeline
-   */
-  async checkTaskReadiness(goalId: string, taskId: string, channelId: string): Promise<void> {
-    await this.withStateLock(goalId, async () => {
-      const state = await this.getState(goalId);
-      if (!state) return;
-
-      const task = state.tasks.find(t => t.id === taskId);
-      if (!task || task.status !== 'running') {
-        logger.debug(`[Orchestrator] checkTaskReadiness: task ${taskId} not in running state, skip`);
-        return;
-      }
-
-      logger.info(`[Orchestrator] Auto-checking task readiness: ${this.getTaskLabel(state, taskId)}`);
-
-      // 构建检查 prompt
-      const phase = task.pipelinePhase || 'execute';
-      const checkPrompt = this.buildReadinessCheckPrompt(task, state, phase);
-
-      if (!checkPrompt) {
-        logger.warn(`[Orchestrator] Prompt not found for phase ${phase}, skip auto-check`);
-        return;
-      }
-
-      // 向 Claude 发送检查问题（在当前 session 中）
-      const guildId = this.getGuildId();
-      if (!guildId) {
-        logger.warn(`[Orchestrator] No authorized guild, skip auto-check`);
-        return;
-      }
-
-      try {
-        const usage = await this.deps.messageHandler.handleBackgroundChat(
-          guildId,
-          channelId,
-          checkPrompt
-        );
-
-        // 读取 Claude 的回答（从 transcript 或最后一条消息）
-        const response = await this.readTaskCheckResponse(channelId, state, task);
-
-        if (!response) {
-          logger.warn(`[Orchestrator] Failed to parse check response, skip auto-advance`);
-          return;
-        }
-
-        await this.handleTaskCheckResponse(goalId, taskId, response, state, usage);
-      } catch (err: any) {
-        logger.error(`[Orchestrator] checkTaskReadiness failed:`, err.message);
-
-        // 标记任务失败（避免任务永久卡在 running 状态）
-        await this.onTaskFailed(
-          goalId,
-          taskId,
-          `Auto-check failed: ${err.message}`
-        );
-      }
-    });
-  }
-
-  /**
-   * 构建任务完成检查 prompt
-   */
-  private buildReadinessCheckPrompt(
-    task: GoalTask,
-    state: GoalDriveState,
-    phase: string
-  ): string | null {
-    const ps = this.deps.promptService;
-    const promptKey = `orchestrator.task_readiness_check.${phase}`;
-
-    return ps.tryRender(promptKey, {
-      TASK_DESCRIPTION: task.description,
-      TASK_ID: task.id,
-      TASK_LABEL: this.getTaskLabel(state, task.id),
-      PIPELINE_PHASE: phase,
-    });
-  }
-
-  /**
-   * 读取任务检查回答
-   * 主路径：feedback.readiness 事件（DB）
-   * Fallback：从 Discord channel 的最后一条 Claude 消息解析
-   */
-  private async readTaskCheckResponse(
-    channelId: string,
-    _state: GoalDriveState,
-    task: GoalTask
-  ): Promise<{ completed: boolean; audited: boolean; committed: boolean } | null> {
-    // 方法1: 从 DB 读取 feedback.readiness 事件
-    const dbResult = this.deps.taskEventRepo.read<{
-      completed?: boolean;
-      audited?: boolean;
-      committed?: boolean;
-    }>(task.id, 'feedback.readiness');
-
-    if (dbResult?.completed !== undefined && dbResult?.audited !== undefined && dbResult?.committed !== undefined) {
-      logger.info(`[Orchestrator] Read readiness check from DB event`);
-      return {
-        completed: dbResult.completed,
-        audited: dbResult.audited,
-        committed: dbResult.committed,
-      };
-    }
-
-    // 方法2: 从 Discord channel 读取最后一条 Claude 消息（fallback）
-    try {
-      const channel = await this.deps.client.channels.fetch(channelId);
-      if (!channel || !('messages' in channel)) return null;
-
-      const messages = await channel.messages.fetch({ limit: 5 });
-      const botMessages = messages.filter(m => m.author.id === this.deps.client.user?.id);
-      if (botMessages.size === 0) return null;
-
-      const lastBotMessage = botMessages.first();
-      if (!lastBotMessage) return null;
-
-      return this.parseCheckResponse(lastBotMessage.content);
-    } catch (err: any) {
-      logger.error(`[Orchestrator] Failed to read check response:`, err.message);
-      return null;
-    }
-  }
-
-  /**
-   * 解析检查回答文本
-   */
-  private parseCheckResponse(text: string): {
-    completed: boolean;
-    audited: boolean;
-    committed: boolean;
-  } | null {
-    // 尝试提取代码块中的答案
-    const codeBlockMatch = text.match(/```(?:\w+)?\s*\n([\s\S]*?)\n```/);
-    let lines: string[];
-
-    if (codeBlockMatch) {
-      lines = codeBlockMatch[1].split('\n');
-    } else {
-      lines = text.split('\n');
-    }
-
-    // 提取 yes/no 答案
-    const answers = lines
-      .map(l => {
-        const match = l.match(/\d+\.\s*(yes|no)/i);
-        return match ? match[1].toLowerCase() === 'yes' : null;
-      })
-      .filter(a => a !== null) as boolean[];
-
-    if (answers.length !== 3) {
-      logger.debug(`[Orchestrator] Expected 3 answers, got ${answers.length}`);
-      return null;
-    }
-
-    return {
-      completed: answers[0],
-      audited: answers[1],
-      committed: answers[2],
-    };
-  }
-
-  /**
-   * 处理任务检查回答
-   */
-  private async handleTaskCheckResponse(
-    goalId: string,
-    taskId: string,
-    response: { completed: boolean; audited: boolean; committed: boolean },
-    state: GoalDriveState,
-    usage?: ChatUsageResult
-  ): Promise<void> {
-    const task = state.tasks.find(t => t.id === taskId);
-    if (!task) return;
-
-    const { completed, audited, committed } = response;
-
-    // 全部通过 → 自动推进到下一阶段
-    if (completed && audited && committed) {
-      const currentPhase = task.pipelinePhase || 'execute';
-
-      logger.info(`[Orchestrator] Task ${taskId} passed auto-check, advancing from ${currentPhase}`);
-
-      if (currentPhase === 'execute') {
-        // Execute 阶段完成 → 推进到 audit
-        task.pipelinePhase = 'audit';
-        task.status = 'dispatched';
-        await this.saveState(state);
-
-        await this.notify(
-          state.goalChannelId,
-          `✅ **任务自检通过，推进到 Audit 阶段:** ${this.getTaskLabel(state, taskId)} - ${task.description}`,
-          'pipeline'
-        );
-
-        // 启动 audit 流程（如果是多模型流水线）
-        if (task.complexity === 'complex') {
-          // Complex task → 启动 Opus audit
-          const guildId = this.getGuildId();
-          if (guildId && task.channelId) {
-            await this.startAuditPipeline(goalId, taskId, guildId, task.channelId, usage);
-          }
-        } else {
-          // Simple task → 直接完成
-          await this.onTaskCompleted(goalId, taskId, usage);
-        }
-      } else if (currentPhase === 'audit') {
-        // Audit 阶段完成 → 标记为 completed
-        await this.onTaskCompleted(goalId, taskId, usage);
-      } else if (currentPhase === 'fix') {
-        // Fix 阶段完成 → 推进到 re-audit
-        await this.notify(
-          state.goalChannelId,
-          `✅ **修复完成，准备重新审查:** ${this.getTaskLabel(state, taskId)}`,
-          'pipeline'
-        );
-        // Re-audit 逻辑已在 auditFixLoop 中处理
-      }
-    } else {
-      // 有未通过项 → Claude 应该已经在回答中说明了原因，继续等待它完成
-      logger.info(`[Orchestrator] Task ${taskId} auto-check failed, waiting for completion`);
-
-      // 记录未通过的检查项到 task metadata（用于调试）
-      const issues: string[] = [];
-      if (!completed) issues.push('任务未完成');
-      if (!audited) issues.push('审查未通过');
-      if (!committed) issues.push('未提交代码');
-
-      task.metadata = {
-        ...task.metadata,
-        lastCheckFailed: Date.now(),
-        lastCheckIssues: issues,
-      };
-      await this.saveState(state);
-
-      // 不发送通知，让 Claude 自己继续工作
-    }
-  }
-
-  /**
-   * 启动 Audit pipeline（从 execute 阶段推进时调用）
-   */
-  private async startAuditPipeline(
-    goalId: string,
-    taskId: string,
-    guildId: string,
-    channelId: string,
-    prevUsage?: ChatUsageResult
-  ): Promise<void> {
-    const state = await this.getState(goalId);
-    if (!state) return;
-
-    const task = state.tasks.find(t => t.id === taskId);
-    if (!task) return;
-
-    // 切换到 Opus model 进行 audit
-    const { pipelineOpusModel: opusModel } = this.deps.config;
-    this.switchSessionModel(guildId, channelId, opusModel, 'audit');
-    task.pipelinePhase = 'audit';
-    task.status = 'running';
-    await this.saveState(state);
-
-    await this.notify(
-      state.goalChannelId,
-      `[GoalOrchestrator] ${taskId}: 进入 Opus Audit 阶段`,
-      'pipeline'
-    );
-
-    // 启动完整的 pipeline 流程（包含 audit）
-    const usage: ChatUsageResult = prevUsage || {
-      input_tokens: 0,
-      output_tokens: 0,
-      cache_read_input_tokens: 0,
-      cache_creation_input_tokens: 0,
-      total_cost_usd: 0,
-      duration_ms: 0,
-    };
-
-    // TODO: 实现 audit pipeline 逻辑
-    // Audit pipeline 应该切换到 Opus model 并发送 audit prompt
-    logger.warn(`[Orchestrator] startAuditPipeline: audit pipeline not fully implemented yet`);
-  }
-
   // ========== 后台事件扫描器 ==========
 
   /**
@@ -3536,6 +2331,11 @@ export class GoalOrchestrator {
         await this.processPendingEvents();
       } catch (e) {
         logger.error('[Scanner] Error processing pending events:', e);
+      }
+      try {
+        await this.checkOrphanedTasks();
+      } catch (e) {
+        logger.error('[Scanner] Error checking orphaned tasks:', e);
       }
       setTimeout(tick, INTERVAL);
     };
@@ -3565,20 +2365,428 @@ export class GoalOrchestrator {
       if (state.status !== 'running') continue;
 
       const task = state.tasks.find(t => t.id === ev.taskId);
-      if (!task || task.status !== 'running') {
-        // 任务不在 running 状态，事件已过期
+      if (!task) {
         this.deps.taskEventRepo.markProcessed(ev.id);
         continue;
       }
 
-      logger.info(`[Scanner] Found pending event '${ev.eventType}' for task ${ev.taskId}, triggering onTaskCompleted`);
-
       try {
-        await this.onTaskCompleted(ev.goalId, ev.taskId);
+        switch (ev.eventType) {
+          case 'task.completed':
+          case 'task.feedback':
+            // 任务完成/反馈事件 — 只处理 running 状态的任务
+            if (task.status !== 'running') {
+              this.deps.taskEventRepo.markProcessed(ev.id);
+              continue;
+            }
+            logger.info(`[Scanner] Processing '${ev.eventType}' for task ${ev.taskId}`);
+            await this.onTaskCompleted(ev.goalId, ev.taskId);
+            break;
+
+          case 'review.task_result':
+            // Per-task 审核结果 — 处理 completed 但未 merged 的任务
+            if (task.status !== 'completed' || task.merged) {
+              this.deps.taskEventRepo.markProcessed(ev.id);
+              continue;
+            }
+            logger.info(`[Scanner] Processing review.task_result for task ${ev.taskId}`);
+            await this.handleTaskReviewResult(ev.goalId, ev.taskId, ev.payload as any);
+            break;
+
+          case 'review.phase_result':
+            // Phase 评估结果
+            logger.info(`[Scanner] Processing review.phase_result for task ${ev.taskId}`);
+            await this.handlePhaseResult(ev.goalId, ev.taskId, ev.payload as any);
+            break;
+
+          default:
+            logger.warn(`[Scanner] Unknown event type: ${ev.eventType}`);
+        }
         this.deps.taskEventRepo.markProcessed(ev.id);
       } catch (err: any) {
         logger.error(`[Scanner] Failed to process event ${ev.id}: ${err.message}`);
       }
     }
+  }
+
+  // ========== Check-in 监工 ==========
+
+  private static readonly CHECK_IN_COOLDOWN = 10 * 60 * 1000;  // 10 分钟
+  private static readonly MAX_CHECK_INS = 3;
+  private static readonly MAX_REVIEW_RETRIES = 3;
+
+  /**
+   * 扫描所有 running 任务，检测 session 已结束但无事件上报的情况。
+   * 触发 check-in prompt 催促 AI 汇报状态，超限则标记失败。
+   */
+  private async checkOrphanedTasks(): Promise<void> {
+    const now = Date.now();
+    const guildId = this.getGuildId();
+    if (!guildId) return;
+
+    for (const state of this.activeDrives.values()) {
+      if (state.status !== 'running') continue;
+
+      for (const task of state.tasks) {
+        if (task.status !== 'running' || !task.channelId) continue;
+
+        // 检查是否有未处理的事件（scanner 会处理这些，不需要 check-in）
+        const hasCompletedEvent = this.deps.taskEventRepo.read(task.id, 'task.completed') !== null;
+        const hasFeedbackEvent = this.deps.taskEventRepo.read(task.id, 'task.feedback') !== null;
+        if (hasCompletedEvent || hasFeedbackEvent) continue;
+
+        // 检查 session 状态
+        const sessionStatus = this.deps.stateManager.getChannelSessionStatus(task.channelId);
+        // 只在 session idle 或 closed 时触发 check-in（active/waiting 说明 AI 还在工作）
+        if (sessionStatus === 'active' || sessionStatus === 'waiting') continue;
+        // 如果 sessionStatus 为 null（无 session 记录），也需要 check-in
+        if (sessionStatus !== null && sessionStatus !== 'idle' && sessionStatus !== 'closed') continue;
+
+        // Cooldown 检查
+        const lastCheckIn = this.lastCheckInAt.get(task.id) ?? (task.dispatchedAt || 0);
+        if (now - lastCheckIn < GoalOrchestrator.CHECK_IN_COOLDOWN) continue;
+
+        const count = this.checkInCounts.get(task.id) ?? 0;
+        if (count >= GoalOrchestrator.MAX_CHECK_INS) {
+          // 超限 → 标记失败
+          logger.warn(`[CheckIn] Task ${task.id} exceeded max check-ins (${GoalOrchestrator.MAX_CHECK_INS}), marking failed`);
+          await this.onTaskFailed(state.goalId, task.id, `No response after ${GoalOrchestrator.MAX_CHECK_INS} check-in attempts`);
+          this.clearCheckInState(task.id);
+          continue;
+        }
+
+        // 发送 check-in
+        this.sendCheckIn(state, task, guildId, count + 1);
+        this.checkInCounts.set(task.id, count + 1);
+        this.lastCheckInAt.set(task.id, now);
+      }
+    }
+  }
+
+  /**
+   * 向任务 channel 发送 check-in 催促消息。
+   * 异步执行，不阻塞扫描器。
+   */
+  private sendCheckIn(
+    state: GoalDriveState,
+    task: GoalTask,
+    guildId: string,
+    attempt: number,
+    reviewIssues?: string,
+  ): void {
+    const taskId = task.id;
+    const channelId = task.channelId!;
+
+    (async () => {
+      try {
+        const ps = this.deps.promptService;
+        const prompt = ps.render('orchestrator.check_in', {
+          TASK_LABEL: this.getTaskLabel(state, taskId),
+          REVIEW_ISSUES: reviewIssues
+            ? `\n## Review Issues\nThe following issues were found in a previous review:\n${reviewIssues}`
+            : '',
+        });
+
+        await this.notify(state.goalChannelId,
+          `[GoalOrchestrator] Check-in #${attempt} for ${taskId} (session idle, no event received)`,
+          'warning',
+        );
+
+        logger.info(`[CheckIn] Sending check-in #${attempt} for task ${taskId}`);
+        await this.deps.messageHandler.handleBackgroundChat(guildId, channelId, prompt);
+      } catch (err: any) {
+        logger.error(`[CheckIn] Failed to send check-in for task ${taskId}: ${err.message}`);
+      }
+    })();
+  }
+
+  /** 清除任务的 check-in 追踪状态 */
+  private clearCheckInState(taskId: string): void {
+    this.checkInCounts.delete(taskId);
+    this.lastCheckInAt.delete(taskId);
+  }
+
+  // ========== Phase Review ==========
+
+  /**
+   * 确保 Goal Channel 有一个 Opus 会话可用于审核。
+   * 如果没有 session 则创建一个，模型设为 Opus。
+   */
+  private ensureGoalChannelSession(state: GoalDriveState, guildId: string): void {
+    const goalWorktreeDir = state.baseCwd; // 用 baseCwd 作为 goal channel cwd
+    this.deps.stateManager.getOrCreateSession(guildId, state.goalChannelId, {
+      name: `review-${state.goalName}`,
+      cwd: goalWorktreeDir,
+    });
+    this.deps.stateManager.setSessionModel(guildId, state.goalChannelId, this.deps.config.pipelineOpusModel);
+  }
+
+  /**
+   * 触发 per-task 审核：向 Goal Channel 发送审核消息。
+   * 异步执行，不阻塞调用方。
+   */
+  private triggerTaskReview(state: GoalDriveState, task: GoalTask, guildId: string): void {
+    const taskId = task.id;
+    const goalChannelId = state.goalChannelId;
+
+    (async () => {
+      try {
+        this.ensureGoalChannelSession(state, guildId);
+
+        // 收集 diff stats
+        let diffStats = '(unavailable)';
+        try {
+          const goalDir = await this.getGoalWorktreeDir(state);
+          if (goalDir && task.branchName) {
+            diffStats = await execGit(
+              ['diff', '--stat', `${state.goalBranch}...${task.branchName}`],
+              goalDir,
+              `triggerTaskReview: diff stat for ${taskId}`,
+            );
+          }
+        } catch {
+          // diff stats 收集失败不影响审核
+        }
+
+        // 构造 per-task 审核消息（内联 prompt，非 DB 模板）
+        const prompt = [
+          `## Task Review: ${this.getTaskLabel(state, taskId)}`,
+          `**Description:** ${task.description}`,
+          `**Branch:** \`${task.branchName}\``,
+          `**Diff stats:**`,
+          '```',
+          diffStats,
+          '```',
+          '',
+          `Please review this completed task:`,
+          `1. Use a sub-agent to checkout branch \`${task.branchName}\` and run \`/code-audit\` to audit the code changes`,
+          `2. Evaluate whether the implementation matches the task description`,
+          `3. Check for any quality issues, security concerns, or missed requirements`,
+          '',
+          `Then call \`bot_task_event\` with:`,
+          `- \`task_id\`: "${taskId}"`,
+          `- \`event_type\`: "review.task_result"`,
+          `- \`payload\`: \`{ "verdict": "pass" | "fail", "summary": "brief review summary", "issues": [] }\``,
+          '',
+          `If the verdict is "fail", include specific issues that need to be fixed.`,
+        ].join('\n');
+
+        await this.notify(goalChannelId,
+          `[GoalOrchestrator] Reviewing task ${taskId}: ${task.description}`,
+          'pipeline',
+        );
+
+        logger.info(`[PhaseReview] Triggering per-task review for ${taskId}`);
+        await this.deps.messageHandler.handleBackgroundChat(guildId, goalChannelId, prompt);
+
+        // Fallback: 如果 AI 没写事件但 session 正常结束，检查事件并处理
+        const reviewResult = this.deps.taskEventRepo.read<{
+          verdict?: string;
+          summary?: string;
+          issues?: string[];
+        }>(taskId, 'review.task_result');
+        if (reviewResult) {
+          // 标记已处理，防止 scanner 重复处理
+          this.deps.taskEventRepo.markProcessedByTask(taskId, 'review.task_result');
+          await this.handleTaskReviewResult(state.goalId, taskId, reviewResult);
+        } else {
+          // 没写事件 → check-in 机制会处理
+          logger.warn(`[PhaseReview] No review.task_result event from review of ${taskId}, check-in will handle`);
+        }
+      } catch (err: any) {
+        // 审核失败 → 自动 pass 以不阻塞流水线
+        logger.error(`[PhaseReview] Failed to review task ${taskId}: ${err.message}`);
+        await this.handleTaskReviewResult(state.goalId, taskId, {
+          verdict: 'pass',
+          summary: `Review failed (${err.message}), auto-passing`,
+        });
+      }
+    })();
+  }
+
+  /**
+   * 处理 per-task 审核结果。
+   * verdict=pass → merge → 检查 phase 完成情况
+   * verdict=fail → 打回 subtask 修复
+   */
+  private async handleTaskReviewResult(
+    goalId: string,
+    taskId: string,
+    result: { verdict?: string; summary?: string; issues?: string[] },
+  ): Promise<void> {
+    await this.withStateLock(goalId, async () => {
+      const state = await this.getState(goalId);
+      if (!state) return;
+      const task = state.tasks.find(t => t.id === taskId);
+      if (!task || task.status !== 'completed') return;
+      // 已经 merged 的不重复处理
+      if (task.merged) return;
+
+      if (result.verdict === 'pass') {
+        logger.info(`[PhaseReview] Task ${taskId} passed review: ${result.summary}`);
+        await this.notify(state.goalChannelId,
+          `Review passed: ${this.getTaskLabel(state, taskId)} - ${result.summary || 'OK'}`,
+          'success',
+        );
+
+        if (task.branchName) await this.mergeAndCleanup(state, task);
+
+        // 检查 phase 是否全部 merged
+        const phase = getPhaseNumber(task);
+        if (isPhaseFullyMerged(state, phase)) {
+          const guildId = this.getGuildId();
+          if (guildId) {
+            this.triggerPhaseEvaluation(state, phase, guildId);
+            return; // phase evaluation 会处理 dispatch
+          }
+        }
+
+        // 非 phase 边界 → 继续调度
+        const refreshed = await this.getState(goalId);
+        if (refreshed && refreshed.status === 'running') await this.reviewAndDispatch(refreshed, taskId);
+      } else {
+        // fail → 打回 subtask 修复
+        const issues = result.issues?.join('\n- ') || result.summary || 'Review failed';
+        logger.info(`[PhaseReview] Task ${taskId} failed review: ${issues}`);
+        await this.notify(state.goalChannelId,
+          `Review failed: ${this.getTaskLabel(state, taskId)}\nIssues: ${issues}`,
+          'warning',
+        );
+
+        const refixCount = (task.auditRetries ?? 0) + 1;
+        if (refixCount > GoalOrchestrator.MAX_REVIEW_RETRIES) {
+          // 超限 → 标记失败
+          task.status = 'failed';
+          task.error = `Review failed after ${refixCount} attempts: ${issues}`;
+          await this.saveState(state);
+          await this.notify(state.goalChannelId,
+            `Task ${this.getTaskLabel(state, taskId)} failed review ${refixCount} times, marking as failed`,
+            'error',
+          );
+          return;
+        }
+
+        // 恢复为 running，发送 check-in 带 issues 信息让 subtask 修复
+        task.status = 'running';
+        task.auditRetries = refixCount;
+        await this.saveState(state);
+
+        const guildId = this.getGuildId();
+        if (guildId && task.channelId) {
+          this.sendCheckIn(state, task, guildId, 1, `- ${issues}`);
+        }
+      }
+    });
+  }
+
+  /**
+   * 触发 Phase 全局评估。
+   * 异步执行，不阻塞调用方。
+   */
+  private triggerPhaseEvaluation(state: GoalDriveState, phase: number, guildId: string): void {
+    const goalId = state.goalId;
+
+    (async () => {
+      try {
+        this.ensureGoalChannelSession(state, guildId);
+
+        // 收集 phase 内任务审核摘要
+        const phaseTasks = state.tasks.filter(t => getPhaseNumber(t) === phase);
+        const summaries = phaseTasks.map(t => {
+          const status = t.merged ? 'merged' : t.status;
+          return `- ${t.id}: ${t.description} [${status}]`;
+        }).join('\n');
+
+        const progress = getProgressSummary(state);
+
+        // 用最后一个 merged 任务作为事件锚点
+        const lastMerged = phaseTasks.filter(t => t.merged).pop();
+        const phaseTaskId = lastMerged?.id ?? phaseTasks[0]?.id ?? 'unknown';
+
+        const ps = this.deps.promptService;
+        const prompt = ps.render('orchestrator.phase_review', {
+          PHASE_NUMBER: String(phase),
+          GOAL_NAME: state.goalName,
+          TASK_REVIEW_SUMMARIES: summaries,
+          PROGRESS_SUMMARY: progress,
+          PHASE_TASK_ID: phaseTaskId,
+        });
+
+        await this.notify(state.goalChannelId,
+          `[GoalOrchestrator] Phase ${phase} complete — triggering evaluation`,
+          'pipeline',
+        );
+
+        logger.info(`[PhaseReview] Triggering phase ${phase} evaluation for goal ${goalId}`);
+        await this.deps.messageHandler.handleBackgroundChat(guildId, state.goalChannelId, prompt);
+
+        // Fallback: 检查事件
+        const phaseResult = this.deps.taskEventRepo.read<{
+          decision?: string;
+          summary?: string;
+          issues?: string[];
+        }>(phaseTaskId, 'review.phase_result');
+        if (phaseResult) {
+          // 标记已处理，防止 scanner 重复处理
+          this.deps.taskEventRepo.markProcessedByTask(phaseTaskId, 'review.phase_result');
+          await this.handlePhaseResult(goalId, phaseTaskId, phaseResult);
+        } else {
+          // 没写事件 → 默认 continue
+          logger.warn(`[PhaseReview] No review.phase_result event for phase ${phase}, defaulting to continue`);
+          await this.handlePhaseResult(goalId, phaseTaskId, { decision: 'continue', summary: 'Auto-continue (no event)' });
+        }
+      } catch (err: any) {
+        // 评估失败 → 默认 continue
+        logger.error(`[PhaseReview] Phase ${phase} evaluation failed: ${err.message}`);
+        await this.handlePhaseResult(goalId, 'fallback', { decision: 'continue', summary: `Evaluation failed: ${err.message}` });
+      }
+    })();
+  }
+
+  /**
+   * 处理 Phase 评估结果。
+   * continue → 继续调度下一 phase
+   * replan → 触发重规划
+   */
+  private async handlePhaseResult(
+    goalId: string,
+    _triggerTaskId: string,
+    result: { decision?: string; summary?: string; issues?: string[] },
+  ): Promise<void> {
+    await this.withStateLock(goalId, async () => {
+      const state = await this.getState(goalId);
+      if (!state || state.status !== 'running') return;
+
+      if (result.decision === 'replan') {
+        logger.info(`[PhaseReview] Phase evaluation recommends replan: ${result.summary}`);
+        await this.notify(state.goalChannelId,
+          `**Phase evaluation → replan:** ${result.summary}`,
+          'warning',
+        );
+
+        // 使用 current phase 最后一个任务触发 replan
+        const currentPhase = getCurrentPhase(state);
+        const phaseTasks = state.tasks.filter(t => getPhaseNumber(t) === currentPhase);
+        const triggerTask = phaseTasks[phaseTasks.length - 1];
+        if (triggerTask) {
+          await this.triggerReplan(state, triggerTask.id, {
+            type: 'replan',
+            reason: result.summary || 'Phase evaluation recommended replan',
+            details: result.issues?.join('; '),
+          });
+        }
+
+        const refreshed = await this.getState(goalId);
+        if (refreshed && refreshed.status === 'running') await this.reviewAndDispatch(refreshed);
+      } else {
+        // continue
+        logger.info(`[PhaseReview] Phase evaluation: continue — ${result.summary}`);
+        await this.notify(state.goalChannelId,
+          `**Phase evaluation → continue:** ${result.summary || 'OK'}`,
+          'success',
+        );
+        await this.reviewAndDispatch(state);
+      }
+    });
   }
 }

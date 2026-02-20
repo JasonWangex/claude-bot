@@ -15,7 +15,7 @@ import { TaskRepo } from '../../db/repo/index.js';
 interface CreateTaskEventRequest {
   event_type: string;
   payload: Record<string, unknown>;
-  source?: 'ai' | 'brain';
+  source?: 'ai';
 }
 
 // POST /api/tasks/:taskId/events
@@ -52,9 +52,8 @@ export const createTaskEvent: RouteHandler = async (req, res, params) => {
       return;
     }
 
-    const source = body.source ?? (event_type.startsWith('brain.') ? 'brain' : 'ai');
     const eventRepo = new TaskEventRepo(db);
-    eventRepo.write(taskId, task.goalId ?? null, event_type as EventType, payload, source);
+    eventRepo.write(taskId, task.goalId ?? null, event_type as EventType, payload, 'ai');
 
     sendJson(res, 201, { ok: true, data: { task_id: taskId, event_type, recorded: true } });
   } catch (error: any) {

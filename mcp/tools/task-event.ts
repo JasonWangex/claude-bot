@@ -1,8 +1,7 @@
 /**
  * MCP 工具：Task 事件写入
  *
- * AI session（task / brain）通过此工具写入结构化事件，
- * 替换原有的写 JSON 文件 + git commit 方式。
+ * AI session 通过此工具写入结构化事件，
  * Orchestrator 自动检测并处理事件。
  */
 
@@ -21,14 +20,10 @@ export function registerTaskEventTools(server: McpServer) {
       task_id: z.string().describe('The task ID provided in your prompt (TASK_ID variable)'),
       event_type: z
         .enum([
-          'feedback.main',
-          'feedback.audit',
-          'feedback.self_review',
-          'feedback.investigate',
-          'feedback.readiness',
-          'brain.eval',
-          'brain.failure',
-          'brain.replan',
+          'task.completed',
+          'task.feedback',
+          'review.task_result',
+          'review.phase_result',
         ])
         .describe('Event type — determines how the orchestrator processes this event'),
       payload: z
