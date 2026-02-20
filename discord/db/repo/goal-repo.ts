@@ -184,10 +184,11 @@ export class GoalRepo implements IGoalRepo {
 // ==================== 转换函数 ====================
 
 function goalDriveStateToGoalRow(state: GoalDriveState): Record<string, unknown> {
-  // 序列化 pendingReplan + pendingRollback 为 JSON
+  // 序列化 pendingReplan + pendingRollback + reviewerChannelId 为 JSON
   const pending: Record<string, unknown> = {};
   if (state.pendingReplan) pending.pendingReplan = state.pendingReplan;
   if (state.pendingRollback) pending.pendingRollback = state.pendingRollback;
+  if (state.reviewerChannelId) pending.reviewerChannelId = state.reviewerChannelId;
   const pendingJson = Object.keys(pending).length > 0 ? JSON.stringify(pending) : null;
 
   return {
@@ -217,14 +218,16 @@ function rowsToGoalDriveState(
     depsMap.set(dep.task_id, list);
   }
 
-  // 反序列化 pendingReplan / pendingRollback
+  // 反序列化 pendingReplan / pendingRollback / reviewerChannelId
   let pendingReplan: GoalDriveState['pendingReplan'];
   let pendingRollback: GoalDriveState['pendingRollback'];
+  let reviewerChannelId: string | undefined;
   if (goal.drive_pending_json) {
     try {
       const pending = JSON.parse(goal.drive_pending_json);
       pendingReplan = pending.pendingReplan;
       pendingRollback = pending.pendingRollback;
+      reviewerChannelId = pending.reviewerChannelId;
     } catch { /* ignore corrupt JSON */ }
   }
 
@@ -234,6 +237,7 @@ function rowsToGoalDriveState(
     goalName: goal.name,
     goalBranch: goal.drive_branch ?? '',
     goalChannelId: goal.drive_thread_id ?? '',
+    reviewerChannelId,
     baseCwd: goal.drive_base_cwd ?? '',
     status: (goal.drive_status as GoalDriveStatus) ?? 'running',
     createdAt: goal.drive_created_at ?? 0,

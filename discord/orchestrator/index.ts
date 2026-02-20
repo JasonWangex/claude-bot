@@ -269,12 +269,34 @@ export class GoalOrchestrator {
       }
     }
 
+    // 创建审核员专用 channel（与 goal channel 同一 Category 下）
+    const guildId = this.getGuildId();
+    if (guildId) {
+      try {
+        const categoryId = await this.findCategoryId(goalChannelId);
+        if (categoryId) {
+          const guild = await this.deps.client.guilds.fetch(guildId);
+          const reviewerChannel = await guild.channels.create({
+            name: `g${goalSeq}-reviewer`,
+            type: ChannelType.GuildText,
+            parent: categoryId,
+            reason: `Goal reviewer: ${goalName}`,
+          });
+          state.reviewerChannelId = reviewerChannel.id;
+          logger.info(`[Orchestrator] Created reviewer channel: ${reviewerChannel.id} for goal ${goalId}`);
+        } else {
+          logger.warn(`[Orchestrator] Cannot find Category for goal channel ${goalChannelId}, reviewer will use goal channel`);
+        }
+      } catch (err: any) {
+        logger.warn(`[Orchestrator] Failed to create reviewer channel: ${err.message}, falling back to goal channel`);
+      }
+    }
+
     await this.saveState(state);
     this.activeDrives.set(goalId, state);
     await this.syncGoalMetaStatus(goalId, 'Processing');
 
-    // 为 Goal Channel 创建 Opus 审核会话
-    const guildId = this.getGuildId();
+    // 为审核员 channel 创建 Opus 会话
     if (guildId) {
       this.ensureGoalChannelSession(state, guildId);
     }
@@ -283,7 +305,8 @@ export class GoalOrchestrator {
       `**Goal Drive started:** ${goalName}\n` +
       `Branch: \`${goalBranch}\`\n` +
       `Tasks: ${state.tasks.length}\n` +
-      `Max concurrent: ${maxConcurrent}`,
+      `Max concurrent: ${maxConcurrent}` +
+      (state.reviewerChannelId ? `\nReviewer: <#${state.reviewerChannelId}>` : ''),
       'success'
     );
 
@@ -2513,12 +2536,12 @@ Call \`bot_task_event\` with:
    * 如果没有 session 则创建一个，模型设为 Opus。
    */
   private ensureGoalChannelSession(state: GoalDriveState, guildId: string): void {
-    const goalWorktreeDir = state.baseCwd; // 用 baseCwd 作为 goal channel cwd
-    this.deps.stateManager.getOrCreateSession(guildId, state.goalChannelId, {
+    const reviewerChannelId = state.reviewerChannelId ?? state.goalChannelId;
+    this.deps.stateManager.getOrCreateSession(guildId, reviewerChannelId, {
       name: `review-${state.goalName}`,
-      cwd: goalWorktreeDir,
+      cwd: state.baseCwd,
     });
-    this.deps.stateManager.setSessionModel(guildId, state.goalChannelId, this.deps.config.pipelineOpusModel);
+    this.deps.stateManager.setSessionModel(guildId, reviewerChannelId, this.deps.config.pipelineOpusModel);
   }
 
   /**
@@ -2528,6 +2551,7 @@ Call \`bot_task_event\` with:
   private triggerTaskReview(state: GoalDriveState, task: GoalTask, guildId: string): void {
     const taskId = task.id;
     const goalChannelId = state.goalChannelId;
+    const reviewerChannelId = state.reviewerChannelId ?? goalChannelId;
 
     (async () => {
       try {
@@ -2577,7 +2601,7 @@ Call \`bot_task_event\` with:
         );
 
         logger.info(`[PhaseReview] Triggering per-task review for ${taskId}`);
-        await this.deps.messageHandler.handleBackgroundChat(guildId, goalChannelId, prompt);
+        await this.deps.messageHandler.handleBackgroundChat(guildId, reviewerChannelId, prompt);
 
         // Fallback: 如果 AI 没写事件但 session 正常结束，检查事件并处理
         const reviewResult = this.deps.taskEventRepo.read<{
@@ -2685,6 +2709,7 @@ Call \`bot_task_event\` with:
    */
   private triggerPhaseEvaluation(state: GoalDriveState, phase: number, guildId: string): void {
     const goalId = state.goalId;
+    const reviewerChannelId = state.reviewerChannelId ?? state.goalChannelId;
 
     (async () => {
       try {
@@ -2718,7 +2743,7 @@ Call \`bot_task_event\` with:
         );
 
         logger.info(`[PhaseReview] Triggering phase ${phase} evaluation for goal ${goalId}`);
-        await this.deps.messageHandler.handleBackgroundChat(guildId, state.goalChannelId, prompt);
+        await this.deps.messageHandler.handleBackgroundChat(guildId, reviewerChannelId, prompt);
 
         // Fallback: 检查事件
         const phaseResult = this.deps.taskEventRepo.read<{

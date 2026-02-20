@@ -374,6 +374,7 @@ export interface GoalDriveState {
   goalName: string;
   goalBranch: string;
   goalChannelId: string;      // 调度员 channel（用于通知用户）
+  reviewerChannelId?: string; // 审核员专用 channel（Opus 审核实例运行在此）
   baseCwd: string;
   status: GoalDriveStatus;
   createdAt: number;
