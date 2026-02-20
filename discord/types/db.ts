@@ -310,6 +310,15 @@ export interface ClaudeSessionRow {
   cwd: string | null;                // 工作目录
   git_branch: string | null;         // Git 分支
   project_path: string | null;       // Claude 项目路径（从 JSONL 文件目录还原）
+
+  // Session 级 token/cost 累计统计
+  tokens_in: number;                   // 累计输入 token
+  tokens_out: number;                  // 累计输出 token
+  cache_read_in: number;               // 累计缓存读取 token
+  cache_write_in: number;              // 累计缓存写入 token
+  cost_usd: number;                    // 累计费用（美元）
+  turn_count: number;                  // 对话轮次
+  usage_file_offset: number;           // JSONL 增量读取偏移量（字节）
 }
 
 // ================================================================

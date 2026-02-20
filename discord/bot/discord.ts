@@ -39,6 +39,8 @@ import { getAuthorizedGuildId, getGeneralChannelId } from '../utils/env.js';
 import { escapeMarkdown } from './message-utils.js';
 import { registerSlashCommands, routeCommand } from './commands/index.js';
 import { SessionSyncService } from '../sync/session-sync-service.js';
+import { PricingService } from '../sync/pricing-service.js';
+import { UsageReconciler } from '../sync/usage-reconciler.js';
 import { join } from 'path';
 import { MODEL_OPTIONS, getModelLabel } from './commands/task.js';
 import type { CommandDeps } from './commands/types.js';
@@ -57,6 +59,8 @@ export class DiscordBot {
   private orchestrator: GoalOrchestrator | null = null;
   private cleanupInterval: NodeJS.Timeout | null = null;
   private sessionSyncService: SessionSyncService;
+  private pricingService: PricingService;
+  private usageReconciler: UsageReconciler;
   private channelService: ChannelService | null = null;
 
   constructor(config: DiscordBotConfig, promptService: PromptConfigService) {
@@ -92,10 +96,12 @@ export class DiscordBot {
     this.messageHandler = new MessageHandler(this.stateManager, this.claudeClient, this.interactionRegistry, this.messageQueue);
     this.messageHandler.setErrorReporter((guildId, channelId, source, error) => this.sendErrorToGeneral(guildId, channelId, source, error));
 
-    // 初始化 SessionSyncService
+    // 初始化 PricingService + SessionSyncService + UsageReconciler
+    this.pricingService = new PricingService();
     const claudeProjectsDir = join(process.env.HOME || '/tmp', '.claude', 'projects');
-    this.sessionSyncService = new SessionSyncService(db, claudeProjectsDir);
+    this.sessionSyncService = new SessionSyncService(db, claudeProjectsDir, this.pricingService);
     this.sessionSyncService.setPromptService(promptService);
+    this.usageReconciler = new UsageReconciler(db, claudeProjectsDir, this.pricingService);
 
     // 注入 executor 回调
     this.claudeClient.setSessionSyncCallback((sessionId, channelId, model) => {
@@ -912,8 +918,14 @@ export class DiscordBot {
     // 启动消息队列
     this.messageQueue.start();
 
-    // 启动 Session 同步服务
+    // 初始化定价（必须在 sessionSyncService.start 之前，否则首次 syncAll 的 usage 计算无定价数据）
+    await this.pricingService.init();
+
+    // 启动 Session 同步服务（60s 增量扫描 + usage delta）
     this.sessionSyncService.start();
+
+    // 启动每日对齐调度（01:00）
+    this.usageReconciler.start();
 
     const guildId = this.config.authorizedGuildId;
     await registerSlashCommands(this.config.discordToken, this.config.applicationId, guildId);
@@ -1013,6 +1025,7 @@ export class DiscordBot {
       this.cleanupInterval = null;
     }
     this.sessionSyncService.stop();
+    this.usageReconciler.stop();
     this.messageQueue.stop();
     await this.messageQueue.drain(10000);
     if (this.apiServer) {

@@ -25,6 +25,7 @@ import migration009 from './migrations/009_add_brain_channel.js';
 import migration010 from './migrations/010_add_task_detail_plan.js';
 import migration011 from './migrations/011_update_prompts.js';
 import migration012 from './migrations/012_remove_skill_prompts.js';
+import migration013 from './migrations/013_add_session_usage.js';
 
 const allMigrations: Migration[] = [
   migration001,
@@ -39,6 +40,7 @@ const allMigrations: Migration[] = [
   migration010,
   migration011,
   migration012,
+  migration013,
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

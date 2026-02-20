@@ -1,12 +1,14 @@
 import type Database from 'better-sqlite3';
-import { openSync, readSync, closeSync, readdirSync, statSync } from 'fs';
+import { openSync, readSync, closeSync, readdirSync, statSync, createReadStream } from 'fs';
 import { join, basename, dirname } from 'path';
+import { createInterface } from 'readline';
 import { extractSessionMetadata } from './jsonl-metadata.js';
 import { ClaudeSessionRepository } from '../db/repo/claude-session-repo.js';
 import { SyncCursorRepository } from '../db/repo/sync-cursor-repo.js';
 import { ChannelRepository } from '../db/repo/channel-repo.js';
 import type { ClaudeSession } from '../types/index.js';
 import type { PromptConfigService } from '../services/prompt-config-service.js';
+import type { PricingService } from './pricing-service.js';
 import { chatCompletion } from '../utils/llm.js';
 import { logger } from '../utils/logger.js';
 import { resolveSessionContext, decodeProjectDirName } from './session-context.js';
@@ -27,22 +29,55 @@ function projectPathFromJsonl(jsonlPath: string): string {
   return decodeProjectDirName(dirName);
 }
 
+interface UsageDelta {
+  tokensIn: number;
+  tokensOut: number;
+  cacheReadIn: number;
+  cacheWriteIn: number;
+  costUsd: number;
+  turnCount: number;
+}
+
 export class SessionSyncService {
   private scanTimer: NodeJS.Timeout | null = null;
   private claudeSessionRepo: ClaudeSessionRepository;
   private syncCursorRepo: SyncCursorRepository;
   private channelRepo: ChannelRepository;
   private promptService: PromptConfigService | null = null;
+  private pricingService: PricingService | null = null;
   /** 序列化同一 claudeSessionId 的并发 syncSession 调用，避免重复 INSERT */
   private syncSessionLocks: Map<string, Promise<void>> = new Map();
+  /** 累加 delta 的预编译 SQL */
+  private usageAccumulateStmt: Database.Statement;
+  /** 仅更新 offset 的预编译 SQL */
+  private usageOffsetStmt: Database.Statement;
 
   constructor(
     private db: Database.Database,
     private claudeProjectsDir: string,  // 默认 ~/.claude/projects
+    pricingService?: PricingService,
   ) {
     this.claudeSessionRepo = new ClaudeSessionRepository(db);
     this.syncCursorRepo = new SyncCursorRepository(db);
     this.channelRepo = new ChannelRepository(db);
+    this.pricingService = pricingService ?? null;
+
+    this.usageAccumulateStmt = db.prepare(`
+      UPDATE claude_sessions SET
+        tokens_in         = tokens_in      + ?,
+        tokens_out        = tokens_out     + ?,
+        cache_read_in     = cache_read_in  + ?,
+        cache_write_in    = cache_write_in + ?,
+        cost_usd          = cost_usd       + ?,
+        turn_count        = turn_count     + ?,
+        usage_file_offset = ?
+      WHERE claude_session_id = ?
+    `);
+
+    this.usageOffsetStmt = db.prepare(`
+      UPDATE claude_sessions SET usage_file_offset = ?
+      WHERE claude_session_id = ?
+    `);
   }
 
   /** 注入 PromptConfigService（启动后调用） */
@@ -189,6 +224,10 @@ export class SessionSyncService {
           } else if (result === 'updated') {
             stats.updated++;
           }
+          // 增量 usage（异步，不阻塞循环）
+          if (this.pricingService) {
+            void this.processUsageDelta(jsonlFile);
+          }
         }
       }
 
@@ -232,6 +271,10 @@ export class SessionSyncService {
         for (const jsonlFile of jsonlFiles) {
           this.processJsonlFileSync(jsonlFile);
           processedCount++;
+          // 增量 usage（异步，不阻塞循环）
+          if (this.pricingService) {
+            void this.processUsageDelta(jsonlFile);
+          }
         }
       }
 
@@ -556,6 +599,113 @@ export class SessionSyncService {
       }
     }
     return null;
+  }
+
+  // ==================== 增量 Usage 扫描 ====================
+
+  /**
+   * 从 JSONL 文件增量读取 usage delta 并累加到 DB
+   *
+   * fire-and-forget 调用，不阻塞同步循环。
+   */
+  private async processUsageDelta(jsonlPath: string): Promise<void> {
+    try {
+      // 从文件名提取 sessionId，跳过 agent-* 文件
+      const fileName = basename(jsonlPath, '.jsonl');
+      if (fileName.startsWith('agent-')) return;
+
+      const claudeSessionId = fileName;
+
+      // 查 DB 获取当前 offset
+      const row = this.db.prepare(
+        'SELECT usage_file_offset FROM claude_sessions WHERE claude_session_id = ?',
+      ).get(claudeSessionId) as { usage_file_offset: number } | undefined;
+
+      if (!row) return; // session 尚未入库
+
+      const currentOffset = row.usage_file_offset;
+
+      // 检查文件大小
+      let fileSize: number;
+      try {
+        fileSize = statSync(jsonlPath).size;
+      } catch {
+        return;
+      }
+
+      if (fileSize <= currentOffset) return; // 无新增内容
+
+      const delta = await this.readUsageDelta(jsonlPath, currentOffset);
+
+      if (delta.turnCount > 0) {
+        this.usageAccumulateStmt.run(
+          delta.tokensIn,
+          delta.tokensOut,
+          delta.cacheReadIn,
+          delta.cacheWriteIn,
+          delta.costUsd,
+          delta.turnCount,
+          fileSize,
+          claudeSessionId,
+        );
+      } else {
+        // 文件变大了但没有新的 assistant usage（可能是 user/system 事件）
+        this.usageOffsetStmt.run(fileSize, claudeSessionId);
+      }
+    } catch (e: any) {
+      logger.debug(`[SessionSync] processUsageDelta failed: ${e.message}`);
+    }
+  }
+
+  /**
+   * 从 byte offset 开始读取新增行，提取 usage delta
+   *
+   * offset 可能落在行中间，readline 会把该"半行"作为第一行返回，
+   * JSON.parse 会失败，被 catch 安全跳过。
+   */
+  private async readUsageDelta(filePath: string, offset: number): Promise<UsageDelta> {
+    const delta: UsageDelta = {
+      tokensIn: 0, tokensOut: 0,
+      cacheReadIn: 0, cacheWriteIn: 0,
+      costUsd: 0, turnCount: 0,
+    };
+
+    const stream = createReadStream(filePath, { start: offset, encoding: 'utf-8' });
+    const rl = createInterface({ input: stream, crlfDelay: Infinity });
+
+    for await (const line of rl) {
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+
+      try {
+        const event = JSON.parse(trimmed);
+        if (event.type !== 'assistant') continue;
+
+        const usage = event.message?.usage;
+        if (!usage) continue;
+
+        delta.tokensIn += usage.input_tokens ?? 0;
+        delta.tokensOut += usage.output_tokens ?? 0;
+        delta.cacheReadIn += usage.cache_read_input_tokens ?? 0;
+        delta.cacheWriteIn += usage.cache_creation_input_tokens ?? 0;
+        delta.turnCount++;
+
+        // 费用：优先用预计算值
+        if (event.costUSD != null) {
+          delta.costUsd += event.costUSD;
+        } else if (this.pricingService) {
+          const model = event.message?.model;
+          if (model) {
+            delta.costUsd += this.pricingService.calculateCost(usage, model);
+          }
+        }
+      } catch {
+        // offset 截断的半行、格式错误等，安全跳过
+        continue;
+      }
+    }
+
+    return delta;
   }
 
   // ==================== 文件系统工具 ====================

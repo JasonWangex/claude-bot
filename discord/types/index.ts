@@ -455,4 +455,13 @@ export interface ClaudeSession {
   cwd?: string;              // 工作目录
   gitBranch?: string;        // Git 分支
   projectPath?: string;      // Claude 项目路径（从 JSONL 文件目录还原）
+
+  // Session 级 token/cost 累计统计
+  tokensIn?: number;
+  tokensOut?: number;
+  cacheReadIn?: number;
+  cacheWriteIn?: number;
+  costUsd?: number;
+  turnCount?: number;
+  usageFileOffset?: number;
 }

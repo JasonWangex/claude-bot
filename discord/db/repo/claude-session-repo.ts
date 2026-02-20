@@ -33,6 +33,13 @@ function rowToClaudeSession(row: ClaudeSessionRow): ClaudeSession {
     cwd: row.cwd ?? undefined,
     gitBranch: row.git_branch ?? undefined,
     projectPath: row.project_path ?? undefined,
+    tokensIn: row.tokens_in || undefined,
+    tokensOut: row.tokens_out || undefined,
+    cacheReadIn: row.cache_read_in || undefined,
+    cacheWriteIn: row.cache_write_in || undefined,
+    costUsd: row.cost_usd || undefined,
+    turnCount: row.turn_count || undefined,
+    usageFileOffset: row.usage_file_offset || undefined,
   };
 }
 
