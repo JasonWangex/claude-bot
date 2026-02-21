@@ -17,7 +17,7 @@ const migration: Migration = {
     seedPromptConfigs(db);
   },
 
-  down(_db) {
+  down(db) {
     const del = db.prepare(`DELETE FROM prompt_configs WHERE key = ?`);
     del.run('orchestrator.reviewer_init');
     del.run('orchestrator.task_review');
