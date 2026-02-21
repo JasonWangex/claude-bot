@@ -77,8 +77,9 @@ All places that need to start Drive use this unified flow:
 
 1. Build tasks: prefer `tasks` from API response; if empty, parse `[代码]`/`[调研]` types from body, filter completed. IDs must use `g<seq>t<N>` format (seq = Goal's `seq` field from API), preventing cross-goal ID collisions.
    ```json
-   [{"id":"g2t1","name":"description","type":"code|research","complexity":"simple|complex","depends":[],"status":"pending"}]
+   [{"id":"g2t1","description":"description","type":"代码|调研|手动|占位","complexity":"simple|complex","phase":1,"status":"pending"}]
    ```
+   Tasks are ordered by phase: phase 1 runs first (all parallel), then phase 2, etc.
 2. Get current thread ID: `bot_tasks(action="list")` → match task's `cwd` field with current cwd → get `channel_id`
 3. Call:
    ```

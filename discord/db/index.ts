@@ -30,6 +30,7 @@ import migration014 from './migrations/014_create_goal_todos.js';
 import migration015 from './migrations/015_add_model_usage.js';
 import migration016 from './migrations/016_create_task_events.js';
 import migration017 from './migrations/017_cleanup_old_prompts.js';
+import migration018 from './migrations/018_add_missing_orchestrator_prompts.js';
 
 const allMigrations: Migration[] = [
   migration001,
@@ -49,6 +50,7 @@ const allMigrations: Migration[] = [
   migration015,
   migration016,
   migration017,
+  migration018,
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

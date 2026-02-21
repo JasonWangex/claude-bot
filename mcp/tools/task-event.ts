@@ -27,7 +27,7 @@ export function registerTaskEventTools(server: McpServer) {
         ])
         .describe('Event type — determines how the orchestrator processes this event'),
       payload: z
-        .record(z.unknown())
+        .record(z.string(), z.unknown())
         .describe('Event payload. Structure varies by event_type (see prompt instructions).'),
     },
   }, async ({ task_id, event_type, payload }) => {

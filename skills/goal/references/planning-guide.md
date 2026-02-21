@@ -13,7 +13,14 @@ Split by **feature**, not by technical layer. One feature = one subtask, even if
 | `[调研]` | Auto-execute |
 | `[手动]` | Not sent to Drive, user completes manually |
 
-Dependencies: `— depends: g2t1, g2t2` (IDs include goal seq prefix to prevent cross-goal ID collisions). Optional Phase grouping.
+## Phase ordering
+
+Tasks are grouped into phases. **All tasks in phase N must complete before phase N+1 begins.** Tasks within the same phase run in parallel.
+
+- Use `Phase 1`, `Phase 2`, `Phase 3` to group tasks by execution order
+- Tasks that can run concurrently go in the same phase
+- A phase must be complete (all tasks merged or skipped) before the next phase starts
+- If a task has no phase specified, it defaults to Phase 1
 
 ## Each subtask must include
 
