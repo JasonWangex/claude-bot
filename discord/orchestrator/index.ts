@@ -868,6 +868,26 @@ Call \`bot_task_event\` with:
       }
       if (stateModified) await this.saveState(state);
 
+      // 重建 completed+unmerged 任务的 hidden audit session
+      // audit session 是无状态的（Claude 进程已消失），重建内存 entry 即可重新触发审核
+      const guildIdForAudit = this.getGuildId();
+      if (guildIdForAudit) {
+        for (const task of state.tasks) {
+          if (task.status === 'completed' && !task.merged && task.auditSessionKey) {
+            // 先 archive 旧 active 记录（防止 zombie session），再重建
+            this.deps.stateManager.archiveSession(guildIdForAudit, task.auditSessionKey, undefined, 'restart-cleanup');
+            this.deps.stateManager.getOrCreateSession(guildIdForAudit, task.auditSessionKey, {
+              name: `audit-${task.id}`,
+              cwd: state.baseCwd,
+              hidden: true,
+            });
+            this.deps.stateManager.setSessionModel(guildIdForAudit, task.auditSessionKey, this.deps.config.pipelineOpusModel);
+            this.deps.stateManager.setSessionForkInfo(guildIdForAudit, task.auditSessionKey, state.goalChannelId, task.branchName ?? '');
+            logger.info(`[Orchestrator] Restored hidden audit session for completed task ${task.id}`);
+          }
+        }
+      }
+
       this.activeDrives.set(state.goalId, state);
 
       // 恢复 reviewer channel session（确保 cwd 和 Opus 模型正确设置）
@@ -2177,6 +2197,14 @@ Call \`bot_task_event\` with:
       if (result.success) {
         task.merged = true;
         this.clearReviewerNudgeState(task.id);
+
+        // 关闭 audit session（hidden session，只需归档内存 session，无 Discord channel）
+        const guildIdForAudit = this.getGuildId();
+        if (guildIdForAudit && task.auditSessionKey) {
+          this.deps.stateManager.archiveSession(guildIdForAudit, task.auditSessionKey, undefined, 'merged');
+          task.auditSessionKey = undefined;
+        }
+
         await this.saveState(state);
         await this.notify(state.goalChannelId, `Merged: \`${branchName}\` → \`${state.goalBranch}\``, 'success');
 
@@ -2542,14 +2570,20 @@ Call \`bot_task_event\` with:
 
       // ── Reviewer 监工：completed + unmerged 任务 ──
       // 纯状态检测，不依赖事件（bot 重启后事件可能丢失）
-      const reviewerChannelId = state.reviewerChannelId ?? state.goalChannelId;
-      const reviewerLockKey = StateManager.channelLockKey(guildId, reviewerChannelId);
+      // 每个任务使用独立 hidden audit session，互不阻塞
 
       for (const task of state.tasks) {
         if (task.status !== 'completed' || task.merged) continue;
 
-        // reviewer 正在工作 → 本轮所有 unmerged 任务都跳过
-        if (this.deps.claudeClient.isRunning(reviewerLockKey)) break;
+        // 该 task 已有 audit session 且正在运行 → 跳过（不影响其他任务）
+        if (task.auditSessionKey) {
+          const auditLockKey = StateManager.channelLockKey(guildId, task.auditSessionKey);
+          if (this.deps.claudeClient.isRunning(auditLockKey)) continue;
+
+          // session 不在运行，但事件已写入 → 等 event scanner 处理
+          const pendingResult = this.deps.taskEventRepo.read(task.id, 'review.task_result');
+          if (pendingResult) continue;
+        }
 
         // Cooldown 检查（基于完成时间或上次轻推时间）
         const lastNudge = this.lastReviewerNudgeAt.get(task.id) ?? (task.completedAt ?? Date.now());
@@ -2571,9 +2605,9 @@ Call \`bot_task_event\` with:
 
         logger.info(`[ReviewerNudge] Nudging reviewer for task ${task.id} (attempt ${count + 1}, phase=${task.pipelinePhase})`);
         if (task.pipelinePhase === 'conflict') {
-          this.nudgeConflictReview(state, task, guildId, count + 1);
+          this.nudgeConflictReview(state, task, guildId, count + 1);  // conflict 仍用 reviewer channel
         } else {
-          this.triggerTaskReview(state, task, guildId);
+          this.triggerTaskReview(state, task, guildId);  // 创建独立 audit session
         }
         this.reviewerNudgeCounts.set(task.id, count + 1);
         this.lastReviewerNudgeAt.set(task.id, now);
@@ -2651,72 +2685,79 @@ Call \`bot_task_event\` with:
   }
 
   /**
-   * 触发 per-task 审核：向 Goal Channel 发送审核消息。
-   * 异步执行，不阻塞调用方。
+   * 为 per-task 审计创建独立的 hidden audit session（无 Discord channel）。
+   * 同步方法，直接写内存 session + DB。
+   * 返回 auditSessionKey（'audit-{taskId}'）。
+   */
+  private createAuditSubSession(
+    state: GoalDriveState,
+    task: GoalTask,
+    guildId: string,
+  ): string {
+    const auditSessionKey = `audit-${task.id}`;
+    this.deps.stateManager.getOrCreateSession(guildId, auditSessionKey, {
+      name: `audit-${task.id}`,
+      cwd: state.baseCwd,
+      hidden: true,
+    });
+    this.deps.stateManager.setSessionModel(guildId, auditSessionKey, this.deps.config.pipelineOpusModel);
+    this.deps.stateManager.setSessionForkInfo(guildId, auditSessionKey, state.goalChannelId, task.branchName ?? '');
+    logger.info(`[AuditSession] Created hidden audit session for task ${task.id}`);
+    return auditSessionKey;
+  }
+
+  /**
+   * 触发 per-task 审核：fire-and-forget，结果由 event scanner 异步处理。
+   * audit session 不在此处清理，生命周期延伸到 mergeAndCleanup。
    */
   private triggerTaskReview(state: GoalDriveState, task: GoalTask, guildId: string): void {
     const taskId = task.id;
     const goalChannelId = state.goalChannelId;
-    const reviewerChannelId = state.reviewerChannelId ?? goalChannelId;
+
+    // 确保 audit session 存在（幂等，已存在则复用）
+    if (!task.auditSessionKey) {
+      task.auditSessionKey = this.createAuditSubSession(state, task, guildId);
+      // 异步持久化，crash 前未写入也安全（重启后 restoreRunningDrives 重建）
+      this.saveState(state).catch(e => logger.warn(`[AuditSession] saveState failed: ${e.message}`));
+    }
+
+    const auditSessionKey = task.auditSessionKey;
 
     (async () => {
+      // 1. 收集 diff stats（失败不影响审核）
+      let diffStats = '(unavailable)';
       try {
-        this.ensureGoalChannelSession(state, guildId);
-
-        // 收集 diff stats
-        let diffStats = '(unavailable)';
-        try {
-          const goalDir = await this.getGoalWorktreeDir(state);
-          if (goalDir && task.branchName) {
-            diffStats = await execGit(
-              ['diff', '--stat', `${state.goalBranch}...${task.branchName}`],
-              goalDir,
-              `triggerTaskReview: diff stat for ${taskId}`,
-            );
-          }
-        } catch {
-          // diff stats 收集失败不影响审核
+        const goalDir = await this.getGoalWorktreeDir(state);
+        if (goalDir && task.branchName) {
+          diffStats = await execGit(
+            ['diff', '--stat', `${state.goalBranch}...${task.branchName}`],
+            goalDir,
+            `triggerTaskReview: diff stat for ${taskId}`,
+          );
         }
+      } catch { /* ignore */ }
 
-        const ps = this.deps.promptService;
-        const prompt = ps.render('orchestrator.task_review', {
-          TASK_LABEL: this.getTaskLabel(state, taskId),
-          TASK_DESCRIPTION: task.description,
-          BRANCH_NAME: task.branchName ?? '(unknown)',
-          DIFF_STATS: diffStats,
-          TASK_ID: taskId,
-        });
+      // 2. 渲染 prompt
+      const ps = this.deps.promptService;
+      const prompt = ps.render('orchestrator.task_review', {
+        TASK_LABEL: this.getTaskLabel(state, taskId),
+        TASK_DESCRIPTION: task.description,
+        BRANCH_NAME: task.branchName ?? '(unknown)',
+        DIFF_STATS: diffStats,
+        TASK_ID: taskId,
+      });
 
-        await this.notify(goalChannelId,
-          `[GoalOrchestrator] Reviewing task ${taskId}: ${task.description}`,
-          'pipeline',
-        );
+      await this.notify(goalChannelId,
+        `[GoalOrchestrator] Reviewing task ${taskId}: ${task.description}`,
+        'pipeline',
+      );
 
-        logger.info(`[PhaseReview] Triggering per-task review for ${taskId}`);
-        await this.deps.messageHandler.handleBackgroundChat(guildId, reviewerChannelId, prompt);
+      // 3. 纯事件驱动：fire-and-forget，结果由 event scanner 处理
+      logger.info(`[PhaseReview] Firing review for ${taskId} via hidden audit session ${auditSessionKey}`);
+      this.deps.messageHandler.handleBackgroundChat(guildId, auditSessionKey, prompt)
+        .catch(err => logger.error(`[AuditSession] handleBackgroundChat error for ${taskId}: ${err.message}`));
 
-        // Fallback: 如果 AI 没写事件但 session 正常结束，检查事件并处理
-        const reviewResult = this.deps.taskEventRepo.read<{
-          verdict?: string;
-          summary?: string;
-          issues?: string[];
-        }>(taskId, 'review.task_result');
-        if (reviewResult) {
-          // 标记已处理，防止 scanner 重复处理
-          this.deps.taskEventRepo.markProcessedByTask(taskId, 'review.task_result');
-          await this.handleTaskReviewResult(state.goalId, taskId, reviewResult);
-        } else {
-          // 没写事件 → check-in 机制会处理
-          logger.warn(`[PhaseReview] No review.task_result event from review of ${taskId}, check-in will handle`);
-        }
-      } catch (err: any) {
-        // 审核失败 → 自动 pass 以不阻塞流水线
-        logger.error(`[PhaseReview] Failed to review task ${taskId}: ${err.message}`);
-        await this.handleTaskReviewResult(state.goalId, taskId, {
-          verdict: 'pass',
-          summary: `Review failed (${err.message}), auto-passing`,
-        });
-      }
+      // audit session 不在此处清理，生命周期延伸到 mergeAndCleanup
     })();
   }
 
@@ -2771,9 +2812,14 @@ Call \`bot_task_event\` with:
 
         const refixCount = (task.auditRetries ?? 0) + 1;
         if (refixCount > GoalOrchestrator.MAX_REVIEW_RETRIES) {
-          // 超限 → 标记失败
+          // 超限 → 标记失败，关闭 audit session
           task.status = 'failed';
           task.error = `Review failed after ${refixCount} attempts: ${issues}`;
+          const guildIdForAudit = this.getGuildId();
+          if (guildIdForAudit && task.auditSessionKey) {
+            this.deps.stateManager.archiveSession(guildIdForAudit, task.auditSessionKey, undefined, 'review-failed');
+            task.auditSessionKey = undefined;
+          }
           await this.saveState(state);
           await this.notify(state.goalChannelId,
             `Task ${this.getTaskLabel(state, taskId)} failed review ${refixCount} times, marking as failed`,
@@ -2906,8 +2952,8 @@ Call \`bot_task_event\` with:
         }
 
         // 清理 subtask Discord channel
+        const guildId = this.getGuildId();
         if (task.channelId) {
-          const guildId = this.getGuildId();
           if (guildId) {
             this.deps.stateManager.archiveSession(guildId, task.channelId, undefined, 'merged');
             try {
@@ -2919,9 +2965,14 @@ Call \`bot_task_event\` with:
           }
         }
 
+        // 关闭 audit session（hidden session，无 Discord channel）
+        if (guildId && task.auditSessionKey) {
+          this.deps.stateManager.archiveSession(guildId, task.auditSessionKey, undefined, 'merged');
+          task.auditSessionKey = undefined;
+        }
+
         // 检查 phase 是否全部 merged → 触发 phase 评估或继续调度
         const phase = getPhaseNumber(task);
-        const guildId = this.getGuildId();
         if (guildId && isPhaseFullyMerged(state, phase)) {
           this.triggerPhaseEvaluation(state, phase, guildId);
           return;

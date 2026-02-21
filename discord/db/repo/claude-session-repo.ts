@@ -41,6 +41,7 @@ function rowToClaudeSession(row: ClaudeSessionRow): ClaudeSession {
     turnCount: row.turn_count || undefined,
     usageFileOffset: row.usage_file_offset || undefined,
     modelUsage: row.model_usage ? JSON.parse(row.model_usage) : undefined,
+    hidden: (row.hidden ?? 0) === 1,
   };
 }
 
@@ -65,6 +66,7 @@ function claudeSessionToParams(session: ClaudeSession): Record<string, unknown> 
     cwd: session.cwd ?? null,
     git_branch: session.gitBranch ?? null,
     project_path: session.projectPath ?? null,
+    hidden: session.hidden ? 1 : 0,
   };
 }
 
@@ -105,12 +107,12 @@ export class ClaudeSessionRepository {
           claude_session_id, prev_claude_session_id,
           channel_id, model, plan_mode, status, created_at, closed_at,
           purpose, parent_session_id, last_activity_at, last_usage_json, last_stop_at, title,
-          task_id, goal_id, cwd, git_branch, project_path
+          task_id, goal_id, cwd, git_branch, project_path, hidden
         ) VALUES (
           @claude_session_id, @prev_claude_session_id,
           @channel_id, @model, @plan_mode, @status, @created_at, @closed_at,
           @purpose, @parent_session_id, @last_activity_at, @last_usage_json, @last_stop_at, @title,
-          @task_id, @goal_id, @cwd, @git_branch, @project_path
+          @task_id, @goal_id, @cwd, @git_branch, @project_path, @hidden
         )
         ON CONFLICT(claude_session_id) DO UPDATE SET
           prev_claude_session_id = @prev_claude_session_id,
@@ -129,7 +131,8 @@ export class ClaudeSessionRepository {
           goal_id = COALESCE(@goal_id, goal_id),
           cwd = COALESCE(@cwd, cwd),
           git_branch = COALESCE(@git_branch, git_branch),
-          project_path = COALESCE(@project_path, project_path)
+          project_path = COALESCE(@project_path, project_path),
+          hidden = @hidden
       `),
 
       close: this.db.prepare(`

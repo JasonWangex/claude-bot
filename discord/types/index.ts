@@ -37,6 +37,7 @@ export interface Session {
   messageCount: number;       // 消息历史条数（从 DB message_count 字段）
   parentChannelId?: string;   // 父 Channel ID（fork 产生的子 channel）
   worktreeBranch?: string;    // worktree 分支名（fork 创建的）
+  hidden?: boolean;           // true = audit session，无对应 Discord channel，不在 web UI 显示
 }
 
 // Guild 状态
@@ -300,6 +301,7 @@ export interface Task {
   complexity?: TaskComplexity;   // 代码任务复杂度，Goal 创建时标注
   pipelinePhase?: PipelinePhase; // 当前阶段: 'execute'
   auditRetries?: number;         // refix 重试计数（最多 3）
+  auditSessionKey?: string;      // per-task audit session 的虚拟 channelId（'audit-{taskId}'），持久化后重启可恢复
 
   // 执行状态
   status: TaskStatus;
@@ -472,4 +474,5 @@ export interface ClaudeSession {
   turnCount?: number;
   usageFileOffset?: number;
   modelUsage?: Record<string, ModelUsageEntry>;  // 每模型分项统计
+  hidden?: boolean;          // true = audit session，不在 web UI 显示（对应 claude_sessions.hidden）
 }

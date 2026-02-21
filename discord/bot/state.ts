@@ -147,25 +147,30 @@ export class StateManager {
     const session = this.sessions.get(this.channelKey(guildId, channelId));
     if (!session) return;
 
+    const isHidden = session.hidden ?? false;
+
     if (this.channelRepo && this.claudeSessionRepo) {
-      const channel: Channel = {
-        id: session.channelId,
-        guildId: session.guildId,
-        name: session.name,
-        cwd: session.cwd,
-        worktreeBranch: session.worktreeBranch,
-        parentChannelId: session.parentChannelId,
-        status: 'active',
-        messageCount: session.messageCount,
-        createdAt: session.createdAt,
-        lastMessage: session.lastMessage,
-        lastMessageAt: session.lastMessageAt,
-      };
-      this.channelRepo.save(channel);
+      // hidden session 无对应 Discord channel，跳过 channels 表写入
+      if (!isHidden) {
+        const channel: Channel = {
+          id: session.channelId,
+          guildId: session.guildId,
+          name: session.name,
+          cwd: session.cwd,
+          worktreeBranch: session.worktreeBranch,
+          parentChannelId: session.parentChannelId,
+          status: 'active',
+          messageCount: session.messageCount,
+          createdAt: session.createdAt,
+          lastMessage: session.lastMessage,
+          lastMessageAt: session.lastMessageAt,
+        };
+        this.channelRepo.save(channel);
+      }
 
       // 写入 claude_sessions 表（仅在已有 claudeSessionId 时写入，避免产生空壳记录）
       if (session.claudeSessionId) {
-        const ctx = this.db ? resolveSessionContext(this.db, session.channelId) : null;
+        const ctx = (!isHidden && this.db) ? resolveSessionContext(this.db, session.channelId) : null;
         // 保留已有的 status，避免覆盖 hook 事件设置的状态（idle/waiting/closed）
         // 新 session（首次写入）默认为 'active'
         const existingSession = this.claudeSessionRepo.get(session.claudeSessionId);
@@ -182,6 +187,7 @@ export class StateManager {
           goalId: ctx?.goalId ?? undefined,
           cwd: ctx?.cwd ?? session.cwd,
           gitBranch: ctx?.gitBranch ?? session.worktreeBranch,
+          hidden: isHidden,
         };
         this.claudeSessionRepo.save(claudeSession);
       }
@@ -198,7 +204,7 @@ export class StateManager {
 
   // ========== Session CRUD ==========
 
-  getOrCreateSession(guildId: string, channelId: string, defaults: { name: string; cwd: string }): Session {
+  getOrCreateSession(guildId: string, channelId: string, defaults: { name: string; cwd: string; hidden?: boolean }): Session {
     const key = this.channelKey(guildId, channelId);
     if (!this.sessions.has(key)) {
       const guildModel = this.getGuildDefaultModel(guildId);
@@ -210,11 +216,13 @@ export class StateManager {
         createdAt: Date.now(),
         model: guildModel,
         messageCount: 0,
+        hidden: defaults.hidden ?? false,
       };
       this.sessions.set(key, session);
       this.persistSession(guildId, channelId);
 
-      if (this.channelRepo) {
+      // hidden session 无对应 Discord channel，跳过 channels 表写入
+      if (this.channelRepo && !session.hidden) {
         const channel: Channel = {
           id: channelId,
           guildId,
@@ -294,15 +302,20 @@ export class StateManager {
     }
     session.claudeSessionId = claudeSessionId;
 
+    // hidden session 无对应 channels 行，跳过 channel_session_links（有 FK 约束）
+    const isHidden = session.hidden ?? false;
+
     // persistSession（写 claude_sessions）与 createLink（写 channel_session_links）必须原子完成
     if (this.linkRepo && this.db) {
       try {
         this.db.transaction(() => {
           this.persistSession(guildId, channelId);
-          const existingLinks = this.linkRepo!.getActiveLinks(channelId);
-          const alreadyLinked = existingLinks.some(l => l.claudeSessionId === claudeSessionId);
-          if (!alreadyLinked) {
-            this.linkRepo!.createLink(channelId, claudeSessionId);
+          if (!isHidden) {
+            const existingLinks = this.linkRepo!.getActiveLinks(channelId);
+            const alreadyLinked = existingLinks.some(l => l.claudeSessionId === claudeSessionId);
+            if (!alreadyLinked) {
+              this.linkRepo!.createLink(channelId, claudeSessionId);
+            }
           }
         })();
       } catch (err: any) {
@@ -311,7 +324,7 @@ export class StateManager {
       }
     } else {
       this.persistSession(guildId, channelId);
-      if (this.linkRepo) {
+      if (this.linkRepo && !isHidden) {
         const existingLinks = this.linkRepo.getActiveLinks(channelId);
         const alreadyLinked = existingLinks.some(l => l.claudeSessionId === claudeSessionId);
         if (!alreadyLinked) {
