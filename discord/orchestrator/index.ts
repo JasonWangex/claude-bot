@@ -2292,7 +2292,7 @@ export class GoalOrchestrator {
 
     // 条件 section：调研任务
     if (task.type === '调研') {
-      const s = ps.tryRender('orchestrator.task.research_rules', { TASK_ID: task.id });
+      const s = ps.tryRender('orchestrator.task.research_rules', {});
       if (s) parts.push(s);
     }
 

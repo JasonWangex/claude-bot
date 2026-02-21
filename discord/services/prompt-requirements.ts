@@ -28,6 +28,6 @@ export const PROMPT_REQUIREMENTS: PromptRequirement[] = [
   { key: 'orchestrator.task.detail_plan',       variables: ['DETAIL_PLAN_TEXT'],   optional: true },
   { key: 'orchestrator.task.requirements',      variables: [],                     optional: true },
   { key: 'orchestrator.task.feedback_protocol', variables: ['TASK_ID'],            optional: true },
-  { key: 'orchestrator.task.research_rules',    variables: ['TASK_ID'],            optional: true },
+  { key: 'orchestrator.task.research_rules',    variables: [],                     optional: true },
   { key: 'orchestrator.task.placeholder_rules', variables: [],                     optional: true },
 ];

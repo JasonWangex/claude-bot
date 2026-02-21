@@ -79,12 +79,10 @@ ${DETAIL_PLAN_NOTE}`,
     name: '通用要求 section',
     description: '任务执行的通用要求',
     template: `## Requirements
-1. Implement the task, ensuring build and tests pass
-2. Before committing, use \`/code-audit\` to self-review your changes — fix any issues found
-3. After passing self-review, commit your changes
-4. Call \`bot_task_event\` to report \`task.completed\` (see Completion Protocol)
-5. If you encounter blockers, call \`bot_task_event\` to report \`task.feedback\` (see Feedback Protocol)
-6. Do not modify code unrelated to this task`,
+- Implement the task; build and tests must pass
+- Self-review with \`/code-audit\` before committing
+- Do not modify code unrelated to this task
+- Report completion or blockers via \`bot_task_event\` (see protocols below)`,
     variables: [],
     parentKey: 'orchestrator.task',
     sortOrder: 3,
@@ -134,24 +132,10 @@ The orchestrator will detect your event automatically.`,
     category: 'orchestrator',
     name: '调研任务规则 section',
     description: '调研类型任务的特殊规则',
-    template: `## Research Task Rules
-This is a **research task**. When you finish your research:
-1. You **MUST** call \`bot_task_event\` with \`event_type: "task.feedback"\` before ending
-2. Use \`type: "replan"\` with your findings in \`details\`
-3. Example payload:
-\`\`\`json
-{
-  "type": "replan",
-  "reason": "Research completed — findings may affect task plan",
-  "details": {
-    "findings": "Your research conclusions here",
-    "recommendations": ["actionable suggestion 1", "suggestion 2"],
-    "affectedTasks": ["t3", "t4"]
-  }
-}
-\`\`\`
-4. Do NOT write implementation code — only research, document, and report back`,
-    variables: ['TASK_ID'],
+    template: `## Research Task
+Research only — do not write implementation code.
+When done, report findings via \`task.feedback\` with \`type: "replan"\` (see Feedback Protocol).`,
+    variables: [],
     parentKey: 'orchestrator.task',
     sortOrder: 5,
   });
@@ -247,30 +231,22 @@ If no changes are needed, call \`bot_task_event\` with: \`{ "changes": [], "reas
     category: 'orchestrator',
     name: 'Phase 全局评估',
     description: 'Phase 所有任务审核完毕后的全局评估 prompt',
-    template: `Phase {{PHASE_NUMBER}} of Goal "{{GOAL_NAME}}" — all tasks have been reviewed and merged.
+    template: `Phase {{PHASE_NUMBER}} of "{{GOAL_NAME}}" — all tasks reviewed and merged.
 
-## Task Review Summaries
+## Task Reviews
 {{TASK_REVIEW_SUMMARIES}}
 
 ## Progress
 {{PROGRESS_SUMMARY}}
 
-## Your Role
-Evaluate the overall quality and progress of this phase:
-1. Are the completed tasks consistent with each other?
-2. Does the codebase remain in a healthy state?
-3. Are there any concerns for upcoming phases?
+Evaluate phase quality and decide:
+- **continue**: proceed to the next phase
+- **replan**: issues require task plan changes
 
-Then decide:
-- **continue**: Everything looks good, proceed to the next phase
-- **replan**: Issues found that require task plan adjustments
-
-Call \`bot_task_event\` with:
+Call \`bot_task_event\`:
 - \`task_id\`: "{{PHASE_TASK_ID}}"
 - \`event_type\`: "review.phase_result"
-- \`payload\`: \`{ "decision": "continue" | "replan", "summary": "brief evaluation", "issues": [] }\`
-
-If you choose "replan", include specific issues and recommendations in the payload.`,
+- \`payload\`: \`{ "decision": "continue"|"replan", "summary": "...", "issues": [] }\``,
     variables: ['PHASE_NUMBER', 'GOAL_NAME', 'TASK_REVIEW_SUMMARIES', 'PROGRESS_SUMMARY', 'PHASE_TASK_ID'],
     parentKey: null,
     sortOrder: 0,
@@ -300,22 +276,15 @@ Please confirm your status:
     category: 'orchestrator',
     name: 'Reviewer 初始化',
     description: 'Goal Drive 启动时发送给 reviewer channel，告知角色和上下文',
-    template: `You are the **code orchestrator** for Goal "{{GOAL_NAME}}" (branch: \`{{GOAL_BRANCH}}\`).
+    template: `You are the **code reviewer** for Goal "{{GOAL_NAME}}" (branch: \`{{GOAL_BRANCH}}\`).
 Goal ID: \`{{GOAL_ID}}\`
 
-Your responsibilities:
+Responsibilities:
+- Review completed task changes via \`/code-audit\` when requested
+- Log non-critical findings via \`bot_goal_todos\` (\`action: "add"\`, \`goal_id: "{{GOAL_ID}}"\`, \`source: "reviewer"\`, \`priority\`: 重要/高/中/低)
+- Report review verdict via \`bot_task_event\`
 
-1. Review each completed task's code changes when prompted, use \`/code-audit\` to check for quality issues, security concerns, or missed requirements
-2. Evaluate whether the implementation matches the task description
-
-When you find non-critical issues (low impact, doesn't block task acceptance), record them via \`bot_goal_todos\`:
-- \`action: "add"\`, \`goal_id: "{{GOAL_ID}}"\`, \`source: "reviewer"\`
-- Set \`priority\`: \`重要\` (should fix before release) / \`高\` (significant improvement) / \`中\` (nice to have) / \`低\` (trivial)
-- Example: content \`auth/login.ts: missing rate limiting\`, \`priority: "高"\`
-
-You will receive review requests automatically. For each review, report your findings using \`bot_task_event\`.
-
-**No action needed now — echo \`Ready\` when you ready**`,
+**No action needed now — reply \`Ready\` when you are ready.**`,
     variables: ['GOAL_NAME', 'GOAL_BRANCH', 'GOAL_ID'],
     parentKey: null,
     sortOrder: 0,
@@ -327,25 +296,17 @@ You will receive review requests automatically. For each review, report your fin
     category: 'orchestrator',
     name: 'Per-task 审核',
     description: '任务完成后在独立 audit sub-session 中执行的审核请求（已在 goal worktree 中）',
-    template: `## Task Review: {{TASK_LABEL}}
-**Description:** {{TASK_DESCRIPTION}}
-**Branch:** \`{{BRANCH_NAME}}\`
-**Diff stats:**
+    template: `## Review: {{TASK_LABEL}}
+Description: {{TASK_DESCRIPTION}}
+Branch: \`{{BRANCH_NAME}}\`
 \`\`\`
 {{DIFF_STATS}}
 \`\`\`
 
-Please review this completed task:
-1. Run \`/code-audit\` on branch \`{{BRANCH_NAME}}\` to audit the code changes (you are already in the goal worktree)
-2. Evaluate whether the implementation matches the task description
-3. Check for any quality issues, security concerns, or missed requirements
-
-Then call \`bot_task_event\` with:
+Run \`/code-audit\` on the branch changes, then report via \`bot_task_event\`:
 - \`task_id\`: "{{TASK_ID}}"
 - \`event_type\`: "review.task_result"
-- \`payload\`: \`{ "verdict": "pass" | "fail", "summary": "brief review summary", "issues": [] }\`
-
-If the verdict is "fail", include specific issues that need to be fixed.`,
+- \`payload\`: \`{ "verdict": "pass"|"fail", "summary": "...", "issues": [] }\``,
     variables: ['TASK_LABEL', 'TASK_DESCRIPTION', 'BRANCH_NAME', 'DIFF_STATS', 'TASK_ID'],
     parentKey: null,
     sortOrder: 0,
@@ -357,39 +318,15 @@ If the verdict is "fail", include specific issues that need to be fixed.`,
     category: 'orchestrator',
     name: '冲突解决请求',
     description: 'Merge 冲突时发给 reviewer 让其手动处理',
-    template: `## Merge Conflict Resolution Needed: {{TASK_LABEL}}
+    template: `## Merge Conflict: {{TASK_LABEL}}
+Branch \`{{BRANCH_NAME}}\` could not be merged into \`{{GOAL_BRANCH}}\`.
+Task: {{TASK_DESCRIPTION}}
+Goal worktree: \`{{GOAL_WORKTREE_DIR}}\`
 
-Branch \`{{BRANCH_NAME}}\` could not be automatically merged into \`{{GOAL_BRANCH}}\`.
-
-**Task:** {{TASK_DESCRIPTION}}
-
-## Steps
-
-1. Navigate to the goal worktree:
-   \`\`\`bash
-   cd {{GOAL_WORKTREE_DIR}}
-   \`\`\`
-
-2. Retry the merge:
-   \`\`\`bash
-   git merge {{BRANCH_NAME}}
-   \`\`\`
-
-3. Resolve all conflict markers (\`<<<<<<<\`, \`=======\`, \`>>>>>>>\`) in each conflicted file.
-   Keep valid changes from **both** sides — do not discard either side's work.
-
-4. Complete the merge:
-   \`\`\`bash
-   git add -A && git commit --no-edit
-   \`\`\`
-
-5. Report the result via \`bot_task_event\`:
-   - \`task_id\`: "{{TASK_ID}}"
-   - \`event_type\`: "review.conflict_result"
-   - \`payload\`: \`{ "resolved": true, "summary": "how conflicts were resolved" }\`
-
-If you cannot resolve the conflict, report:
-   - \`payload\`: \`{ "resolved": false, "summary": "why it cannot be resolved" }\``,
+Resolve the conflicts, then report via \`bot_task_event\`:
+- \`task_id\`: "{{TASK_ID}}"
+- \`event_type\`: "review.conflict_result"
+- \`payload\`: \`{ "resolved": true|false, "summary": "..." }\``,
     variables: ['TASK_LABEL', 'BRANCH_NAME', 'GOAL_BRANCH', 'TASK_DESCRIPTION', 'GOAL_WORKTREE_DIR', 'TASK_ID'],
     parentKey: null,
     sortOrder: 0,
