@@ -37,6 +37,7 @@ import migration021 from './migrations/021_cleanup_orphan_prompts.js';
 import migration022 from './migrations/022_add_reviewer_prompts.js';
 import migration023 from './migrations/023_add_conflict_review_prompt.js';
 import migration024 from './migrations/024_update_task_prompts_to_event_protocol.js';
+import migration025 from './migrations/025_update_replan_prompt_to_event_protocol.js';
 
 const allMigrations: Migration[] = [
   migration001,
@@ -63,6 +64,7 @@ const allMigrations: Migration[] = [
   migration022,
   migration023,
   migration024,
+  migration025,
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

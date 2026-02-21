@@ -173,14 +173,14 @@ This is a **placeholder task**. It exists as a structural marker in the task gra
     sortOrder: 7,
   });
 
-  // ---- orchestrator.replan (单模板) — 不改动 ----
+  // ---- orchestrator.replan (单模板) ----
   entries.push({
     key: 'orchestrator.replan',
     category: 'orchestrator',
     name: '任务重规划',
-    description: '分析 feedback 并产出结构化 JSON 计划更新',
+    description: '分析 feedback 并通过 bot_task_event 上报结构化计划更新',
     template: `You are a task replanner for a software development goal orchestrator.
-Your job is to analyze feedback from a subtask and produce a structured JSON plan update.
+Your job is to analyze feedback from a subtask and produce a structured plan update.
 
 ## Goal
 Name: {{GOAL_NAME}}
@@ -204,9 +204,12 @@ Reason: {{FEEDBACK_REASON}}
 5. Keep changes minimal — only modify what the feedback necessitates
 6. Preserve the overall goal direction
 
-## Output Format
-Respond with a single JSON object (no markdown fences, no extra text):
-
+## Output
+Call \`bot_task_event\` with:
+- \`task_id\`: "{{TASK_ID}}"
+- \`event_type\`: "replan.result"
+- \`payload\`:
+\`\`\`json
 {
   "changes": [
     { "action": "add", "task": { "id": "t8", "description": "...", "type": "代码", "phase": 3, "complexity": "simple" } },
@@ -216,6 +219,7 @@ Respond with a single JSON object (no markdown fences, no extra text):
   "reasoning": "Explanation of why these changes are needed",
   "impactLevel": "low" | "medium" | "high"
 }
+\`\`\`
 
 Impact levels (assessed by affected pending tasks):
 - low: affects ≤1 pending task (description tweaks, phase adjustment)
@@ -228,8 +232,8 @@ Task granularity: split by **feature/functionality**, NOT by technical layer. On
 Valid complexity (for 代码 tasks): "simple" (straightforward logic, has patterns to follow) or "complex" (needs architecture design or cross-module coordination). Default: "simple"
 Valid actions: add, modify, remove
 
-If no changes are needed, return: { "changes": [], "reasoning": "...", "impactLevel": "low" }`,
-    variables: ['GOAL_NAME', 'GOAL_BODY', 'COMPLETION_CRITERIA', 'CURRENT_TASKS', 'TRIGGER_TASK_ID', 'FEEDBACK_TYPE', 'FEEDBACK_REASON', 'FEEDBACK_DETAILS', 'COMPLETED_DIFF_STATS', 'IMMUTABLE_COMPLETED', 'IMMUTABLE_RUNNING'],
+If no changes are needed, call \`bot_task_event\` with: \`{ "changes": [], "reasoning": "...", "impactLevel": "low" }\``,
+    variables: ['GOAL_NAME', 'GOAL_BODY', 'COMPLETION_CRITERIA', 'CURRENT_TASKS', 'TRIGGER_TASK_ID', 'FEEDBACK_TYPE', 'FEEDBACK_REASON', 'FEEDBACK_DETAILS', 'COMPLETED_DIFF_STATS', 'IMMUTABLE_COMPLETED', 'IMMUTABLE_RUNNING', 'TASK_ID'],
     parentKey: null,
     sortOrder: 0,
   });
