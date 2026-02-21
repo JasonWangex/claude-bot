@@ -18,6 +18,9 @@ export const EVENT_TYPES = [
   'task.feedback',
   'review.task_result',
   'review.phase_result',
+  'merge.conflict',
+  'review.conflict_result',
+  'replan.result',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];

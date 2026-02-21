@@ -33,7 +33,7 @@ import {
 import { resolveConflictsWithAI } from './conflict-resolver.js';
 import { logger } from '../utils/logger.js';
 import {
-  replanTasks,
+  buildReplanPrompt,
   collectCompletedDiffStats,
   handleReplanByImpact,
   applyChanges,
@@ -560,13 +560,15 @@ export class GoalOrchestrator {
             await this.retryTask(goalId, taskId);
             break;
 
-          case 'replan':
+          case 'replan': {
             // 需要重新规划
             await this.notify(state.goalChannelId,
               `[GoalOrchestrator] ${taskId}: 调查结论 — 需要重新规划\n原因: ${conclusion.reason}`,
               'info',
               { logOnly: true },
             );
+            // 最小化持锁范围：只做状态变更，triggerReplan（长耗时）在锁外执行
+            let replanState: GoalDriveState | null = null;
             await this.withStateLock(goalId, async () => {
               const freshState = await this.getState(goalId);
               if (!freshState) return;
@@ -575,7 +577,10 @@ export class GoalOrchestrator {
               freshTask.status = 'completed';
               freshTask.completedAt = Date.now();
               await this.saveState(freshState);
-              await this.triggerReplan(freshState, taskId, {
+              replanState = freshState;
+            });
+            if (replanState) {
+              await this.triggerReplan(replanState, taskId, {
                 type: 'replan',
                 reason: conclusion.reason,
                 details: conclusion.details,
@@ -584,8 +589,9 @@ export class GoalOrchestrator {
               if (refreshed && refreshed.status === 'running') {
                 await this.reviewAndDispatch(refreshed, taskId);
               }
-            });
+            }
             break;
+          }
 
           case 'escalate':
           default:
@@ -1421,17 +1427,23 @@ Call \`bot_task_event\` with:
   // ========== Replan 分级自治 ==========
 
   /**
-   * 触发重规划 + 分级自治流程
+   * 触发重规划 + 分级自治流程（reviewer session 模式）
    *
    * 1. 收集已完成任务的 diff stats
-   * 2. 调用 LLM 生成 replan 结果
-   * 3. 根据 impact_level 自动执行或暂停等待审批
+   * 2. 构建 replan prompt，通过 reviewer session 发送给 AI
+   * 3. 读取 replan.result 事件，执行分级自治处理
    */
   private async triggerReplan(
     state: GoalDriveState,
     triggerTaskId: string,
     feedback: GoalTaskFeedback,
   ): Promise<void> {
+    const guildId = this.getGuildId();
+    if (!guildId) {
+      logger.warn('[Orchestrator] triggerReplan: no guildId, skipping');
+      return;
+    }
+
     try {
       // 1. 收集 diff stats
       const completedDiffStats = await collectCompletedDiffStats(state);
@@ -1439,7 +1451,7 @@ Call \`bot_task_event\` with:
       // 2. 获取 Goal 元数据
       const goalMeta = await this.deps.goalMetaRepo.get(state.goalId);
 
-      // 调用 LLM replan
+      // 3. 构建 prompt 并发送给 reviewer session
       const ctx: ReplanContext = {
         state,
         goalMeta,
@@ -1448,24 +1460,38 @@ Call \`bot_task_event\` with:
         completedDiffStats,
         promptService: this.deps.promptService,
       };
-      const result = await replanTasks(ctx);
+      const replanPrompt = buildReplanPrompt(ctx);
 
-      if (!result) {
+      this.ensureGoalChannelSession(state, guildId);
+      const reviewerChannelId = state.reviewerChannelId ?? state.goalChannelId;
+
+      logger.info(`[Orchestrator] triggerReplan: sending to reviewer channel ${reviewerChannelId}`);
+      await this.deps.messageHandler.handleBackgroundChat(guildId, reviewerChannelId, replanPrompt);
+
+      // 4. 内联读取 replan.result 事件（reviewer session 结束后写入）
+      const raw = this.deps.taskEventRepo.read<ReplanResult>(triggerTaskId, 'replan.result');
+      if (!raw || !Array.isArray(raw.changes) || typeof raw.reasoning !== 'string') {
+        logger.warn(`[Orchestrator] triggerReplan: missing or invalid replan.result event for task ${triggerTaskId}`);
         await this.notify(state.goalChannelId,
-          `Replan 调用失败 — LLM 未返回有效结果，当前计划保持不变`,
+          `Replan 跳过 — Reviewer 未返回有效结果，当前计划保持不变`,
           'warning',
         );
         return;
       }
+      const result: ReplanResult = raw;
+
+      // 标记已处理，防止 scanner 重复处理
+      this.deps.taskEventRepo.markProcessedByTask(triggerTaskId, 'replan.result');
+
       if (result.changes.length === 0) {
         await this.notify(state.goalChannelId,
-          `Replan: 无需变更 — ${result.reasoning}`,
+          `Replan: 无需变更 — ${result.reasoning || '（无说明）'}`,
           'info',
         );
         return;
       }
 
-      // 4. 分级自治处理
+      // 5. 分级自治处理
       const handleResult = await handleReplanByImpact(state, result, {
         taskRepo: this.deps.taskRepo,
         goalMetaRepo: this.deps.goalMetaRepo,
@@ -2408,6 +2434,34 @@ Call \`bot_task_event\` with:
             // Phase 评估结果
             logger.info(`[Scanner] Processing review.phase_result for task ${ev.taskId}`);
             await this.handlePhaseResult(ev.goalId, ev.taskId, ev.payload as any);
+            break;
+
+          case 'replan.result': {
+            // Replan 结果兜底（正常由 triggerReplan 内联读取处理）
+            // 只对 completed 状态的任务处理（replan 仅由 completed 任务触发）
+            if (task.status !== 'completed') {
+              this.deps.taskEventRepo.markProcessed(ev.id);
+              continue;
+            }
+            logger.info(`[Scanner] Processing replan.result for task ${ev.taskId}`);
+            const replanResult = ev.payload as ReplanResult;
+            if (replanResult && Array.isArray(replanResult.changes) && typeof replanResult.reasoning === 'string') {
+              await handleReplanByImpact(state, replanResult, {
+                taskRepo: this.deps.taskRepo,
+                goalMetaRepo: this.deps.goalMetaRepo,
+                checkpointRepo: this.deps.checkpointRepo,
+                notify: (threadId, message, type, options) => this.notify(threadId, message, type, options),
+              });
+            } else {
+              logger.warn(`[Scanner] Skipping invalid replan.result payload for task ${ev.taskId}`);
+            }
+            break;
+          }
+
+          case 'merge.conflict':
+          case 'review.conflict_result':
+            // 冲突相关事件由 conflict-resolver 处理，scanner 不干预
+            logger.info(`[Scanner] Skipping conflict event ${ev.eventType} for task ${ev.taskId}`);
             break;
 
           default:

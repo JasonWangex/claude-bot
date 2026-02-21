@@ -24,6 +24,8 @@ export function registerTaskEventTools(server: McpServer) {
           'task.feedback',
           'review.task_result',
           'review.phase_result',
+          'review.conflict_result',
+          'replan.result',
         ])
         .describe('Event type — determines how the orchestrator processes this event'),
       payload: z

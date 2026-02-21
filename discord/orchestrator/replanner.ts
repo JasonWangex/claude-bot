@@ -10,7 +10,6 @@
 import type { GoalDriveState, GoalTask, GoalTaskFeedback } from '../types/index.js';
 import type { Goal, ITaskRepo, IGoalMetaRepo, IGoalCheckpointRepo } from '../types/repository.js';
 import type { PromptConfigService } from '../services/prompt-config-service.js';
-import { chatCompletion } from '../utils/llm.js';
 import { execGit } from './git-ops.js';
 import { logger } from '../utils/logger.js';
 import { buildReplanApprovalButtons, buildReplanRollbackButton } from './goal-buttons.js';
@@ -71,52 +70,7 @@ export interface HandleReplanResult {
   checkpointId?: string;
 }
 
-// ==================== 主入口 ====================
-
-/**
- * 执行任务重规划：构建 prompt → 调用 LLM → 解析变更 → 校验约束
- *
- * @returns ReplanResult（未应用），调用者负责决定是否 apply
- */
-export async function replanTasks(ctx: ReplanContext): Promise<ReplanResult | null> {
-  const prompt = buildReplanPrompt(ctx);
-
-  logger.info(`[Replanner] Generating replan for goal ${ctx.state.goalId}, trigger: ${ctx.triggerTaskId}`);
-
-  const raw = await chatCompletion(prompt, {
-    maxTokens: 4096,
-    temperature: 0.2,
-    timeout: 30_000,
-  });
-
-  if (!raw) {
-    logger.warn('[Replanner] LLM returned empty response');
-    return null;
-  }
-
-  const result = parseReplanResponse(raw);
-  if (!result) {
-    logger.warn('[Replanner] Failed to parse LLM response');
-    return null;
-  }
-
-  // 过滤掉违反约束的变更（已完成任务不可修改）
-  const completedIds = new Set(
-    ctx.state.tasks
-      .filter(t => t.status === 'completed' || t.status === 'skipped')
-      .map(t => t.id)
-  );
-  result.changes = result.changes.filter(change => {
-    const targetId = 'taskId' in change ? change.taskId : null;
-    if (targetId && completedIds.has(targetId)) {
-      logger.warn(`[Replanner] Rejected change: cannot modify completed task ${targetId}`);
-      return false;
-    }
-    return true;
-  });
-
-  return result;
-}
+// ==================== 变更应用 ====================
 
 /**
  * 将 ReplanResult 的变更应用到任务列表（不修改已完成任务）
@@ -594,7 +548,7 @@ export async function collectCompletedDiffStats(
 
 // ==================== Prompt 构建 ====================
 
-function buildReplanPrompt(ctx: ReplanContext): string {
+export function buildReplanPrompt(ctx: ReplanContext): string {
   const { state, goalMeta, triggerTaskId, feedback, completedDiffStats, promptService } = ctx;
 
   // 构建动态变量值
@@ -647,6 +601,7 @@ function buildReplanPrompt(ctx: ReplanContext): string {
     COMPLETION_CRITERIA: completionCriteria,
     CURRENT_TASKS: currentTasks,
     TRIGGER_TASK_ID: triggerTaskId,
+    TASK_ID: triggerTaskId,
     FEEDBACK_TYPE: feedback.type,
     FEEDBACK_REASON: feedback.reason,
     FEEDBACK_DETAILS: feedbackDetails,
@@ -656,96 +611,4 @@ function buildReplanPrompt(ctx: ReplanContext): string {
   });
 }
 
-// ==================== 响应解析 ====================
 
-function parseReplanResponse(raw: string): ReplanResult | null {
-  try {
-    // 尝试直接解析
-    let json = raw.trim();
-
-    // 移除可能的 markdown 代码块包裹
-    if (json.startsWith('```')) {
-      json = json.replace(/^```(?:json)?\n?/, '').replace(/\n?```$/, '');
-    }
-
-    const parsed = JSON.parse(json);
-
-    // 校验必须字段
-    if (!Array.isArray(parsed.changes)) {
-      logger.warn('[Replanner] Invalid response: changes is not an array');
-      return null;
-    }
-    if (typeof parsed.reasoning !== 'string') {
-      logger.warn('[Replanner] Invalid response: reasoning is not a string');
-      return null;
-    }
-
-    const validImpactLevels = ['low', 'medium', 'high'];
-    const impactLevel = validImpactLevels.includes(parsed.impactLevel)
-      ? parsed.impactLevel
-      : 'medium';
-
-    // 校验每个 change 的结构
-    const validChanges: ReplanChange[] = [];
-    for (const change of parsed.changes) {
-      if (!change.action) continue;
-
-      switch (change.action) {
-        case 'add':
-          if (change.task?.id && change.task?.description) {
-            const complexity = ['simple', 'complex'].includes(change.task.complexity)
-              ? change.task.complexity as 'simple' | 'complex'
-              : undefined;
-            validChanges.push({
-              action: 'add',
-              task: {
-                id: change.task.id,
-                description: change.task.description,
-                type: change.task.type || '代码',
-                phase: change.task.phase,
-                complexity,
-              },
-            });
-          }
-          break;
-
-        case 'modify':
-          if (change.taskId && change.updates) {
-            const updates = { ...change.updates };
-            if (updates.complexity !== undefined) {
-              updates.complexity = ['simple', 'complex'].includes(updates.complexity)
-                ? updates.complexity as 'simple' | 'complex'
-                : undefined;
-            }
-            // 过滤掉 depends 字段（已废弃）
-            delete updates.depends;
-            validChanges.push({
-              action: 'modify',
-              taskId: change.taskId,
-              updates,
-            });
-          }
-          break;
-
-        case 'remove':
-          if (change.taskId) {
-            validChanges.push({
-              action: 'remove',
-              taskId: change.taskId,
-              reason: change.reason || 'removed by replanner',
-            });
-          }
-          break;
-      }
-    }
-
-    return {
-      changes: validChanges,
-      reasoning: parsed.reasoning,
-      impactLevel,
-    };
-  } catch (err: any) {
-    logger.warn(`[Replanner] JSON parse failed: ${err.message}`);
-    return null;
-  }
-}
