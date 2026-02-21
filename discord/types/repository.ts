@@ -73,12 +73,15 @@ export interface Idea {
 }
 
 /** Goal 待办事项 */
+export type GoalTodoPriority = '重要' | '高' | '中' | '低';
+
 export interface GoalTodo {
   id: string;
   goalId: string;
   content: string;
   done: boolean;
   source: string | null;
+  priority: GoalTodoPriority;
   createdAt: number;
   updatedAt: number;
 }

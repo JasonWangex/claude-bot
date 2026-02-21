@@ -10,7 +10,9 @@
 import type { RouteHandler } from '../types.js';
 import { sendJson, readJsonBody } from '../middleware.js';
 import { getDb, GoalTodoRepository } from '../../db/index.js';
-import type { GoalTodo } from '../../types/repository.js';
+import type { GoalTodo, GoalTodoPriority } from '../../types/repository.js';
+
+const VALID_PRIORITIES: GoalTodoPriority[] = ['重要', '高', '中', '低'];
 
 function getRepo() {
   return new GoalTodoRepository(getDb());
@@ -24,6 +26,7 @@ function toApiTodo(todo: GoalTodo) {
     content: todo.content,
     done: todo.done,
     source: todo.source,
+    priority: todo.priority,
     created_at: todo.createdAt,
     updated_at: todo.updatedAt,
   };
@@ -43,6 +46,7 @@ export const listGoalTodos: RouteHandler = async (_req, res, params) => {
 interface CreateTodoRequest {
   content: string;
   source?: string;
+  priority?: GoalTodoPriority;
 }
 
 // POST /api/goals/:goalId/todos
@@ -58,6 +62,10 @@ export const createGoalTodo: RouteHandler = async (req, res, params) => {
     return;
   }
 
+  const priority: GoalTodoPriority = VALID_PRIORITIES.includes(body.priority as GoalTodoPriority)
+    ? (body.priority as GoalTodoPriority)
+    : '中';
+
   try {
     const repo = getRepo();
     const now = Date.now();
@@ -69,6 +77,7 @@ export const createGoalTodo: RouteHandler = async (req, res, params) => {
       content: body.content.trim(),
       done: false,
       source: body.source?.trim() || null,
+      priority,
       createdAt: now,
       updatedAt: now,
     };
@@ -83,6 +92,7 @@ export const createGoalTodo: RouteHandler = async (req, res, params) => {
 interface UpdateTodoRequest {
   content?: string;
   done?: boolean;
+  priority?: GoalTodoPriority;
 }
 
 // PATCH /api/goals/:goalId/todos/:todoId
@@ -103,6 +113,7 @@ export const updateGoalTodo: RouteHandler = async (req, res, params) => {
 
     if (body.content !== undefined) todo.content = body.content.trim();
     if (body.done !== undefined) todo.done = body.done;
+    if (body.priority !== undefined && VALID_PRIORITIES.includes(body.priority)) todo.priority = body.priority;
     todo.updatedAt = Date.now();
 
     await repo.save(todo);

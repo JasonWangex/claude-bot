@@ -19,23 +19,24 @@ export function registerGoalTodoTools(server: McpServer) {
       todo_id: z.string().optional().describe('Todo ID (required for done/undone/delete)'),
       content: z.string().optional().describe('Todo content (required for add)'),
       source: z.string().optional().describe('Creator source, e.g. "user", "brain" (add)'),
+      priority: z.enum(['重要', '高', '中', '低']).optional().describe('Priority level (add/update). Default: 中'),
     },
-  }, async ({ action, goal_id, todo_id, content, source }) => {
+  }, async ({ action, goal_id, todo_id, content, source, priority }) => {
     switch (action) {
       case 'list': {
         const r = await apiGet(`/api/goals/${goal_id}/todos`);
         return { content: [{ type: 'text' as const, text: JSON.stringify(r.data ?? r, null, 2) }] };
       }
       case 'add': {
-        const r = await apiPost(`/api/goals/${goal_id}/todos`, { content, source });
+        const r = await apiPost(`/api/goals/${goal_id}/todos`, { content, source, priority });
         return { content: [{ type: 'text' as const, text: JSON.stringify(r.data ?? r, null, 2) }] };
       }
       case 'done': {
-        const r = await apiPatch(`/api/goals/${goal_id}/todos/${todo_id}`, { done: true });
+        const r = await apiPatch(`/api/goals/${goal_id}/todos/${todo_id}`, { done: true, ...(priority && { priority }) });
         return { content: [{ type: 'text' as const, text: JSON.stringify(r.data ?? r, null, 2) }] };
       }
       case 'undone': {
-        const r = await apiPatch(`/api/goals/${goal_id}/todos/${todo_id}`, { done: false });
+        const r = await apiPatch(`/api/goals/${goal_id}/todos/${todo_id}`, { done: false, ...(priority && { priority }) });
         return { content: [{ type: 'text' as const, text: JSON.stringify(r.data ?? r, null, 2) }] };
       }
       case 'delete': {

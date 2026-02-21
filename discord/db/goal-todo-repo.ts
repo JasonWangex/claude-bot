@@ -5,17 +5,23 @@
  */
 
 import type Database from 'better-sqlite3';
-import type { IGoalTodoRepo, GoalTodo } from '../types/repository.js';
+import type { IGoalTodoRepo, GoalTodo, GoalTodoPriority } from '../types/repository.js';
 import type { GoalTodoRow } from '../types/db.js';
+
+const VALID_PRIORITIES: GoalTodoPriority[] = ['重要', '高', '中', '低'];
 
 /** GoalTodoRow → GoalTodo */
 function rowToTodo(row: GoalTodoRow): GoalTodo {
+  const priority = VALID_PRIORITIES.includes(row.priority as GoalTodoPriority)
+    ? (row.priority as GoalTodoPriority)
+    : '中';
   return {
     id: row.id,
     goalId: row.goal_id,
     content: row.content,
     done: row.done === 1,
     source: row.source,
+    priority,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -37,12 +43,13 @@ export class GoalTodoRepository implements IGoalTodoRepo {
       findByGoal: db.prepare('SELECT * FROM goal_todos WHERE goal_id = ? ORDER BY created_at ASC'),
       findUndoneByGoal: db.prepare('SELECT * FROM goal_todos WHERE goal_id = ? AND done = 0 ORDER BY created_at ASC'),
       upsert: db.prepare(`
-        INSERT INTO goal_todos (id, goal_id, content, done, source, created_at, updated_at)
-        VALUES (@id, @goal_id, @content, @done, @source, @created_at, @updated_at)
+        INSERT INTO goal_todos (id, goal_id, content, done, source, priority, created_at, updated_at)
+        VALUES (@id, @goal_id, @content, @done, @source, @priority, @created_at, @updated_at)
         ON CONFLICT(id) DO UPDATE SET
           content = excluded.content,
           done = excluded.done,
           source = excluded.source,
+          priority = excluded.priority,
           updated_at = excluded.updated_at
       `),
       delete: db.prepare('DELETE FROM goal_todos WHERE id = ?'),
@@ -72,6 +79,7 @@ export class GoalTodoRepository implements IGoalTodoRepo {
       content: todo.content,
       done: todo.done ? 1 : 0,
       source: todo.source,
+      priority: todo.priority,
       created_at: todo.createdAt,
       updated_at: todo.updatedAt,
     });

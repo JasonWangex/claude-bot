@@ -212,6 +212,8 @@ export interface GoalTodoRow {
   done: number;
   /** 创建来源（如 "user", "brain", task ID） */
   source: string | null;
+  /** 优先级：重要 | 高 | 中 | 低 */
+  priority: string;
   /** 创建时间 (Unix ms) */
   created_at: number;
   /** 更新时间 (Unix ms) */
