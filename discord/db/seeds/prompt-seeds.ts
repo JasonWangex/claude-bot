@@ -395,6 +395,38 @@ If you cannot resolve the conflict, report:
     sortOrder: 0,
   });
 
+  // ---- orchestrator.feedback_investigation (blocked_feedback 任务的调查) ----
+  entries.push({
+    key: 'orchestrator.feedback_investigation',
+    category: 'orchestrator',
+    name: 'Feedback 调查',
+    description: '任务上报 blocked_feedback 后，AI 调查原因并决定下一步行动',
+    template: `Task {{TASK_LABEL}} reported feedback and needs investigation.
+
+## Task
+Description: {{TASK_DESCRIPTION}}
+Goal branch: {{GOAL_BRANCH}}
+
+## Feedback
+Type: {{FEEDBACK_TYPE}}
+Reason: {{FEEDBACK_REASON}}
+{{FEEDBACK_DETAILS}}
+## Your Job
+Investigate the feedback, check the codebase, and determine the best action:
+- **continue**: The issue can be resolved in the current context — fix it and continue
+- **retry**: The task needs a fresh start
+- **replan**: The feedback reveals a structural issue requiring task plan changes
+- **escalate**: Cannot determine the right action — needs human judgment
+
+Call \`bot_task_event\` with:
+- \`task_id\`: "{{TASK_ID}}"
+- \`event_type\`: "task.feedback"
+- \`payload\`: \`{ "action": "continue|retry|replan|escalate", "reason": "..." }\``,
+    variables: ['TASK_LABEL', 'TASK_DESCRIPTION', 'GOAL_BRANCH', 'FEEDBACK_TYPE', 'FEEDBACK_REASON', 'FEEDBACK_DETAILS', 'TASK_ID'],
+    parentKey: null,
+    sortOrder: 0,
+  });
+
   // ================================================================
   // 批量写入
   // ================================================================

@@ -665,28 +665,15 @@ export class GoalOrchestrator {
     const fb = task.feedback!;
     const label = this.getTaskLabel(state, task.id);
 
-    return `Task ${label} reported feedback and needs investigation.
-
-## Task
-Description: ${task.description}
-Goal branch: ${state.goalBranch}
-
-## Feedback
-Type: ${fb.type}
-Reason: ${fb.reason}
-${fb.details ? `Details: ${fb.details}` : ''}
-
-## Your Job
-Investigate the feedback, check the codebase, and determine the best action:
-- **continue**: The issue can be resolved in the current context — fix it and continue
-- **retry**: The task needs a fresh start
-- **replan**: The feedback reveals a structural issue requiring task plan changes
-- **escalate**: Cannot determine the right action — needs human judgment
-
-Call \`bot_task_event\` with:
-- \`task_id\`: "${task.id}"
-- \`event_type\`: "task.feedback"
-- \`payload\`: \`{ "action": "continue|retry|replan|escalate", "reason": "..." }\``;
+    return this.deps.promptService.render('orchestrator.feedback_investigation', {
+      TASK_LABEL: label,
+      TASK_DESCRIPTION: task.description,
+      GOAL_BRANCH: state.goalBranch,
+      FEEDBACK_TYPE: fb.type,
+      FEEDBACK_REASON: fb.reason,
+      FEEDBACK_DETAILS: fb.details ? `Details: ${fb.details}` : '',
+      TASK_ID: task.id,
+    });
   }
 
   /**
@@ -796,8 +783,7 @@ Call \`bot_task_event\` with:
         'success'
       );
 
-      const taskPrompt = `[Resumed] Continue working on this task. Your previous progress has been preserved.\n\n` +
-        this.buildTaskPrompt(task, state);
+      const taskPrompt = `[Resumed] Continue working on this task. Your previous progress has been preserved.`;
       this.executeTaskInBackground(state.goalId, task.id, guildId, task.channelId, taskPrompt);
       return true;
     }
