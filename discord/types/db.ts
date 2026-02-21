@@ -325,6 +325,7 @@ export interface ClaudeSessionRow {
   turn_count: number;                  // 对话轮次
   usage_file_offset: number;           // JSONL 增量读取偏移量（字节）
   model_usage: string | null;          // 每模型分项统计 JSON（见 ModelUsageEntry）
+  hidden: number | null;               // 0 = visible, 1 = hidden audit session（ALTER ADD COLUMN 旧行为 NULL）
 }
 
 // ================================================================
@@ -379,6 +380,7 @@ export interface TaskRow {
   cost_usd: number | null;
   duration_ms: number | null;
   detail_plan: string | null;
+  audit_session_key: string | null;  // hidden audit session 的虚拟 channelId（'audit-{taskId}'）
 }
 
 // ================================================================

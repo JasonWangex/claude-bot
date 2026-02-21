@@ -46,13 +46,15 @@ export class TaskRepo implements ITaskRepo {
           branch_name, channel_id, dispatched_at, completed_at,
           error, merged, notified_blocked, feedback_json,
           complexity, pipeline_phase, audit_retries,
-          tokens_in, tokens_out, cache_read_in, cache_write_in, cost_usd, duration_ms
+          tokens_in, tokens_out, cache_read_in, cache_write_in, cost_usd, duration_ms,
+          audit_session_key
         ) VALUES (
           @id, @goal_id, @description, @type, @phase, @status,
           @branch_name, @channel_id, @dispatched_at, @completed_at,
           @error, @merged, @notified_blocked, @feedback_json,
           @complexity, @pipeline_phase, @audit_retries,
-          @tokens_in, @tokens_out, @cache_read_in, @cache_write_in, @cost_usd, @duration_ms
+          @tokens_in, @tokens_out, @cache_read_in, @cache_write_in, @cost_usd, @duration_ms,
+          @audit_session_key
         )
         ON CONFLICT(id) DO UPDATE SET
           goal_id = @goal_id,
@@ -76,7 +78,8 @@ export class TaskRepo implements ITaskRepo {
           cache_read_in = @cache_read_in,
           cache_write_in = @cache_write_in,
           cost_usd = @cost_usd,
-          duration_ms = @duration_ms
+          duration_ms = @duration_ms,
+          audit_session_key = @audit_session_key
       `),
 
       deleteTask: this.db.prepare(
@@ -204,6 +207,7 @@ function taskToRow(task: Task, goalId?: string | null): Record<string, unknown> 
     cache_write_in: task.cacheWriteIn ?? null,
     cost_usd: task.costUsd ?? null,
     duration_ms: task.durationMs ?? null,
+    audit_session_key: task.auditSessionKey ?? null,
   };
 }
 
@@ -232,6 +236,7 @@ function rowToTask(row: TaskRow): Task {
     cacheWriteIn: row.cache_write_in ?? undefined,
     costUsd: row.cost_usd ?? undefined,
     durationMs: row.duration_ms ?? undefined,
+    auditSessionKey: row.audit_session_key ?? undefined,
   };
 }
 

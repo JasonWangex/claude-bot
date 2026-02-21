@@ -42,6 +42,8 @@ import migration026 from './migrations/026_add_todo_priority.js';
 import migration027 from './migrations/027_remove_conflict_resolver.js';
 import migration028 from './migrations/028_update_reviewer_init_prompt.js';
 import migration029 from './migrations/029_fix_replan_task_id_format.js';
+import migration030 from './migrations/030_update_task_review_prompt.js';
+import migration031 from './migrations/031_add_hidden_session.js';
 
 const allMigrations: Migration[] = [
   migration001,
@@ -73,6 +75,8 @@ const allMigrations: Migration[] = [
   migration027,
   migration028,
   migration029,
+  migration030,
+  migration031,
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

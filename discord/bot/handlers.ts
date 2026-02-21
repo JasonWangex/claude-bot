@@ -238,6 +238,7 @@ export class MessageHandler {
     images?: ImageAttachment[],
   ): Promise<ChatUsageResult> {
     const channelId = session.channelId;
+    const isHidden = session.hidden ?? false;
     const MAX_INTERACTIVE_ROUNDS = 5;
     const totalUsage: ChatUsageResult = {
       input_tokens: 0, output_tokens: 0,
@@ -247,7 +248,7 @@ export class MessageHandler {
 
     for (let round = 0; round < MAX_INTERACTIVE_ROUNDS; round++) {
 
-    this.mq.resetThreadState(channelId);
+    if (!isHidden) this.mq.resetThreadState(channelId);
     this.stateManager.clearDoneSentAt(channelId);
     logger.info(`[${session.name}] Message:`, text.substring(0, 100));
     this.stateManager.updateSessionMessage(guildId, channelId, text, 'user');
@@ -255,14 +256,14 @@ export class MessageHandler {
     const modeLabel = mode === 'plan' ? ' Plan' : '';
     const lockKey = StateManager.channelLockKey(guildId, channelId);
 
-    // 停止按钮
-    const stopButton = new ButtonBuilder()
+    // 停止按钮（hidden session 无 Discord channel，跳过）
+    const stopButton = isHidden ? null : new ButtonBuilder()
       .setCustomId(`stop:${lockKey}`)
       .setLabel('Stop')
       .setStyle(ButtonStyle.Danger);
-    const stopRow = new ActionRowBuilder<ButtonBuilder>().addComponents(stopButton);
+    const stopRow = stopButton ? new ActionRowBuilder<ButtonBuilder>().addComponents(stopButton) : null;
 
-    let progressMsgId = await this.mq.send(channelId, `Thinking${modeLabel}...`, { components: [stopRow as any], priority: 'high', silent: true, embedColor: EmbedColors.GRAY });
+    let progressMsgId: string | null = isHidden ? null : await this.mq.send(channelId, `Thinking${modeLabel}...`, { components: [stopRow as any], priority: 'high', silent: true, embedColor: EmbedColors.GRAY });
 
     let lastProgressText = `Thinking${modeLabel}...`;
     let toolUseCount = 0;
@@ -287,17 +288,18 @@ export class MessageHandler {
     const fileChanges: FileChange[] = [];
 
     const mq = this.mq;
-    const allProgressMsgIds = new Set<string>([progressMsgId]);
+    const allProgressMsgIds = new Set<string>(progressMsgId ? [progressMsgId] : []);
     let recreatingProgress = false;
 
     let progressNeedsReposition = false;
     let repositionTimer: NodeJS.Timeout | null = null;
 
     const recreateProgress = async () => {
+      if (isHidden) return;
       if (recreatingProgress) return;
       recreatingProgress = true;
       try {
-        mq.delete(channelId, progressMsgId);
+        if (progressMsgId) mq.delete(channelId, progressMsgId);
         progressMsgId = await mq.send(channelId, lastProgressText, { components: [stopRow as any], silent: true, embedColor: EmbedColors.GRAY });
         allProgressMsgIds.add(progressMsgId);
         progressNeedsReposition = false;
@@ -307,6 +309,7 @@ export class MessageHandler {
     };
 
     const repositionProgressIfNeeded = () => {
+      if (isHidden) return;
       if (!progressNeedsReposition || repositionTimer) return;
       repositionTimer = setTimeout(async () => {
         repositionTimer = null;
@@ -320,6 +323,7 @@ export class MessageHandler {
     };
 
     const cleanupProgressMessages = async (excludeId?: string) => {
+      if (isHidden) return;
       if (repositionTimer) { clearTimeout(repositionTimer); repositionTimer = null; }
       for (const msgId of allProgressMsgIds) {
         if (msgId !== excludeId) mq.delete(channelId, msgId);
@@ -336,6 +340,8 @@ export class MessageHandler {
     const flushTextBuffer = async () => {
       if (textBuffer.length === 0) return;
       const drained = textBuffer.splice(0);
+      // hidden session：只清缓冲区，不发 Discord 消息
+      if (isHidden) return;
       const newContent = drained.join('\n\n');
       logger.debug(`[${session.name}] flushText: ${drained.length} chunks, ${newContent.length} chars, placeholder=${!!textPlaceholderMsgId}`);
 
@@ -382,18 +388,20 @@ export class MessageHandler {
     const onProgress = (event: StreamEvent) => {
       const subtype = (event as any).subtype;
       if (event.type === 'system' && subtype === 'queued') {
-        const pos = (event as any).queue_position || '?';
-        // 显示 Interrupt & Send Now 按钮，让用户可以中断当前任务
-        const interruptButton = new ButtonBuilder()
-          .setCustomId(`interrupt:${lockKey.slice(0, 20)}`)
-          .setLabel('Interrupt & Send Now')
-          .setStyle(ButtonStyle.Primary);
-        const cancelButton = new ButtonBuilder()
-          .setCustomId(`cancel:${lockKey.slice(0, 20)}`)
-          .setLabel('Cancel')
-          .setStyle(ButtonStyle.Secondary);
-        const queuedRow = new ActionRowBuilder<ButtonBuilder>().addComponents(interruptButton, cancelButton);
-        mq.edit(channelId, progressMsgId, `Queued (position ${pos})...`, { components: [queuedRow as any], embedColor: EmbedColors.GRAY });
+        if (!isHidden && progressMsgId) {
+          const pos = (event as any).queue_position || '?';
+          // 显示 Interrupt & Send Now 按钮，让用户可以中断当前任务
+          const interruptButton = new ButtonBuilder()
+            .setCustomId(`interrupt:${lockKey.slice(0, 20)}`)
+            .setLabel('Interrupt & Send Now')
+            .setStyle(ButtonStyle.Primary);
+          const cancelButton = new ButtonBuilder()
+            .setCustomId(`cancel:${lockKey.slice(0, 20)}`)
+            .setLabel('Cancel')
+            .setStyle(ButtonStyle.Secondary);
+          const queuedRow = new ActionRowBuilder<ButtonBuilder>().addComponents(interruptButton, cancelButton);
+          mq.edit(channelId, progressMsgId, `Queued (position ${pos})...`, { components: [queuedRow as any], embedColor: EmbedColors.GRAY });
+        }
         return;
       }
       if (event.type === 'system' && subtype === 'lock_acquired') {
@@ -404,22 +412,24 @@ export class MessageHandler {
           : 'Thinking';
         const newText = `${prefix}... (${elapsed()})`;
         lastProgressText = newText;
-        mq.edit(channelId, progressMsgId, newText, { components: [stopRow as any], embedColor: EmbedColors.GRAY });
+        if (!isHidden && progressMsgId) mq.edit(channelId, progressMsgId, newText, { components: [stopRow as any], embedColor: EmbedColors.GRAY });
         return;
       }
       if (event.type === 'system' && subtype === 'session_reset') {
-        mq.edit(channelId, progressMsgId, 'Context too long, auto-reset...', { components: [stopRow as any], embedColor: EmbedColors.YELLOW });
+        if (!isHidden && progressMsgId) mq.edit(channelId, progressMsgId, 'Context too long, auto-reset...', { components: [stopRow as any], embedColor: EmbedColors.YELLOW });
         this.stateManager.clearSessionClaudeId(guildId, channelId);
         return;
       }
       if (event.type === 'system' && subtype === 'retrying') {
-        mq.edit(channelId, progressMsgId, 'Error, retrying...', { components: [stopRow as any], embedColor: EmbedColors.YELLOW });
+        if (!isHidden && progressMsgId) mq.edit(channelId, progressMsgId, 'Error, retrying...', { components: [stopRow as any], embedColor: EmbedColors.YELLOW });
         return;
       }
       if (event.type === 'system' && subtype === 'stall_warning') {
-        const secs = (event as any).stallSeconds || '?';
-        const newText = `${lastProgressText}\n> Stalled ${secs}s (${elapsed()})... may be deep-thinking\n> Use Stop to cancel`;
-        mq.edit(channelId, progressMsgId, newText, { components: [stopRow as any], embedColor: EmbedColors.YELLOW });
+        if (!isHidden && progressMsgId) {
+          const secs = (event as any).stallSeconds || '?';
+          const newText = `${lastProgressText}\n> Stalled ${secs}s (${elapsed()})... may be deep-thinking\n> Use Stop to cancel`;
+          mq.edit(channelId, progressMsgId, newText, { components: [stopRow as any], embedColor: EmbedColors.YELLOW });
+        }
         return;
       }
       if (event.type === 'system' && subtype === 'reset_state') {
@@ -438,7 +448,7 @@ export class MessageHandler {
 
       // 压缩状态事件: {type:"system", subtype:"status", status:"compacting"|null}
       if (event.type === 'system' && subtype === 'status' && event.status === 'compacting') {
-        mq.edit(channelId, progressMsgId, `Compacting context... (${elapsed()})`, { components: [stopRow as any], embedColor: EmbedColors.GRAY });
+        if (!isHidden && progressMsgId) mq.edit(channelId, progressMsgId, `Compacting context... (${elapsed()})`, { components: [stopRow as any], embedColor: EmbedColors.GRAY });
         return;
       }
       // compact_boundary 携带 compact_metadata
@@ -446,7 +456,7 @@ export class MessageHandler {
         compactPreTokens = event.compact_metadata.pre_tokens;
       }
       if (subtype === 'compact_boundary') {
-        mq.edit(channelId, progressMsgId, `Context compacted, thinking... (${elapsed()})`, { components: [stopRow as any], embedColor: EmbedColors.GRAY });
+        if (!isHidden && progressMsgId) mq.edit(channelId, progressMsgId, `Context compacted, thinking... (${elapsed()})`, { components: [stopRow as any], embedColor: EmbedColors.GRAY });
         return;
       }
 
@@ -505,15 +515,17 @@ export class MessageHandler {
 
             const now = Date.now();
             if (newText !== lastProgressText && now - lastEditTime >= 5000) {
-              // 如果 progress 消息需要重新定位，立即触发 recreate（替代 debounce）
-              if (progressNeedsReposition) {
-                if (repositionTimer) { clearTimeout(repositionTimer); repositionTimer = null; }
-                // fire-and-forget recreate，完成后再 edit 新消息
-                recreateProgress().then(() => {
+              if (!isHidden && progressMsgId) {
+                // 如果 progress 消息需要重新定位，立即触发 recreate（替代 debounce）
+                if (progressNeedsReposition) {
+                  if (repositionTimer) { clearTimeout(repositionTimer); repositionTimer = null; }
+                  // fire-and-forget recreate，完成后再 edit 新消息
+                  recreateProgress().then(() => {
+                    if (progressMsgId) mq.edit(channelId, progressMsgId, newText, { components: [stopRow as any], embedColor: EmbedColors.GRAY });
+                  }).catch(e => logger.warn(`[${session.name}] recreateProgress in tool update failed:`, e));
+                } else {
                   mq.edit(channelId, progressMsgId, newText, { components: [stopRow as any], embedColor: EmbedColors.GRAY });
-                }).catch(e => logger.warn(`[${session.name}] recreateProgress in tool update failed:`, e));
-              } else {
-                mq.edit(channelId, progressMsgId, newText, { components: [stopRow as any], embedColor: EmbedColors.GRAY });
+                }
               }
               lastProgressText = newText;
               lastEditTime = now;
@@ -570,8 +582,8 @@ export class MessageHandler {
       totalUsage.total_cost_usd += response.total_cost_usd ?? 0;
       totalUsage.duration_ms += response.duration_ms ?? 0;
 
-      // 交互式工具拦截
-      if (interactiveState.pending) {
+      // 交互式工具拦截（hidden session 无法交互，跳过 Discord UI 路径）
+      if (interactiveState.pending && !isHidden) {
         const pi = interactiveState.pending;
 
         await sendChain;
@@ -641,78 +653,80 @@ export class MessageHandler {
 
       // 正常流程：先等 sendChain 完成（防止竞态），再 flush 残留文字
       logger.debug(`[${session.name}] Completion: sentTextCount=${sentTextCount}, textBuffer=${textBuffer.length}, result=${response.result.length} chars`);
-      try {
-        await sendChain;
-        await flushTextBuffer();
-        await mq.drain();
-      } catch (e) {
-        logger.warn(`[${session.name}] Completion drain error:`, e);
-      }
+      if (!isHidden) {
+        try {
+          await sendChain;
+          await flushTextBuffer();
+          await mq.drain();
+        } catch (e) {
+          logger.warn(`[${session.name}] Completion drain error:`, e);
+        }
 
-      await cleanupProgressMessages();
+        await cleanupProgressMessages();
 
-      if (sentTextCount === 0 && response.result.trim()) {
-        logger.debug(`[${session.name}] No text sent during stream, sending result as fallback`);
-        await mq.sendLong(channelId, response.result, { silent: true });
-      }
+        if (sentTextCount === 0 && response.result.trim()) {
+          logger.debug(`[${session.name}] No text sent during stream, sending result as fallback`);
+          await mq.sendLong(channelId, response.result, { silent: true });
+        }
 
-      // 完成标记
-      const parts: string[] = [];
-      if (response.duration_ms) parts.push(`${(response.duration_ms / 1000).toFixed(1)}s`);
-      if (response.usage) {
-        const { input_tokens, output_tokens } = response.usage;
-        parts.push(`${Math.round((input_tokens + output_tokens) / 1000)}K`);
-      }
-      const contextWindowSize = response.contextWindow || 200000;
-      const snapshotUsage = lastAssistantUsage || (response.usage ? {
-        input_tokens: response.usage.input_tokens,
-        cache_read_input_tokens: response.usage.cache_read_input_tokens,
-        cache_creation_input_tokens: response.usage.cache_creation_input_tokens,
-      } : null);
-      if (snapshotUsage) {
-        const totalInput = snapshotUsage.input_tokens
-          + (snapshotUsage.cache_read_input_tokens || 0)
-          + (snapshotUsage.cache_creation_input_tokens || 0);
-        const usedPct = Math.round((totalInput / contextWindowSize) * 100);
-        const indicator = usedPct >= 80 ? '`!!`' : usedPct >= 70 ? '`!`' : '';
-        parts.push(`${usedPct}%${indicator}`);
-      }
-      const summary = parts.length > 0 ? ` (${parts.join(', ')})` : '';
+        // 完成标记
+        const parts: string[] = [];
+        if (response.duration_ms) parts.push(`${(response.duration_ms / 1000).toFixed(1)}s`);
+        if (response.usage) {
+          const { input_tokens, output_tokens } = response.usage;
+          parts.push(`${Math.round((input_tokens + output_tokens) / 1000)}K`);
+        }
+        const contextWindowSize = response.contextWindow || 200000;
+        const snapshotUsage = lastAssistantUsage || (response.usage ? {
+          input_tokens: response.usage.input_tokens,
+          cache_read_input_tokens: response.usage.cache_read_input_tokens,
+          cache_creation_input_tokens: response.usage.cache_creation_input_tokens,
+        } : null);
+        if (snapshotUsage) {
+          const totalInput = snapshotUsage.input_tokens
+            + (snapshotUsage.cache_read_input_tokens || 0)
+            + (snapshotUsage.cache_creation_input_tokens || 0);
+          const usedPct = Math.round((totalInput / contextWindowSize) * 100);
+          const indicator = usedPct >= 80 ? '`!!`' : usedPct >= 70 ? '`!`' : '';
+          parts.push(`${usedPct}%${indicator}`);
+        }
+        const summary = parts.length > 0 ? ` (${parts.join(', ')})` : '';
 
-      // 文件变更 HTML 报告
-      const skipChangesHtml = mode === 'plan'
-        && fileChanges.every(fc => fc.filePath.includes('.claude/plans/') && fc.filePath.endsWith('.md'));
-      if (fileChanges.length > 0 && !skipChangesHtml) {
-        const html = buildChangesHtml(fileChanges);
-        await mq.sendDocument(channelId, html, 'changes.html',
-          `${fileChanges.length} file(s) changed`, { silent: true });
-      }
+        // 文件变更 HTML 报告
+        const skipChangesHtml = mode === 'plan'
+          && fileChanges.every(fc => fc.filePath.includes('.claude/plans/') && fc.filePath.endsWith('.md'));
+        if (fileChanges.length > 0 && !skipChangesHtml) {
+          const html = buildChangesHtml(fileChanges);
+          await mq.sendDocument(channelId, html, 'changes.html',
+            `${fileChanges.length} file(s) changed`, { silent: true });
+        }
 
-      // 多 link 时消息标头（让用户知道是哪个 session 发的）
-      const allActiveLinks = this.stateManager.getActiveLinks(channelId);
-      const modelName = session.model?.match(/sonnet|opus|haiku/i)?.[0]?.toLowerCase() ?? 'claude';
-      const sessionPrefix = allActiveLinks.length > 1
-        ? `[${modelName} | ${session.claudeSessionId?.slice(0, 8) ?? '?'}] `
-        : '';
+        // 多 link 时消息标头（让用户知道是哪个 session 发的）
+        const allActiveLinks = this.stateManager.getActiveLinks(channelId);
+        const modelName = session.model?.match(/sonnet|opus|haiku/i)?.[0]?.toLowerCase() ?? 'claude';
+        const sessionPrefix = allActiveLinks.length > 1
+          ? `[${modelName} | ${session.claudeSessionId?.slice(0, 8) ?? '?'}] `
+          : '';
 
-      let doneMsgId: string;
-      if (mode === 'plan') {
-        this.stateManager.setSessionPlanMode(guildId, channelId, true);
-        doneMsgId = await mq.send(channelId,
-          `${sessionPrefix}@everyone Plan generated${summary}\n\n` +
-          `Reply "ok" to compact context and execute.\n` +
-          `Reply with anything else to continue discussing.`,
-          { priority: 'high', embedColor: EmbedColors.GREEN }
-        );
-      } else {
-        doneMsgId = await mq.send(channelId, `${sessionPrefix}@everyone Done${summary}`, { priority: 'high', embedColor: EmbedColors.GREEN });
-      }
-      this.stateManager.setDoneSentAt(channelId);
+        let doneMsgId: string;
+        if (mode === 'plan') {
+          this.stateManager.setSessionPlanMode(guildId, channelId, true);
+          doneMsgId = await mq.send(channelId,
+            `${sessionPrefix}@everyone Plan generated${summary}\n\n` +
+            `Reply "ok" to compact context and execute.\n` +
+            `Reply with anything else to continue discussing.`,
+            { priority: 'high', embedColor: EmbedColors.GREEN }
+          );
+        } else {
+          doneMsgId = await mq.send(channelId, `${sessionPrefix}@everyone Done${summary}`, { priority: 'high', embedColor: EmbedColors.GREEN });
+        }
+        this.stateManager.setDoneSentAt(channelId);
 
-      // 记录最新 Discord 消息 ID 到 link（reply 路由用）
-      // 通过 claudeSessionId 查找对应 link 的 UUID（兼容 reply 路由后 session.id 已被替换的情况）
-      if (doneMsgId && session.claudeSessionId) {
-        this.stateManager.updateLinkLastMessageId(channelId, session.claudeSessionId, doneMsgId);
+        // 记录最新 Discord 消息 ID 到 link（reply 路由用）
+        // 通过 claudeSessionId 查找对应 link 的 UUID（兼容 reply 路由后 session.id 已被替换的情况）
+        if (doneMsgId && session.claudeSessionId) {
+          this.stateManager.updateLinkLastMessageId(channelId, session.claudeSessionId, doneMsgId);
+        }
       }
 
     } catch (error: any) {
@@ -721,11 +735,11 @@ export class MessageHandler {
       // 先等 sendChain 完成（与正常流程一致），再 flush 残留文字
       await sendChain.catch(() => {});
       await flushTextBuffer().catch(() => {});
-      await mq.drain(3000).catch(() => {});
+      if (!isHidden) await mq.drain(3000).catch(() => {});
 
-      await cleanupProgressMessages(progressMsgId);
+      await cleanupProgressMessages(progressMsgId ?? undefined);
 
-      if (fileChanges.length > 0) {
+      if (!isHidden && fileChanges.length > 0) {
         try {
           const html = buildChangesHtml(fileChanges);
           await mq.sendDocument(channelId, html, 'changes.html',
@@ -735,30 +749,35 @@ export class MessageHandler {
 
       if (error instanceof ClaudeExecutionError && error.errorType === ClaudeErrorType.ABORTED) {
         logger.info(`[${session.name}] Task aborted by user`);
-        const stoppedText = lastProgressText && lastProgressText !== `Thinking${modeLabel}...`
-          ? `Stopped (after ${lastProgressText})`
-          : 'Stopped';
-        mq.edit(channelId, progressMsgId, stoppedText, { embedColor: EmbedColors.YELLOW });
+        if (!isHidden && progressMsgId) {
+          const stoppedText = lastProgressText && lastProgressText !== `Thinking${modeLabel}...`
+            ? `Stopped (after ${lastProgressText})`
+            : 'Stopped';
+          mq.edit(channelId, progressMsgId, stoppedText, { embedColor: EmbedColors.YELLOW });
+        }
         return totalUsage;
       }
 
-      await mq.drain(5000);
+      if (!isHidden) await mq.drain(5000);
 
       logger.error(`[${session.name}] error:`, error.message);
 
-      let hint = 'Tip: Use /clear to reset session';
-      if (error instanceof ClaudeExecutionError) {
-        if (error.errorType === ClaudeErrorType.PROCESS_KILLED) {
-          hint = 'Session context preserved, you can continue sending messages';
-        } else if (error.errorType === ClaudeErrorType.SESSION_RECOVERABLE) {
-          this.stateManager.clearSessionClaudeId(guildId, channelId);
-          hint = 'Session auto-reset, please resend your message';
-        } else if (error.errorType === ClaudeErrorType.FATAL) {
-          hint = 'Check bot config (is Claude CLI available?)';
+      if (!isHidden && progressMsgId) {
+        let hint = 'Tip: Use /clear to reset session';
+        if (error instanceof ClaudeExecutionError) {
+          if (error.errorType === ClaudeErrorType.PROCESS_KILLED) {
+            hint = 'Session context preserved, you can continue sending messages';
+          } else if (error.errorType === ClaudeErrorType.SESSION_RECOVERABLE) {
+            this.stateManager.clearSessionClaudeId(guildId, channelId);
+            hint = 'Session auto-reset, please resend your message';
+          } else if (error.errorType === ClaudeErrorType.FATAL) {
+            hint = 'Check bot config (is Claude CLI available?)';
+          }
         }
+        mq.edit(channelId, progressMsgId, `Error:\n${error.message}\n\n${hint}`, { embedColor: EmbedColors.RED });
+      } else if (error instanceof ClaudeExecutionError && error.errorType === ClaudeErrorType.SESSION_RECOVERABLE) {
+        this.stateManager.clearSessionClaudeId(guildId, channelId);
       }
-
-      mq.edit(channelId, progressMsgId, `Error:\n${error.message}\n\n${hint}`, { embedColor: EmbedColors.RED });
 
       if (this.errorReporter) {
         const sessionInfo = errorSessionId ? ` session=${errorSessionId.slice(0, 8)}` : '';
@@ -767,13 +786,15 @@ export class MessageHandler {
     } finally {
       // 安全网：10 秒后清理可能遗留的 progress 消息
       if (repositionTimer) { clearTimeout(repositionTimer); repositionTimer = null; }
-      const remainingIds = [...allProgressMsgIds].filter(id => id !== progressMsgId);
-      if (remainingIds.length > 0) {
-        setTimeout(() => {
-          for (const msgId of remainingIds) {
-            mq.delete(channelId, msgId);
-          }
-        }, 10000);
+      if (!isHidden) {
+        const remainingIds = [...allProgressMsgIds].filter(id => id !== progressMsgId);
+        if (remainingIds.length > 0) {
+          setTimeout(() => {
+            for (const msgId of remainingIds) {
+              mq.delete(channelId, msgId);
+            }
+          }, 10000);
+        }
       }
     }
 

@@ -25,6 +25,7 @@ interface SessionListRow {
   cwd: string | null;
   git_branch: string | null;
   project_path: string | null;
+  hidden: number | null;
   // usage 字段
   tokens_in: number;
   tokens_out: number;
@@ -48,12 +49,18 @@ export const listSessions: RouteHandler = async (req, res, _params, deps) => {
   const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
   const statusFilter = url.searchParams.get('status') || 'all';
   const goalIdFilter = url.searchParams.get('goal_id') || null;
+  const includeHidden = url.searchParams.get('include_hidden') === 'true';
   const limit = Math.min(parseInt(url.searchParams.get('limit') || '50', 10) || 50, 2000);
   const offset = parseInt(url.searchParams.get('offset') || '0', 10) || 0;
 
   // 构建动态 WHERE 子句
   const conditions: string[] = [];
   const params: unknown[] = [];
+
+  // 默认过滤 hidden=1 的 audit session（调试时传 ?include_hidden=true 跳过）
+  if (!includeHidden) {
+    conditions.push('(cs.hidden = 0 OR cs.hidden IS NULL)');
+  }
 
   if (statusFilter === 'active') {
     conditions.push('cs.status = ?');
@@ -83,6 +90,7 @@ export const listSessions: RouteHandler = async (req, res, _params, deps) => {
       SELECT cs.claude_session_id, cs.channel_id, cs.model, cs.plan_mode,
              cs.status, cs.purpose, cs.title, cs.created_at, cs.closed_at,
              cs.last_activity_at, cs.task_id, cs.goal_id, cs.cwd, cs.git_branch, cs.project_path,
+             cs.hidden,
              cs.tokens_in, cs.tokens_out, cs.cache_read_in, cs.cache_write_in,
              cs.cost_usd, cs.turn_count, cs.model_usage,
              ch.name AS channel_name,
@@ -106,6 +114,7 @@ export const listSessions: RouteHandler = async (req, res, _params, deps) => {
       channel_id: r.channel_id,
       channel_name: r.channel_name,
       model: r.model,
+      hidden: (r.hidden ?? 0) === 1,
       status: r.status,
       purpose: r.purpose,
       title: r.title,

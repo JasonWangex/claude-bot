@@ -326,7 +326,7 @@ You will receive review requests automatically. For each review, report your fin
     key: 'orchestrator.task_review',
     category: 'orchestrator',
     name: 'Per-task 审核',
-    description: '任务完成后发送给 reviewer channel 的审核请求',
+    description: '任务完成后在独立 audit sub-session 中执行的审核请求（已在 goal worktree 中）',
     template: `## Task Review: {{TASK_LABEL}}
 **Description:** {{TASK_DESCRIPTION}}
 **Branch:** \`{{BRANCH_NAME}}\`
@@ -336,7 +336,7 @@ You will receive review requests automatically. For each review, report your fin
 \`\`\`
 
 Please review this completed task:
-1. Use a sub-agent to checkout branch \`{{BRANCH_NAME}}\` and run \`/code-audit\` to audit the code changes
+1. Run \`/code-audit\` on branch \`{{BRANCH_NAME}}\` to audit the code changes (you are already in the goal worktree)
 2. Evaluate whether the implementation matches the task description
 3. Check for any quality issues, security concerns, or missed requirements
 

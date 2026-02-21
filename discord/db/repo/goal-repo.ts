@@ -101,14 +101,14 @@ export class GoalRepo implements IGoalRepo {
             error, merged, notified_blocked, feedback_json,
             complexity, pipeline_phase, audit_retries,
             tokens_in, tokens_out, cache_read_in, cache_write_in, cost_usd, duration_ms,
-            detail_plan
+            detail_plan, audit_session_key
           ) VALUES (
             @id, @goal_id, @description, @type, @phase, @status,
             @branch_name, @channel_id, @dispatched_at, @completed_at,
             @error, @merged, @notified_blocked, @feedback_json,
             @complexity, @pipeline_phase, @audit_retries,
             @tokens_in, @tokens_out, @cache_read_in, @cache_write_in, @cost_usd, @duration_ms,
-            @detail_plan
+            @detail_plan, @audit_session_key
           )
         `);
 
@@ -138,6 +138,7 @@ export class GoalRepo implements IGoalRepo {
             cost_usd: task.costUsd ?? null,
             duration_ms: task.durationMs ?? null,
             detail_plan: task.detailPlan ?? null,
+            audit_session_key: task.auditSessionKey ?? null,
           });
         }
       }
@@ -240,6 +241,7 @@ function rowsToGoalDriveState(
       costUsd: t.cost_usd ?? undefined,
       durationMs: t.duration_ms ?? undefined,
       detailPlan: t.detail_plan ?? undefined,
+      auditSessionKey: t.audit_session_key ?? undefined,
     })),
   };
 }
