@@ -10,7 +10,7 @@ import type { Migration } from '../migrate.js';
  * seedPromptConfigs 使用 INSERT OR IGNORE，已有记录不会被覆盖。
  */
 const migration: Migration = {
-  version: 18,
+  version: 22,
   name: 'add_reviewer_prompts',
 
   up(db) {
