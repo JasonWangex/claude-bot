@@ -339,6 +339,59 @@ Please confirm your status:
     sortOrder: 0,
   });
 
+  // ---- orchestrator.reviewer_init (审核员初始化) ----
+  entries.push({
+    key: 'orchestrator.reviewer_init',
+    category: 'orchestrator',
+    name: 'Reviewer 初始化',
+    description: 'Goal Drive 启动时发送给 reviewer channel，告知角色和上下文',
+    template: `You are the **code reviewer** for Goal "{{GOAL_NAME}}" (branch: \`{{GOAL_BRANCH}}\`).
+
+This goal has **{{TASK_COUNT}} tasks** to complete. Your responsibilities:
+
+1. Review each completed task's code changes when prompted
+2. Evaluate whether the implementation matches the task description
+3. Check for quality issues, security concerns, or missed requirements
+4. At the end of each phase, evaluate overall progress and decide whether to continue or replan
+
+You will receive review requests automatically. For each review, report your findings using \`bot_task_event\`.
+
+**No action needed now — wait for the first review request.**`,
+    variables: ['GOAL_NAME', 'GOAL_BRANCH', 'TASK_COUNT'],
+    parentKey: null,
+    sortOrder: 0,
+  });
+
+  // ---- orchestrator.task_review (Per-task 审核) ----
+  entries.push({
+    key: 'orchestrator.task_review',
+    category: 'orchestrator',
+    name: 'Per-task 审核',
+    description: '任务完成后发送给 reviewer channel 的审核请求',
+    template: `## Task Review: {{TASK_LABEL}}
+**Description:** {{TASK_DESCRIPTION}}
+**Branch:** \`{{BRANCH_NAME}}\`
+**Diff stats:**
+\`\`\`
+{{DIFF_STATS}}
+\`\`\`
+
+Please review this completed task:
+1. Use a sub-agent to checkout branch \`{{BRANCH_NAME}}\` and run \`/code-audit\` to audit the code changes
+2. Evaluate whether the implementation matches the task description
+3. Check for any quality issues, security concerns, or missed requirements
+
+Then call \`bot_task_event\` with:
+- \`task_id\`: "{{TASK_ID}}"
+- \`event_type\`: "review.task_result"
+- \`payload\`: \`{ "verdict": "pass" | "fail", "summary": "brief review summary", "issues": [] }\`
+
+If the verdict is "fail", include specific issues that need to be fixed.`,
+    variables: ['TASK_LABEL', 'TASK_DESCRIPTION', 'BRANCH_NAME', 'DIFF_STATS', 'TASK_ID'],
+    parentKey: null,
+    sortOrder: 0,
+  });
+
   // ================================================================
   // 批量写入
   // ================================================================
