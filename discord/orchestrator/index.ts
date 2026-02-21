@@ -329,6 +329,13 @@ export class GoalOrchestrator {
     state.status = 'running';
     await this.saveState(state);
     await this.notify(state.goalChannelId, `Goal "${state.goalName}" resumed`, 'success');
+
+    // 确保 reviewer session 存在（Bot 重启后 paused drive 不经过 restoreRunningDrives）
+    const guildId = this.getGuildId();
+    if (guildId) {
+      this.ensureGoalChannelSession(state, guildId);
+    }
+
     await this.reviewAndDispatch(state);
     return true;
   }
@@ -845,6 +852,13 @@ Call \`bot_task_event\` with:
       if (stateModified) await this.saveState(state);
 
       this.activeDrives.set(state.goalId, state);
+
+      // 恢复 reviewer channel session（确保 cwd 和 Opus 模型正确设置）
+      const guildId = this.getGuildId();
+      if (guildId) {
+        this.ensureGoalChannelSession(state, guildId);
+      }
+
       logger.info(`[Orchestrator] Restored drive: ${state.goalName} (${state.goalId})`);
       await this.reviewAndDispatch(state);
     }
@@ -2534,6 +2548,8 @@ Call \`bot_task_event\` with:
   /**
    * 确保 Goal Channel 有一个 Opus 会话可用于审核。
    * 如果没有 session 则创建一个，模型设为 Opus。
+   * 始终更新 cwd（防止 syncFromDiscord 将 cwd 覆盖为 '/default'，
+   * 或 Bot 重启后从 DB 重建的 session 携带错误 cwd）。
    */
   private ensureGoalChannelSession(state: GoalDriveState, guildId: string): void {
     const reviewerChannelId = state.reviewerChannelId ?? state.goalChannelId;
@@ -2541,6 +2557,8 @@ Call \`bot_task_event\` with:
       name: `review-${state.goalName}`,
       cwd: state.baseCwd,
     });
+    // 始终强制同步正确 cwd 到内存和 DB（getOrCreateSession 只在 session 不存在时写 DB）
+    this.deps.stateManager.setSessionCwd(guildId, reviewerChannelId, state.baseCwd);
     this.deps.stateManager.setSessionModel(guildId, reviewerChannelId, this.deps.config.pipelineOpusModel);
   }
 
