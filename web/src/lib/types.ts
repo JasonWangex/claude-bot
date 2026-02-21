@@ -32,7 +32,6 @@ export interface GoalTask {
   id: string;
   description: string;
   type: GoalTaskType;
-  depends: string[];
   phase?: number;
   status: GoalTaskStatus;
   branchName?: string;

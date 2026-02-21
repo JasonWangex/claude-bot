@@ -91,7 +91,6 @@ export const qdev: RouteHandler = async (req, res, params, deps) => {
       id: forkResult.channelId,       // channel ID 作为 task ID
       description,
       type: '代码',
-      depends: [],
       status: 'dispatched',
       branchName: forkResult.branchName,
       channelId: forkResult.channelId,

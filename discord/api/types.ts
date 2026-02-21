@@ -232,7 +232,6 @@ export interface GoalTaskSummary {
   pipeline_phase: string | null;
   audit_retries: number;
   status: string;
-  depends: string[];
   branch_name: string | null;
   channel_id: string | null;
 }

@@ -7,13 +7,12 @@
 import type { GoalDriveState, GoalTask } from '../types/index.js';
 
 /**
- * 获取所有依赖已满足的 pending 任务
+ * 获取所有可派发的 pending 任务
  *
  * 规则：
  * 1. 状态为 pending
- * 2. 所有 depends 中的任务都已终结（completed+merged / skipped / cancelled）
- * 3. 如果有 phase，前一个 phase 的所有任务都已终结
- * 4. type 为 '手动' 的任务不自动派发，标记为 blocked
+ * 2. 如果有 phase，前一个 phase 的所有任务都已终结
+ * 3. type 为 '手动' 的任务不自动派发，标记为 blocked
  */
 /** 判断任务是否视为「已终结」（不再阻塞后续）
  *  - completed 且有分支 → 必须 merged 才算终结
@@ -29,7 +28,6 @@ const isTerminal = (task: GoalTask): boolean => {
 };
 
 export function getDispatchableTasks(state: GoalDriveState): GoalTask[] {
-  const taskMap = new Map(state.tasks.map(t => [t.id, t]));
   const dispatchable: GoalTask[] = [];
 
   // 检查 phase 约束：某个 phase 是否全部完成
@@ -44,13 +42,6 @@ export function getDispatchableTasks(state: GoalDriveState): GoalTask[] {
 
     // 占位任务不自动派发
     if (task.type === '占位') continue;
-
-    // 检查显式依赖
-    const depsOk = task.depends.every(depId => {
-      const dep = taskMap.get(depId);
-      return dep && isTerminal(dep);
-    });
-    if (!depsOk) continue;
 
     // 检查 phase 依赖
     if (task.phase != null && task.phase > 1) {

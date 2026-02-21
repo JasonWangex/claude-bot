@@ -15,79 +15,106 @@ const nodeTypes = { task: TaskNode };
 
 const NODE_WIDTH = 280;
 const NODE_HEIGHT = 110;
-const HORIZONTAL_GAP = 80;
-const VERTICAL_GAP = 100;
+const HORIZONTAL_GAP = 40;
+const VERTICAL_GAP = 80;
+const PHASE_HEADER_HEIGHT = 40;
 
-function buildLayout(tasks: GoalTask[]): { nodes: Node[]; edges: Edge[]; layerCount: number } {
-  const taskMap = new Map(tasks.map(t => [t.id, t]));
+function getPhaseNumber(task: GoalTask): number {
+  return task.phase ?? 1;
+}
 
-  const depthCache = new Map<string, number>();
-  function getDepth(taskId: string, visiting = new Set<string>()): number {
-    if (depthCache.has(taskId)) return depthCache.get(taskId)!;
-    if (visiting.has(taskId)) return 0;
-    visiting.add(taskId);
-    const task = taskMap.get(taskId);
-    if (!task || task.depends.length === 0) {
-      depthCache.set(taskId, 0);
-      return 0;
-    }
-    const depth = Math.max(...task.depends.map(d => getDepth(d, visiting) + 1));
-    depthCache.set(taskId, depth);
-    return depth;
+function buildLayout(tasks: GoalTask[]): { nodes: Node[]; edges: Edge[]; phaseCount: number } {
+  if (tasks.length === 0) return { nodes: [], edges: [], phaseCount: 0 };
+
+  // 按 phase 分组
+  const phaseMap = new Map<number, GoalTask[]>();
+  for (const task of tasks) {
+    const phase = getPhaseNumber(task);
+    if (!phaseMap.has(phase)) phaseMap.set(phase, []);
+    phaseMap.get(phase)!.push(task);
   }
 
-  tasks.forEach(t => getDepth(t.id));
-
-  const layers = new Map<number, GoalTask[]>();
-  tasks.forEach(task => {
-    const depth = depthCache.get(task.id) ?? 0;
-    if (!layers.has(depth)) layers.set(depth, []);
-    layers.get(depth)!.push(task);
-  });
-
-  const sortedLayers = [...layers.entries()].sort((a, b) => a[0] - b[0]);
-  const maxLayerSize = sortedLayers.length > 0
-    ? Math.max(...sortedLayers.map(([, tasks]) => tasks.length))
-    : 1;
-  const totalWidth = maxLayerSize * (NODE_WIDTH + HORIZONTAL_GAP);
+  const sortedPhases = [...phaseMap.keys()].sort((a, b) => a - b);
+  const maxTasksInPhase = Math.max(...sortedPhases.map(p => phaseMap.get(p)!.length));
+  const columnWidth = NODE_WIDTH + HORIZONTAL_GAP;
+  const totalWidth = maxTasksInPhase * columnWidth;
 
   const nodes: Node[] = [];
-  sortedLayers.forEach(([layerIndex, layerTasks]) => {
-    const layerWidth = layerTasks.length * (NODE_WIDTH + HORIZONTAL_GAP) - HORIZONTAL_GAP;
-    const startX = (totalWidth - layerWidth) / 2;
 
-    layerTasks.forEach((task, indexInLayer) => {
+  sortedPhases.forEach((phase, phaseIndex) => {
+    const phaseTasks = phaseMap.get(phase)!;
+    const phaseWidth = phaseTasks.length * columnWidth - HORIZONTAL_GAP;
+    const startX = (totalWidth - phaseWidth) / 2;
+    const y = phaseIndex * (NODE_HEIGHT + VERTICAL_GAP + PHASE_HEADER_HEIGHT);
+
+    // Phase 标题节点
+    nodes.push({
+      id: `phase-${phase}`,
+      type: 'default',
+      position: { x: startX, y },
+      data: { label: `Phase ${phase}` },
+      draggable: false,
+      selectable: false,
+      style: {
+        width: phaseWidth,
+        height: PHASE_HEADER_HEIGHT - 10,
+        background: '#f0f5ff',
+        border: '1px solid #adc6ff',
+        borderRadius: 6,
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        fontSize: 12,
+        fontWeight: 600,
+        color: '#2f54eb',
+        pointerEvents: 'none' as const,
+      },
+    });
+
+    // 任务节点
+    phaseTasks.forEach((task, indexInPhase) => {
       nodes.push({
         id: task.id,
         type: 'task',
         position: {
-          x: startX + indexInLayer * (NODE_WIDTH + HORIZONTAL_GAP),
-          y: layerIndex * (NODE_HEIGHT + VERTICAL_GAP),
+          x: startX + indexInPhase * columnWidth,
+          y: y + PHASE_HEADER_HEIGHT,
         },
         data: { task },
       });
     });
   });
 
+  // Phase 间的连接线（phase N → phase N+1 的代表性连线）
   const edges: Edge[] = [];
-  tasks.forEach(task => {
-    task.depends.forEach(depId => {
-      edges.push({
-        id: `${depId}->${task.id}`,
-        source: depId,
-        target: task.id,
-        animated: task.status === 'running' || task.status === 'dispatched',
-        style: {
-          stroke: task.status === 'completed' ? '#52c41a' :
-                  task.status === 'failed' ? '#ff4d4f' :
-                  '#d9d9d9',
-          strokeWidth: 2,
-        },
-      });
-    });
-  });
+  for (let i = 0; i < sortedPhases.length - 1; i++) {
+    const currentPhase = sortedPhases[i];
+    const nextPhase = sortedPhases[i + 1];
+    const currentTasks = phaseMap.get(currentPhase)!;
+    const nextTasks = phaseMap.get(nextPhase)!;
 
-  return { nodes, edges, layerCount: sortedLayers.length };
+    // 用第一个任务对建立连线，表示 phase 顺序依赖
+    if (currentTasks.length > 0 && nextTasks.length > 0) {
+      const sourceTask = currentTasks[Math.floor(currentTasks.length / 2)];
+      const targetTask = nextTasks[Math.floor(nextTasks.length / 2)];
+      edges.push({
+        id: `phase-${currentPhase}->${nextPhase}`,
+        source: sourceTask.id,
+        target: targetTask.id,
+        animated: nextTasks.some(t => t.status === 'running' || t.status === 'dispatched'),
+        style: {
+          stroke: '#adc6ff',
+          strokeWidth: 2,
+          strokeDasharray: '6 3',
+        },
+        label: `→ Phase ${nextPhase}`,
+        labelStyle: { fontSize: 10, fill: '#8c8c8c' },
+        labelBgStyle: { fill: 'transparent' },
+      });
+    }
+  }
+
+  return { nodes, edges, phaseCount: sortedPhases.length };
 }
 
 interface GoalDAGProps {
@@ -96,11 +123,12 @@ interface GoalDAGProps {
 }
 
 export function GoalDAG({ tasks, highlightStatuses }: GoalDAGProps) {
-  const { nodes, edges, layerCount } = useMemo(() => buildLayout(tasks), [tasks]);
+  const { nodes, edges, phaseCount } = useMemo(() => buildLayout(tasks), [tasks]);
 
   const displayNodes = useMemo(() => {
     if (!highlightStatuses || highlightStatuses.length === 0) return nodes;
     return nodes.map(n => {
+      if (!n.data.task) return n; // phase header node
       const task = (n.data as { task: GoalTask }).task;
       return { ...n, data: { ...n.data, dimmed: !highlightStatuses.includes(task.status) } };
     });
@@ -108,14 +136,8 @@ export function GoalDAG({ tasks, highlightStatuses }: GoalDAGProps) {
 
   const displayEdges = useMemo(() => {
     if (!highlightStatuses || highlightStatuses.length === 0) return edges;
-    const highlightedIds = new Set(
-      nodes.filter(n => highlightStatuses.includes((n.data as { task: GoalTask }).task.status)).map(n => n.id),
-    );
-    return edges.map(e => {
-      const dimmed = !highlightedIds.has(e.source) || !highlightedIds.has(e.target);
-      return dimmed ? { ...e, style: { ...e.style, opacity: 0.15 }, animated: false } : e;
-    });
-  }, [edges, nodes, highlightStatuses]);
+    return edges.map(e => ({ ...e, style: { ...e.style, opacity: 0.15 }, animated: false }));
+  }, [edges, highlightStatuses]);
 
   if (tasks.length === 0) {
     return (
@@ -133,7 +155,7 @@ export function GoalDAG({ tasks, highlightStatuses }: GoalDAGProps) {
     );
   }
 
-  const containerHeight = Math.min(700, Math.max(400, layerCount * (NODE_HEIGHT + VERTICAL_GAP) + 100));
+  const containerHeight = Math.min(700, Math.max(400, phaseCount * (NODE_HEIGHT + VERTICAL_GAP + PHASE_HEADER_HEIGHT) + 100));
 
   return (
     <div style={{ height: containerHeight, border: '1px solid #f0f0f0', borderRadius: 8, background: '#fff' }}>

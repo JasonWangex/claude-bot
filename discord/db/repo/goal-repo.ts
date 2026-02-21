@@ -2,14 +2,14 @@
  * IGoalRepo 的 SQLite 实现
  *
  * 管理 Goal Drive 状态的持久化。
- * Goal 存储在 goals 表，tasks 和 deps 由 TaskRepo 管理，
- * 但 get/getAll 需要联合查询 tasks + deps 来组装完整的 GoalDriveState。
+ * Goal 存储在 goals 表，tasks 由 TaskRepo 管理，
+ * 任务顺序通过 phase 字段控制。
  */
 
 import type Database from 'better-sqlite3';
 import type { IGoalRepo } from '../../types/repository.js';
 import type { GoalDriveState, GoalDriveStatus, TaskStatus } from '../../types/index.js';
-import type { GoalRow, TaskRow, TaskDepRow } from '../../types/db.js';
+import type { GoalRow, TaskRow } from '../../types/db.js';
 
 export class GoalRepo implements IGoalRepo {
   private db: Database.Database;
@@ -22,7 +22,6 @@ export class GoalRepo implements IGoalRepo {
     deleteGoal: Database.Statement;
     findByDriveStatus: Database.Statement;
     getTasksByGoal: Database.Statement;
-    getDepsByGoal: Database.Statement;
   };
 
   constructor(db: Database.Database) {
@@ -67,8 +66,6 @@ export class GoalRepo implements IGoalRepo {
       getTasksByGoal: this.db.prepare(
         `SELECT * FROM tasks WHERE goal_id = ? ORDER BY phase ASC, id ASC`,
       ),
-
-      getDepsByGoal: this.db.prepare(`SELECT * FROM task_deps WHERE goal_id = ?`),
     };
   }
 
@@ -77,17 +74,14 @@ export class GoalRepo implements IGoalRepo {
     if (!row || !row.drive_status) return null;
 
     const taskRows = this.stmts.getTasksByGoal.all(goalId) as TaskRow[];
-    const depRows = this.stmts.getDepsByGoal.all(goalId) as TaskDepRow[];
-
-    return rowsToGoalDriveState(row, taskRows, depRows);
+    return rowsToGoalDriveState(row, taskRows);
   }
 
   async getAll(): Promise<GoalDriveState[]> {
     const rows = this.stmts.getAllGoals.all() as GoalRow[];
     return rows.map((row) => {
       const taskRows = this.stmts.getTasksByGoal.all(row.id) as TaskRow[];
-      const depRows = this.stmts.getDepsByGoal.all(row.id) as TaskDepRow[];
-      return rowsToGoalDriveState(row, taskRows, depRows);
+      return rowsToGoalDriveState(row, taskRows);
     });
   }
 
@@ -118,11 +112,6 @@ export class GoalRepo implements IGoalRepo {
           )
         `);
 
-        const insertDep = this.db.prepare(`
-          INSERT INTO task_deps (task_id, depends_on_task_id, goal_id)
-          VALUES (@task_id, @depends_on_task_id, @goal_id)
-        `);
-
         for (const task of state.tasks) {
           insertTask.run({
             id: task.id,
@@ -150,14 +139,6 @@ export class GoalRepo implements IGoalRepo {
             duration_ms: task.durationMs ?? null,
             detail_plan: task.detailPlan ?? null,
           });
-
-          for (const dep of task.depends) {
-            insertDep.run({
-              task_id: task.id,
-              depends_on_task_id: dep,
-              goal_id: state.goalId,
-            });
-          }
         }
       }
     });
@@ -166,7 +147,6 @@ export class GoalRepo implements IGoalRepo {
   }
 
   async delete(goalId: string): Promise<boolean> {
-    // CASCADE 会自动删除 tasks 和 task_deps
     const result = this.stmts.deleteGoal.run(goalId);
     return result.changes > 0;
   }
@@ -175,8 +155,7 @@ export class GoalRepo implements IGoalRepo {
     const rows = this.stmts.findByDriveStatus.all(status) as GoalRow[];
     return rows.map((row) => {
       const taskRows = this.stmts.getTasksByGoal.all(row.id) as TaskRow[];
-      const depRows = this.stmts.getDepsByGoal.all(row.id) as TaskDepRow[];
-      return rowsToGoalDriveState(row, taskRows, depRows);
+      return rowsToGoalDriveState(row, taskRows);
     });
   }
 }
@@ -208,16 +187,7 @@ function goalDriveStateToGoalRow(state: GoalDriveState): Record<string, unknown>
 function rowsToGoalDriveState(
   goal: GoalRow,
   tasks: TaskRow[],
-  deps: TaskDepRow[],
 ): GoalDriveState {
-  // 建立 taskId → depends 映射
-  const depsMap = new Map<string, string[]>();
-  for (const dep of deps) {
-    const list = depsMap.get(dep.task_id) || [];
-    list.push(dep.depends_on_task_id);
-    depsMap.set(dep.task_id, list);
-  }
-
   // 反序列化 pendingReplan / pendingRollback / reviewerChannelId
   let pendingReplan: GoalDriveState['pendingReplan'];
   let pendingRollback: GoalDriveState['pendingRollback'];
@@ -250,7 +220,6 @@ function rowsToGoalDriveState(
       goalId: t.goal_id ?? undefined,
       description: t.description,
       type: t.type,
-      depends: depsMap.get(t.id) || [],
       phase: t.phase ?? undefined,
       complexity: t.complexity ?? undefined,
       pipelinePhase: (t.pipeline_phase as GoalDriveState['tasks'][number]['pipelinePhase']) ?? undefined,

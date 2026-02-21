@@ -19,10 +19,9 @@ import { buildReplanApprovalButtons, buildReplanRollbackButton } from './goal-bu
 
 /** 单条变更指令 */
 export type ReplanChange =
-  | { action: 'add'; task: { id: string; description: string; type: string; depends: string[]; phase?: number; complexity?: 'simple' | 'complex' } }
-  | { action: 'modify'; taskId: string; updates: { description?: string; type?: string; depends?: string[]; phase?: number; complexity?: 'simple' | 'complex' } }
-  | { action: 'remove'; taskId: string; reason: string }
-  | { action: 'reorder'; taskId: string; newDepends: string[]; newPhase?: number };
+  | { action: 'add'; task: { id: string; description: string; type: string; phase?: number; complexity?: 'simple' | 'complex' } }
+  | { action: 'modify'; taskId: string; updates: { description?: string; type?: string; phase?: number; complexity?: 'simple' | 'complex' } }
+  | { action: 'remove'; taskId: string; reason: string };
 
 /** LLM 返回的重规划结果 */
 export interface ReplanResult {
@@ -142,17 +141,10 @@ export function applyReplanChanges(
           rejected.push({ change, reason: `Task ${change.task.id} already exists` });
           break;
         }
-        // 验证依赖引用有效
-        const invalidDeps = change.task.depends.filter(d => !taskMap.has(d));
-        if (invalidDeps.length > 0) {
-          rejected.push({ change, reason: `Invalid depends: ${invalidDeps.join(', ')}` });
-          break;
-        }
         const newTask: GoalTask = {
           id: change.task.id,
           description: change.task.description,
           type: (change.task.type as GoalTask['type']) || '代码',
-          depends: change.task.depends,
           phase: change.task.phase,
           complexity: change.task.complexity,
           status: 'pending',
@@ -173,17 +165,8 @@ export function applyReplanChanges(
           rejected.push({ change, reason: `Cannot modify task in ${task.status} status` });
           break;
         }
-        // 验证新依赖引用有效
-        if (change.updates.depends) {
-          const invalidDeps = change.updates.depends.filter(d => !taskMap.has(d));
-          if (invalidDeps.length > 0) {
-            rejected.push({ change, reason: `Invalid depends: ${invalidDeps.join(', ')}` });
-            break;
-          }
-        }
         if (change.updates.description) task.description = change.updates.description;
         if (change.updates.type) task.type = change.updates.type as GoalTask['type'];
-        if (change.updates.depends) task.depends = change.updates.depends;
         if (change.updates.phase !== undefined) task.phase = change.updates.phase;
         if (change.updates.complexity) task.complexity = change.updates.complexity;
         applied.push(change);
@@ -205,114 +188,10 @@ export function applyReplanChanges(
         break;
       }
 
-      case 'reorder': {
-        const task = taskMap.get(change.taskId);
-        if (!task) {
-          rejected.push({ change, reason: `Task ${change.taskId} not found` });
-          break;
-        }
-        if (immutableStatuses.has(task.status)) {
-          rejected.push({ change, reason: `Cannot reorder task in ${task.status} status` });
-          break;
-        }
-        // 验证新依赖引用有效
-        const invalidReorderDeps = change.newDepends.filter(d => !taskMap.has(d));
-        if (invalidReorderDeps.length > 0) {
-          rejected.push({ change, reason: `Invalid depends: ${invalidReorderDeps.join(', ')}` });
-          break;
-        }
-        task.depends = change.newDepends;
-        if (change.newPhase !== undefined) task.phase = change.newPhase;
-        applied.push(change);
-        break;
-      }
     }
   }
 
   return { applied, rejected, updatedTasks };
-}
-
-// ==================== 依赖一致性验证 ====================
-
-/** 依赖验证结果 */
-export interface DependencyValidation {
-  valid: boolean;
-  errors: string[];
-}
-
-/**
- * 验证任务图的依赖一致性：
- * 1. 所有依赖引用的任务必须存在（非 cancelled）
- * 2. 不能存在循环依赖
- */
-export function validateDependencies(tasks: GoalTask[]): DependencyValidation {
-  const errors: string[] = [];
-  const activeTaskIds = new Set(
-    tasks.filter(t => t.status !== 'cancelled').map(t => t.id),
-  );
-
-  // 1. 检查悬空引用（忽略 cancelled 任务的依赖）
-  for (const task of tasks) {
-    if (task.status === 'cancelled') continue;
-    for (const dep of task.depends) {
-      if (!activeTaskIds.has(dep)) {
-        errors.push(`Task ${task.id} depends on non-existent/cancelled task ${dep}`);
-      }
-    }
-  }
-
-  // 2. 检查循环依赖（DFS 拓扑排序）
-  const cycle = detectCycle(tasks.filter(t => t.status !== 'cancelled'));
-  if (cycle) {
-    errors.push(`Circular dependency detected: ${cycle.join(' → ')}`);
-  }
-
-  return { valid: errors.length === 0, errors };
-}
-
-/**
- * DFS 检测循环依赖，返回环路径或 null
- */
-function detectCycle(tasks: GoalTask[]): string[] | null {
-  const adj = new Map<string, string[]>();
-  for (const task of tasks) {
-    adj.set(task.id, task.depends);
-  }
-
-  // 0 = unvisited, 1 = in stack (visiting), 2 = done
-  const state = new Map<string, 0 | 1 | 2>();
-  for (const task of tasks) state.set(task.id, 0);
-
-  const path: string[] = [];
-
-  function dfs(nodeId: string): string[] | null {
-    const s = state.get(nodeId);
-    if (s === 2) return null;  // already fully processed
-    if (s === 1) {
-      // Found cycle — extract the cycle path
-      const cycleStart = path.indexOf(nodeId);
-      return [...path.slice(cycleStart), nodeId];
-    }
-
-    state.set(nodeId, 1);
-    path.push(nodeId);
-
-    for (const dep of adj.get(nodeId) ?? []) {
-      if (!adj.has(dep)) continue; // skip refs to non-existent tasks (handled separately)
-      const cycle = dfs(dep);
-      if (cycle) return cycle;
-    }
-
-    path.pop();
-    state.set(nodeId, 2);
-    return null;
-  }
-
-  for (const task of tasks) {
-    const cycle = dfs(task.id);
-    if (cycle) return cycle;
-  }
-  return null;
 }
 
 // ==================== Goal body 子任务列表更新 ====================
@@ -346,15 +225,15 @@ export function renderTaskListMarkdown(tasks: GoalTask[]): string {
   const lines: string[] = [
     '## 子任务',
     '',
-    '| ID | 类型 | 描述 | 依赖 | 状态 |',
+    '| ID | 类型 | 描述 | Phase | 状态 |',
     '|---|---|---|---|---|',
   ];
 
   for (const task of tasks) {
     const emoji = statusEmoji[task.status] || '';
-    const deps = task.depends.length > 0 ? task.depends.join(', ') : '—';
+    const phase = task.phase ?? 1;
     const desc = task.description.replace(/\|/g, '\\|');
-    lines.push(`| ${task.id} | ${task.type} | ${desc} | ${deps} | ${emoji} ${task.status} |`);
+    lines.push(`| ${task.id} | ${task.type} | ${desc} | ${phase} | ${emoji} ${task.status} |`);
   }
 
   return lines.join('\n');
@@ -406,21 +285,14 @@ export async function applyChanges(
   // 1. 应用变更到内存
   const result = applyReplanChanges(state.tasks, changes);
 
-  // 2. 验证依赖一致性
-  const validation = validateDependencies(result.updatedTasks);
-  if (!validation.valid) {
-    logger.warn(`[Replanner] Dependency validation failed: ${validation.errors.join('; ')}`);
-    // 依赖验证失败不阻止持久化，但记录错误供调用者处理
-  }
-
-  // 3. 更新内存 state
+  // 2. 更新内存 state
   state.tasks = result.updatedTasks;
   state.updatedAt = Date.now();
 
-  // 4. 持久化到 TaskRepo
+  // 3. 持久化到 TaskRepo
   await deps.taskRepo.saveAll(result.updatedTasks, state.goalId);
 
-  // 5. 更新 Goal body
+  // 4. 更新 Goal body
   const goalMeta = await deps.goalMetaRepo.get(state.goalId);
   if (goalMeta) {
     goalMeta.body = updateGoalBodyWithTasks(goalMeta.body, result.updatedTasks);
@@ -434,11 +306,10 @@ export async function applyChanges(
   }
 
   logger.info(
-    `[Replanner] Applied ${result.applied.length} changes, rejected ${result.rejected.length}` +
-    (validation.errors.length > 0 ? `, validation warnings: ${validation.errors.length}` : ''),
+    `[Replanner] Applied ${result.applied.length} changes, rejected ${result.rejected.length}`,
   );
 
-  return { ...result, validationErrors: validation.errors };
+  return { ...result, validationErrors: [] };
 }
 
 // ==================== Impact Level 分级自治 ====================
@@ -491,11 +362,6 @@ export function assessImpactLevel(
         break;
       }
 
-      case 'reorder':
-        if (pendingIds.has(change.taskId)) {
-          affectedPendingIds.add(change.taskId);
-        }
-        break;
     }
   }
 
@@ -525,10 +391,9 @@ export function assessImpactLevel(
  * Task t3 报告需要拆分为前后端...
  *
  * ── 变更列表 ──
- * ➕ 新增: t9 — 实现前端表单验证 [depends: t3]
+ * ➕ 新增: t9 — 实现前端表单验证 (phase 3)
  * ✏️ 修改: t5 — 更新描述: "..." → "..."
  * ❌ 移除: t7 — 原因: superseded by t9
- * 🔀 调序: t6 — 新依赖: [t9], phase 3
  * ```
  */
 export function generateChangeDiff(
@@ -549,11 +414,8 @@ export function generateChangeDiff(
   for (const change of result.changes) {
     switch (change.action) {
       case 'add': {
-        const deps = change.task.depends.length > 0
-          ? ` [depends: ${change.task.depends.join(', ')}]`
-          : '';
         const phase = change.task.phase != null ? ` (phase ${change.task.phase})` : '';
-        lines.push(`➕ 新增: **${change.task.id}** — ${change.task.description}${deps}${phase}`);
+        lines.push(`➕ 新增: **${change.task.id}** — ${change.task.description}${phase}`);
         break;
       }
       case 'modify': {
@@ -562,9 +424,6 @@ export function generateChangeDiff(
         if (change.updates.description) {
           const oldDesc = existing?.description ?? '?';
           parts.push(`描述: "${oldDesc.slice(0, 40)}" → "${change.updates.description.slice(0, 40)}"`);
-        }
-        if (change.updates.depends) {
-          parts.push(`依赖: [${change.updates.depends.join(', ')}]`);
         }
         if (change.updates.type) {
           parts.push(`类型: ${change.updates.type}`);
@@ -578,11 +437,6 @@ export function generateChangeDiff(
       case 'remove':
         lines.push(`❌ 移除: **${change.taskId}** — 原因: ${change.reason}`);
         break;
-      case 'reorder': {
-        const phase = change.newPhase != null ? `, phase ${change.newPhase}` : '';
-        lines.push(`🔀 调序: **${change.taskId}** — 新依赖: [${change.newDepends.join(', ')}]${phase}`);
-        break;
-      }
     }
   }
 
@@ -753,9 +607,8 @@ function buildReplanPrompt(ctx: ReplanContext): string {
 
   // 当前任务列表
   const currentTasks = state.tasks.map(task => {
-    const deps = task.depends.length > 0 ? ` [depends: ${task.depends.join(', ')}]` : '';
     const phase = task.phase != null ? ` (phase ${task.phase})` : '';
-    return `- ${task.id}: [${task.status}] ${task.type} — ${task.description}${deps}${phase}`;
+    return `- ${task.id}: [${task.status}] ${task.type} — ${task.description}${phase}`;
   }).join('\n');
 
   // Feedback details
@@ -849,7 +702,6 @@ function parseReplanResponse(raw: string): ReplanResult | null {
                 id: change.task.id,
                 description: change.task.description,
                 type: change.task.type || '代码',
-                depends: Array.isArray(change.task.depends) ? change.task.depends : [],
                 phase: change.task.phase,
                 complexity,
               },
@@ -865,6 +717,8 @@ function parseReplanResponse(raw: string): ReplanResult | null {
                 ? updates.complexity as 'simple' | 'complex'
                 : undefined;
             }
+            // 过滤掉 depends 字段（已废弃）
+            delete updates.depends;
             validChanges.push({
               action: 'modify',
               taskId: change.taskId,
@@ -879,17 +733,6 @@ function parseReplanResponse(raw: string): ReplanResult | null {
               action: 'remove',
               taskId: change.taskId,
               reason: change.reason || 'removed by replanner',
-            });
-          }
-          break;
-
-        case 'reorder':
-          if (change.taskId && Array.isArray(change.newDepends)) {
-            validChanges.push({
-              action: 'reorder',
-              taskId: change.taskId,
-              newDepends: change.newDepends,
-              newPhase: change.newPhase,
             });
           }
           break;
