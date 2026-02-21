@@ -47,6 +47,7 @@ import migration031 from './migrations/031_add_hidden_session.js';
 import migration032 from './migrations/032_create_goal_timeline.js';
 import migration033 from './migrations/033_add_feedback_investigation_prompt.js';
 import migration034 from './migrations/034_simplify_prompts.js';
+import migration035 from './migrations/035_create_goal_events.js';
 
 const allMigrations: Migration[] = [
   migration001,
@@ -83,6 +84,7 @@ const allMigrations: Migration[] = [
   migration032,
   migration033,
   migration034,
+  migration035,
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -184,3 +186,5 @@ export { TaskEventRepo, EVENT_TYPES } from './repo/task-event-repo.js';
 export type { EventType, PendingEvent } from './repo/task-event-repo.js';
 export { GoalTimelineRepo } from './repo/goal-timeline-repo.js';
 export type { GoalTimelineEvent, TimelineEventType } from './repo/goal-timeline-repo.js';
+export { GoalEventRepo, GOAL_EVENT_TYPES } from './repo/goal-event-repo.js';
+export type { GoalEventType, PendingGoalEvent } from './repo/goal-event-repo.js';

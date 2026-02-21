@@ -6,23 +6,13 @@ import { z } from 'zod/v4';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { apiGet, apiPost, apiPatch } from '../api-client.js';
 
-/** Drive task 结构（传入 JSON 字符串，内部解析） */
-interface DriveTask {
-  id: string;
-  description: string;
-  type?: string;
-  depends?: string[];
-  phase?: number;
-  complexity?: string;
-}
-
 export function registerGoalTools(server: McpServer) {
   server.registerTool('bot_goals', {
     title: 'Goals',
-    description: 'Goal management. action: list, get, create, update, drive.',
+    description: 'Goal management. action: list, get, create, update.',
     inputSchema: {
-      action: z.enum(['list', 'get', 'create', 'update', 'drive']).describe('Operation type'),
-      goal_id: z.string().optional().describe('Goal ID (get/update/drive)'),
+      action: z.enum(['list', 'get', 'create', 'update']).describe('Operation type'),
+      goal_id: z.string().optional().describe('Goal ID (get/update)'),
       name: z.string().optional().describe('Goal name (create/update)'),
       project: z.string().optional().describe('Project name'),
       status: z.string().optional().describe('Pending/Collecting/Planned/Processing/Blocking/Completed/Merged'),
@@ -32,12 +22,6 @@ export function registerGoalTools(server: McpServer) {
       body: z.string().optional().describe('Body content (Markdown)'),
       next: z.string().optional().describe('Next step (update)'),
       blocked_by: z.string().optional().describe('Blocker description (update)'),
-      // drive params
-      goal_name: z.string().optional().describe('Goal display name (drive)'),
-      goal_channel_id: z.string().optional().describe('Discord channel ID for goal thread (drive)'),
-      base_cwd: z.string().optional().describe('Base working directory (drive)'),
-      tasks: z.string().optional().describe('JSON array of tasks (drive)'),
-      max_concurrent: z.number().optional().describe('Max concurrent sub-tasks, default 3 (drive)'),
     },
   }, async ({ action, goal_id, q, ...fields }) => {
     switch (action) {
@@ -62,27 +46,10 @@ export function registerGoalTools(server: McpServer) {
         return { content: [{ type: 'text', text: JSON.stringify(r.data ?? r, null, 2) }] };
       }
       case 'update': {
-        const { goal_name, goal_channel_id, base_cwd, tasks, max_concurrent, ...updateFields } = fields;
         const body = Object.fromEntries(
-          Object.entries(updateFields).filter(([, v]) => v !== undefined)
+          Object.entries(fields).filter(([, v]) => v !== undefined)
         );
         const r = await apiPatch(`/api/goals/${goal_id}`, body);
-        return { content: [{ type: 'text', text: JSON.stringify(r.data ?? r, null, 2) }] };
-      }
-      case 'drive': {
-        let parsedTasks: DriveTask[];
-        try {
-          parsedTasks = JSON.parse(fields.tasks || '[]');
-        } catch {
-          return { content: [{ type: 'text', text: JSON.stringify({ ok: false, error: 'Invalid tasks JSON' }) }] };
-        }
-        const r = await apiPost(`/api/goals/${goal_id}/drive`, {
-          goalName: fields.goal_name,
-          goalChannelId: fields.goal_channel_id,
-          baseCwd: fields.base_cwd,
-          tasks: parsedTasks,
-          maxConcurrent: fields.max_concurrent,
-        });
         return { content: [{ type: 'text', text: JSON.stringify(r.data ?? r, null, 2) }] };
       }
     }

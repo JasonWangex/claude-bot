@@ -10,20 +10,13 @@
 ## Subtasks
 
 > ID format: `g<seq>t<N>`, where seq is the Goal's auto-increment number (`seq` field from API). Example: seq=2 → `g2t1`, `g2t2`.
+> Phase annotation `p:N` controls execution order — all tasks in phase N complete before phase N+1 starts. Tasks in the same phase run in parallel.
 
-### Phase 1
-
-- [ ] `[代码, simple]` g2t1: description — technical notes
-- [ ] `[调研]` g2t2: description
-
-### Phase 2
-
-- [ ] `[代码, complex]` g2t3: description — technical notes
-- [ ] `[代码, simple]` g2t4: description
-
-### Phase 3
-
-- [ ] `[手动]` g2t5: description
+- [ ] `[代码, simple, p:1]` g2t1: description — technical notes
+- [ ] `[调研, p:1]` g2t2: description
+- [ ] `[代码, complex, p:2]` g2t3: description — technical notes
+- [ ] `[代码, simple, p:2]` g2t4: description
+- [ ] `[手动, p:3]` g2t5: description
 
 ### g2t1: description `[代码, simple]`
 **Goal**: ...

@@ -34,10 +34,10 @@ export const startDrive: RouteHandler = async (req, res, params, deps) => {
   const goalId = params.goalId;
 
   const body = await readJsonBody<Omit<StartDriveParams, 'goalId'>>(req);
-  if (!body?.goalName || !body?.goalChannelId || !body?.baseCwd || !body?.tasks) {
+  if (!body?.goalName || !body?.goalChannelId || !body?.baseCwd) {
     sendJson(res, 400, {
       ok: false,
-      error: 'Required: goalName, goalChannelId, baseCwd, tasks',
+      error: 'Required: goalName, goalChannelId, baseCwd',
     });
     return;
   }
@@ -59,7 +59,6 @@ export const startDrive: RouteHandler = async (req, res, params, deps) => {
       goalName: body.goalName,
       goalChannelId: body.goalChannelId,
       baseCwd: body.baseCwd,
-      tasks: body.tasks,
       maxConcurrent: body.maxConcurrent,
     });
 
