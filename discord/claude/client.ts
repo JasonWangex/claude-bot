@@ -38,6 +38,7 @@ export class ClaudeClient {
       'Bash',
       'WebFetch',
       'WebSearch',
+      'mcp__claude-bot__*',
     ];
   }
 

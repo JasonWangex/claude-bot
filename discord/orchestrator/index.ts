@@ -68,6 +68,14 @@ interface OrchestratorDeps {
   taskEventRepo: TaskEventRepo;
 }
 
+interface MergeConflictPayload {
+  branchName: string;
+  goalWorktreeDir: string;
+  subtaskDir: string | null;
+  taskDescription: string;
+  error: string;
+}
+
 /** startDrive 的入参 */
 export interface StartDriveParams {
   goalId: string;
@@ -2185,15 +2193,20 @@ Call \`bot_task_event\` with:
             }
           }
         } else {
-          // AI 无法解决，fallback 到人工干预
+          // AI 无法解决 → 写 merge.conflict 事件，由 reviewer 排队处理
           await this.notify(state.goalChannelId,
             `AI could not resolve conflict: \`${branchName}\` → \`${state.goalBranch}\`\n` +
-            `Reason: ${resolution.error}\n` +
-            `Manual resolution needed. Reply "done ${task.id}" when resolved.`,  // keep task.id for command matching
-            'error'
+            `Reason: ${resolution.error}\nQueued for reviewer...`,
+            'warning'
           );
-          task.status = 'blocked';
-          task.error = 'merge conflict (AI resolution failed)';
+          this.deps.taskEventRepo.write(task.id, state.goalId, 'merge.conflict', {
+            branchName,
+            goalWorktreeDir,
+            subtaskDir: subtaskDir ?? null,
+            taskDescription: task.description,
+            error: resolution.error ?? 'unknown',
+          }, 'orchestrator');
+          // task 保持 completed 状态（execution done，merge pending）
           await this.saveState(state);
         }
       } else {
@@ -2409,6 +2422,35 @@ Call \`bot_task_event\` with:
             logger.info(`[Scanner] Processing review.phase_result for task ${ev.taskId}`);
             await this.handlePhaseResult(ev.goalId, ev.taskId, ev.payload as any);
             break;
+
+          case 'merge.conflict': {
+            // Merge 冲突等待 reviewer 处理 — reviewer 忙时跳过，下轮再试
+            if (task.merged) {
+              this.deps.taskEventRepo.markProcessed(ev.id);
+              continue;
+            }
+            const guildId = this.getGuildId();
+            if (!guildId) continue; // 未连接 guild，下轮重试
+            const reviewerChannelId = state.reviewerChannelId ?? state.goalChannelId;
+            const reviewerLockKey = StateManager.channelLockKey(guildId, reviewerChannelId);
+            if (this.deps.claudeClient.isRunning(reviewerLockKey)) {
+              continue; // reviewer 忙，不标 processed，下轮重试
+            }
+            logger.info(`[Scanner] Processing merge.conflict for task ${ev.taskId}`);
+            this.triggerConflictReview(state, task, guildId, ev.payload as MergeConflictPayload);
+            break;
+          }
+
+          case 'review.conflict_result': {
+            // Reviewer 已解决冲突，继续 merge 流程
+            if (task.merged) {
+              this.deps.taskEventRepo.markProcessed(ev.id);
+              continue;
+            }
+            logger.info(`[Scanner] Processing review.conflict_result for task ${ev.taskId}`);
+            await this.handleConflictResolutionResult(ev.goalId, ev.taskId, ev.payload as any);
+            break;
+          }
 
           default:
             logger.warn(`[Scanner] Unknown event type: ${ev.eventType}`);
@@ -2673,6 +2715,106 @@ Call \`bot_task_event\` with:
         if (guildId && task.channelId) {
           this.sendCheckIn(state, task, guildId, 1, `- ${issues}`);
         }
+      }
+    });
+  }
+
+  /**
+   * 触发冲突解决审核：向 reviewer 发送冲突信息，reviewer 空闲时处理。
+   * 异步执行，不阻塞调用方。
+   */
+  private triggerConflictReview(
+    state: GoalDriveState,
+    task: GoalTask,
+    guildId: string,
+    payload: MergeConflictPayload,
+  ): void {
+    (async () => {
+      try {
+        this.ensureGoalChannelSession(state, guildId);
+        const reviewerChannelId = state.reviewerChannelId ?? state.goalChannelId;
+        const ps = this.deps.promptService;
+        const prompt = ps.render('orchestrator.conflict_review', {
+          TASK_LABEL: this.getTaskLabel(state, task.id),
+          BRANCH_NAME: payload.branchName,
+          GOAL_BRANCH: state.goalBranch,
+          TASK_DESCRIPTION: payload.taskDescription,
+          AI_ERROR: payload.error,
+          GOAL_WORKTREE_DIR: payload.goalWorktreeDir,
+          TASK_ID: task.id,
+        });
+        await this.notify(state.goalChannelId,
+          `[GoalOrchestrator] Conflict review queued: ${this.getTaskLabel(state, task.id)}`,
+          'pipeline',
+        );
+        await this.deps.messageHandler.handleBackgroundChat(guildId, reviewerChannelId, prompt);
+      } catch (err: any) {
+        logger.error(`[ConflictReview] Failed to trigger conflict review for ${task.id}: ${err.message}`);
+      }
+    })();
+  }
+
+  /**
+   * 处理 reviewer 的冲突解决结果。
+   * resolved=true → 标记 merged，清理，继续 pipeline。
+   * resolved=false → 设为 blocked，通知人工介入。
+   */
+  private async handleConflictResolutionResult(
+    goalId: string,
+    taskId: string,
+    result: { resolved: boolean; summary?: string },
+  ): Promise<void> {
+    await this.withStateLock(goalId, async () => {
+      const state = await this.getState(goalId);
+      if (!state) return;
+      const task = state.tasks.find(t => t.id === taskId);
+      if (!task || task.merged) return;
+
+      if (result.resolved) {
+        task.merged = true;
+        await this.saveState(state);
+        await this.notify(state.goalChannelId,
+          `Reviewer resolved conflict and merged: ${this.getTaskLabel(state, taskId)} — ${result.summary ?? 'OK'}`,
+          'success',
+        );
+
+        // 清理 subtask worktree 和分支
+        const conflictPayload = this.deps.taskEventRepo.read<MergeConflictPayload>(taskId, 'merge.conflict');
+        if (task.branchName && conflictPayload?.subtaskDir) {
+          await cleanupSubtask(state.baseCwd, conflictPayload.subtaskDir, task.branchName).catch(() => {});
+        }
+
+        // 清理 subtask Discord channel
+        if (task.channelId) {
+          const guildId = this.getGuildId();
+          if (guildId) {
+            this.deps.stateManager.archiveSession(guildId, task.channelId, undefined, 'merged');
+            try {
+              const channel = await this.deps.client.channels.fetch(task.channelId);
+              if (channel && 'delete' in channel) {
+                await (channel as any).delete('Task merged and cleaned up').catch(() => {});
+              }
+            } catch { /* ignore */ }
+          }
+        }
+
+        // 检查 phase 是否全部 merged → 触发 phase 评估或继续调度
+        const phase = getPhaseNumber(task);
+        const guildId = this.getGuildId();
+        if (guildId && isPhaseFullyMerged(state, phase)) {
+          this.triggerPhaseEvaluation(state, phase, guildId);
+          return;
+        }
+        const refreshed = await this.getState(goalId);
+        if (refreshed && refreshed.status === 'running') await this.reviewAndDispatch(refreshed, taskId);
+      } else {
+        task.status = 'blocked';
+        task.error = `merge conflict (reviewer could not resolve: ${result.summary ?? 'unknown'})`;
+        await this.saveState(state);
+        await this.notify(state.goalChannelId,
+          `Reviewer could not resolve conflict for ${this.getTaskLabel(state, taskId)}: ${result.summary ?? 'unknown'}\nManual resolution needed.`,
+          'error',
+        );
       }
     });
   }

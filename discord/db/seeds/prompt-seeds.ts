@@ -379,6 +379,51 @@ If the verdict is "fail", include specific issues that need to be fixed.`,
     sortOrder: 0,
   });
 
+  // ---- orchestrator.conflict_review (冲突解决请求，发给 reviewer) ----
+  entries.push({
+    key: 'orchestrator.conflict_review',
+    category: 'orchestrator',
+    name: '冲突解决请求',
+    description: 'AI 无法自动解决 merge 冲突时，发给 reviewer 让其手动处理',
+    template: `## Merge Conflict Resolution Needed: {{TASK_LABEL}}
+
+Branch \`{{BRANCH_NAME}}\` could not be automatically merged into \`{{GOAL_BRANCH}}\`.
+
+**Task:** {{TASK_DESCRIPTION}}
+**AI resolution failed:** {{AI_ERROR}}
+
+## Steps
+
+1. Navigate to the goal worktree:
+   \`\`\`bash
+   cd {{GOAL_WORKTREE_DIR}}
+   \`\`\`
+
+2. Retry the merge:
+   \`\`\`bash
+   git merge {{BRANCH_NAME}}
+   \`\`\`
+
+3. Resolve all conflict markers (\`<<<<<<<\`, \`=======\`, \`>>>>>>>\`) in each conflicted file.
+   Keep valid changes from **both** sides — do not discard either side's work.
+
+4. Complete the merge:
+   \`\`\`bash
+   git add -A && git commit --no-edit
+   \`\`\`
+
+5. Report the result via \`bot_task_event\`:
+   - \`task_id\`: "{{TASK_ID}}"
+   - \`event_type\`: "review.conflict_result"
+   - \`payload\`: \`{ "resolved": true, "summary": "how conflicts were resolved" }\`
+
+If you cannot resolve the conflict, report:
+   - \`payload\`: \`{ "resolved": false, "summary": "why it cannot be resolved" }\``,
+    variables: ['TASK_LABEL', 'BRANCH_NAME', 'GOAL_BRANCH', 'TASK_DESCRIPTION', 'AI_ERROR', 'GOAL_WORKTREE_DIR', 'TASK_ID'],
+    parentKey: null,
+    sortOrder: 0,
+  });
+
   // ================================================================
   // 批量写入
   // ================================================================

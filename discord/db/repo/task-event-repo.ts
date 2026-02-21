@@ -18,6 +18,8 @@ export const EVENT_TYPES = [
   'task.feedback',
   'review.task_result',
   'review.phase_result',
+  'merge.conflict',
+  'review.conflict_result',
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -84,7 +86,7 @@ export class TaskEventRepo {
     goalId: string | null,
     type: EventType,
     payload: unknown,
-    source: 'ai',
+    source: 'ai' | 'orchestrator',
   ): void {
     this.stmts.write.run({
       id: randomUUID(),
