@@ -33,6 +33,7 @@ import migration017 from './migrations/017_cleanup_old_prompts.js';
 import migration018 from './migrations/018_add_missing_orchestrator_prompts.js';
 import migration019 from './migrations/019_drop_task_deps.js';
 import migration020 from './migrations/020_cleanup_task_dep_prompt.js';
+import migration021 from './migrations/021_cleanup_orphan_prompts.js';
 
 const allMigrations: Migration[] = [
   migration001,
@@ -55,6 +56,7 @@ const allMigrations: Migration[] = [
   migration018,
   migration019,
   migration020,
+  migration021,
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
