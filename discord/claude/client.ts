@@ -63,7 +63,12 @@ export class ClaudeClient {
     } catch (error: any) {
       if (!(error instanceof ClaudeExecutionError)) throw error;
 
-      if (error.errorType === ClaudeErrorType.FATAL || error.errorType === ClaudeErrorType.ABORTED || error.errorType === ClaudeErrorType.PROCESS_KILLED) {
+      if (
+        error.errorType === ClaudeErrorType.FATAL ||
+        error.errorType === ClaudeErrorType.ABORTED ||
+        error.errorType === ClaudeErrorType.PROCESS_KILLED ||
+        error.errorType === ClaudeErrorType.AUTH_ERROR
+      ) {
         throw error;
       }
 
@@ -172,6 +177,10 @@ export class ClaudeClient {
 
   abort(lockKey: string): boolean {
     return this.executor.abort(lockKey);
+  }
+
+  abortAll(): number {
+    return this.executor.abortAll();
   }
 
   abortRunning(lockKey: string): { aborted: boolean; queueLength: number } {

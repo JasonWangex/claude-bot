@@ -40,6 +40,7 @@ import { ChannelSessionLinkRepository } from '../db/repo/channel-session-link-re
 import { SyncCursorRepository } from '../db/repo/sync-cursor-repo.js';
 import { ChannelService } from '../services/channel-service.js';
 import { getAuthorizedGuildId, getGeneralChannelId } from '../utils/env.js';
+import { AuthErrorInterceptor } from '../claude/auth-error-interceptor.js';
 import { escapeMarkdown } from './message-utils.js';
 import { registerSlashCommands, routeCommand } from './commands/index.js';
 import { SessionSyncService } from '../sync/session-sync-service.js';
@@ -986,6 +987,43 @@ export class DiscordBot {
     });
     this.orchestrator = orchestrator;
     await orchestrator.restoreRunningDrives();
+
+    // 初始化 Auth Error 拦截器
+    const authErrorInterceptor = new AuthErrorInterceptor(
+      // onRetry：向受影响的 channel 发送 "continue"
+      (guildId, channelId) => {
+        this.messageHandler.handleBackgroundChat(guildId, channelId, 'continue').catch((err: any) => {
+          logger.error('[AuthErrorInterceptor] Retry "continue" failed:', err.message);
+          // 重试失败（非 AUTH_ERROR，如 session 已消失），主动重置计数避免 Map 泄漏
+          authErrorInterceptor.onSuccess(guildId, channelId);
+        });
+      },
+      // onEmergency：pause 所有 goal，杀死所有 session，发送告警
+      () => {
+        logger.error('[AuthErrorInterceptor] Emergency mode activated');
+
+        // 1. 先杀死所有活跃 Claude 进程，阻止新任务进入
+        const killed = this.claudeClient.abortAll();
+        logger.info(`[AuthErrorInterceptor] Killed ${killed} Claude session(s)`);
+
+        // 2. 暂停所有运行中的 Goal（fire-and-forget，进程已终止，不依赖 Claude 进程完成）
+        this.orchestrator?.pauseAllRunningDrives().catch((err: any) => {
+          logger.error('[AuthErrorInterceptor] Failed to pause all goals:', err.message);
+        });
+
+        // 3. 发送告警到 general channel
+        const generalChannelId = getGeneralChannelId();
+        if (generalChannelId) {
+          const timestamp = new Date().toISOString();
+          this.messageQueue.send(
+            generalChannelId,
+            `claude auth error\n${timestamp}\nkilled ${killed} session(s), all goals paused`,
+            { embedColor: EmbedColors.RED },
+          ).catch(() => {});
+        }
+      },
+    );
+    this.messageHandler.setAuthErrorInterceptor(authErrorInterceptor);
 
     // 启动 API 服务器
     if (this.config.apiPort > 0) {

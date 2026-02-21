@@ -803,6 +803,14 @@ export class ClaudeExecutor {
       return ClaudeErrorType.SESSION_RECOVERABLE;
     }
 
+    // 403 认证错误 → 由上层拦截器处理自动重试
+    if (
+      lower.includes('failed to authenticate') ||
+      (lower.includes('403') && (lower.includes('forbidden') || lower.includes('request not allowed')))
+    ) {
+      return ClaudeErrorType.AUTH_ERROR;
+    }
+
     // CLI 不可用 → 不重试
     if (lower.includes('enoent') || lower.includes('not authenticated') || lower.includes('spawn')) {
       return ClaudeErrorType.FATAL;
@@ -810,6 +818,18 @@ export class ClaudeExecutor {
 
     // 默认：可恢复（超时/崩溃等）
     return ClaudeErrorType.RECOVERABLE;
+  }
+
+  /**
+   * 中止所有活跃进程（紧急模式用）
+   */
+  abortAll(): number {
+    let count = 0;
+    const lockKeys = [...this.activeProcesses.keys()];
+    for (const lockKey of lockKeys) {
+      if (this.abort(lockKey)) count++;
+    }
+    return count;
   }
 
   /**

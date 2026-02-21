@@ -357,6 +357,22 @@ export class GoalOrchestrator {
     return true;
   }
 
+  /**
+   * 暂停所有正在运行的 Goal（紧急模式用）
+   */
+  async pauseAllRunningDrives(): Promise<void> {
+    const runningGoals = [...this.activeDrives.entries()].filter(([, s]) => s.status === 'running');
+    const results = await Promise.allSettled(
+      runningGoals.map(([goalId]) => this.pauseDrive(goalId)),
+    );
+    const failed = results.filter(r => r.status === 'rejected');
+    if (failed.length > 0) {
+      logger.warn(`[Orchestrator] Emergency: paused ${runningGoals.length - failed.length}/${runningGoals.length} goal(s), ${failed.length} failed`);
+    } else {
+      logger.info(`[Orchestrator] Emergency: paused ${runningGoals.length} running goal(s)`);
+    }
+  }
+
   async resumeDrive(goalId: string): Promise<boolean> {
     const state = await this.getState(goalId);
     if (!state || state.status !== 'paused') return false;

@@ -142,6 +142,7 @@ export enum ClaudeErrorType {
   FATAL = 'fatal',
   ABORTED = 'aborted',
   PROCESS_KILLED = 'process_killed',
+  AUTH_ERROR = 'auth_error',  // 403 认证错误，由上层拦截器处理自动重试
 }
 
 export class ClaudeExecutionError extends Error {

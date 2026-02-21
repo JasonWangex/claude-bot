@@ -14,6 +14,7 @@ import {
 import { StateManager } from './state.js';
 import { InteractionRegistry } from './interaction-registry.js';
 import { ClaudeClient } from '../claude/client.js';
+import { AuthErrorInterceptor } from '../claude/auth-error-interceptor.js';
 import { MessageQueue, EmbedColors } from './message-queue.js';
 import { escapeMarkdown, buildChangesHtml } from './message-utils.js';
 import {
@@ -50,6 +51,7 @@ export class MessageHandler {
   private interactionRegistry: InteractionRegistry;
   private mq: MessageQueue;
   private errorReporter?: (guildId: string | undefined, channelId: string | undefined, source: string, error: any) => void;
+  private authErrorInterceptor?: AuthErrorInterceptor;
 
   constructor(
     stateManager: StateManager,
@@ -65,6 +67,10 @@ export class MessageHandler {
 
   setErrorReporter(reporter: (guildId: string | undefined, channelId: string | undefined, source: string, error: any) => void): void {
     this.errorReporter = reporter;
+  }
+
+  setAuthErrorInterceptor(interceptor: AuthErrorInterceptor): void {
+    this.authErrorInterceptor = interceptor;
   }
 
   // Plan mode 确认关键词
@@ -571,6 +577,9 @@ export class MessageHandler {
 
       this.stateManager.setSessionClaudeId(guildId, channelId, response.sessionId);
 
+      // 成功响应：重置该 channel 的 auth error 连续计数
+      this.authErrorInterceptor?.onSuccess(guildId, channelId);
+
       this.stateManager.updateSessionMessage(guildId, channelId, response.result, 'assistant');
       logger.info(`[${session.name}] Response length:`, response.result.length);
 
@@ -755,6 +764,15 @@ export class MessageHandler {
             : 'Stopped';
           mq.edit(channelId, progressMsgId, stoppedText, { embedColor: EmbedColors.YELLOW });
         }
+        return totalUsage;
+      }
+
+      if (error instanceof ClaudeExecutionError && error.errorType === ClaudeErrorType.AUTH_ERROR) {
+        logger.warn(`[${session.name}] Auth error (403), triggering interceptor`);
+        if (!isHidden && progressMsgId) {
+          mq.edit(channelId, progressMsgId, 'Auth Error (403)\nAuto-recovering...', { embedColor: EmbedColors.YELLOW });
+        }
+        this.authErrorInterceptor?.handleAuthError(guildId, channelId);
         return totalUsage;
       }
 
