@@ -328,7 +328,8 @@ export class GoalOrchestrator {
       `Tasks: ${state.tasks.length}\n` +
       `Max concurrent: ${maxConcurrent}` +
       (state.reviewerChannelId ? `\nReviewer: <#${state.reviewerChannelId}>` : ''),
-      'success'
+      'success',
+      { driveChannel: true },  // 唯一发送到 drive channel 的消息
     );
 
     await this.reviewAndDispatch(state);
@@ -2285,11 +2286,10 @@ Call \`bot_task_event\` with:
   }
 
   /**
-   * 发送通知到 goal thread 和/或日志 channel
+   * 发送通知到日志 channel
    *
-   * type 说明：
-   * - success/error/warning/info: 发到 goal thread（同时也发日志 channel）
-   * - pipeline: 仅发到日志 channel（如未配置则 fallback 到 goal thread）
+   * 所有通知默认只发到日志 channel（未配置则 fallback 到 logger）。
+   * 仅当 options.driveChannel = true 时，才会额外发送到 goal drive channel。
    *
    * 颜色映射：
    * - success → GREEN, error → RED, warning → YELLOW, info → GRAY, pipeline → BLUE
@@ -2301,6 +2301,7 @@ Call \`bot_task_event\` with:
     options?: {
       components?: import('discord.js').ActionRowBuilder<import('discord.js').MessageActionRowComponentBuilder>[];
       logOnly?: boolean;
+      driveChannel?: boolean;
     },
   ): Promise<void> {
     try {
@@ -2314,26 +2315,22 @@ Call \`bot_task_event\` with:
       const embedColor = type ? colorMap[type] : undefined;
       const logChannelId = getGoalLogChannelId();
 
-      if (type === 'pipeline' || options?.logOnly) {
-        // pipeline 类型或 logOnly：仅发日志 channel（未配置则 fallback 到 goal thread）
-        const targetId = logChannelId || threadId;
-        await this.deps.mq.sendLong(targetId, message, {
-          embedColor,
+      if (logChannelId) {
+        // 发到日志 channel
+        await this.deps.mq.sendEmbed(logChannelId, message, {
+          color: embedColor,
           components: options?.components,
         });
       } else {
-        // 其他类型：发到 goal thread
-        await this.deps.mq.sendLong(threadId, message, {
-          embedColor,
-          components: options?.components,
+        // 未配置日志 channel，fallback 到 logger
+        logger.info(`[Orchestrator][notify] ${message}`);
+      }
+
+      // 仅当 driveChannel = true 时，额外发送到 goal drive channel
+      if (options?.driveChannel) {
+        await this.deps.mq.sendEmbed(threadId, message, {
+          color: embedColor,
         });
-        // 同时发到日志 channel（如已配置，且目标不同）
-        if (logChannelId && logChannelId !== threadId) {
-          await this.deps.mq.sendLong(logChannelId, message, {
-            embedColor,
-            silent: true,
-          });
-        }
       }
     } catch (err: any) {
       logger.error(`[Orchestrator] Failed to send notification: ${err.message}`);

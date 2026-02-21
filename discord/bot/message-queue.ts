@@ -179,6 +179,21 @@ export class MessageQueue {
   }
 
   /**
+   * 发送 Embed 消息，超过 4096 字符截断
+   */
+  sendEmbed(channelId: string, text: string, options?: {
+    components?: ActionRowBuilder<MessageActionRowComponentBuilder>[];
+    silent?: boolean;
+    color?: EmbedColor;
+  }): Promise<string> {
+    return this.send(channelId, text.slice(0, this.MAX_EMBED_LENGTH), {
+      embedColor: options?.color,
+      components: options?.components,
+      silent: options?.silent,
+    });
+  }
+
+  /**
    * 发送长消息：自动选择最佳格式
    * - < 2000: 普通消息（原生 Markdown）
    * - 2000~4096: Embed
