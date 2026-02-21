@@ -1,9 +1,8 @@
 /**
  * Task Events 路由
  *
+ * GET  /api/events                — 列出所有事件（支持筛选）
  * POST /api/tasks/:taskId/events  — AI 通过 MCP 写入事件
- *
- * Orchestrator 直接通过 TaskEventRepo 读取，不需要 GET 端点。
  */
 
 import type { RouteHandler } from '../types.js';
@@ -11,6 +10,25 @@ import { sendJson, readJsonBody } from '../middleware.js';
 import { getDb } from '../../db/index.js';
 import { TaskEventRepo, EVENT_TYPES, type EventType } from '../../db/repo/task-event-repo.js';
 import { TaskRepo } from '../../db/repo/index.js';
+
+// GET /api/events
+export const listTaskEvents: RouteHandler = async (req, res) => {
+  const url = new URL(req.url || '/', `http://${req.headers.host || 'localhost'}`);
+  const goalId = url.searchParams.get('goalId') || undefined;
+  const taskId = url.searchParams.get('taskId') || undefined;
+  const eventType = url.searchParams.get('type') || undefined;
+  const onlyPending = url.searchParams.get('pending') === 'true';
+  const page = parseInt(url.searchParams.get('page') || '1', 10) || 1;
+  const size = parseInt(url.searchParams.get('size') || '50', 10) || 50;
+
+  try {
+    const eventRepo = new TaskEventRepo(getDb());
+    const result = eventRepo.findAll({ goalId, taskId, eventType, onlyPending, page, size });
+    sendJson(res, 200, { ok: true, data: result });
+  } catch (error: any) {
+    sendJson(res, 500, { ok: false, error: `Failed to list events: ${error.message}` });
+  }
+};
 
 interface CreateTaskEventRequest {
   event_type: string;

@@ -33,6 +33,17 @@ export interface PendingEvent {
   payload: unknown;
 }
 
+export interface TaskEventRecord {
+  id: string;
+  taskId: string;
+  goalId: string | null;
+  eventType: string;
+  payload: unknown;
+  source: string;
+  createdAt: number;
+  processedAt: number | null;
+}
+
 interface TaskEventRow {
   id: string;
   goal_id: string | null;
@@ -144,5 +155,65 @@ export class TaskEventRepo {
   /** 清除指定 task 的所有事件（retry 时调用，防止旧事件干扰新一轮执行） */
   clearByTask(taskId: string): void {
     this.db.prepare(`DELETE FROM task_events WHERE task_id = ?`).run(taskId);
+  }
+
+  /** 查询所有事件，支持可选筛选条件和分页（id 倒序） */
+  findAll(opts?: {
+    goalId?: string;
+    taskId?: string;
+    eventType?: string;
+    onlyPending?: boolean;
+    page?: number;
+    size?: number;
+  }): { items: TaskEventRecord[]; total: number } {
+    const conditions: string[] = [];
+    const bindings: unknown[] = [];
+
+    if (opts?.goalId) {
+      conditions.push('goal_id = ?');
+      bindings.push(opts.goalId);
+    }
+    if (opts?.taskId) {
+      conditions.push('task_id = ?');
+      bindings.push(opts.taskId);
+    }
+    if (opts?.eventType) {
+      conditions.push('event_type = ?');
+      bindings.push(opts.eventType);
+    }
+    if (opts?.onlyPending) {
+      conditions.push('processed_at IS NULL');
+    }
+
+    const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+    const total = (
+      this.db.prepare(`SELECT COUNT(*) as cnt FROM task_events ${where}`).get(...bindings) as { cnt: number }
+    ).cnt;
+
+    const size = opts?.size ?? 50;
+    const page = Math.max(1, opts?.page ?? 1);
+    const offset = (page - 1) * size;
+
+    const sql = `SELECT * FROM task_events ${where} ORDER BY id DESC LIMIT ? OFFSET ?`;
+    const rows = this.db.prepare(sql).all(...bindings, size, offset) as TaskEventRow[];
+
+    const items = rows.map((row) => ({
+      id: row.id,
+      taskId: row.task_id,
+      goalId: row.goal_id,
+      eventType: row.event_type,
+      payload: (() => {
+        try {
+          return JSON.parse(row.payload);
+        } catch {
+          return null;
+        }
+      })(),
+      source: row.source,
+      createdAt: row.created_at,
+      processedAt: row.processed_at,
+    }));
+
+    return { items, total };
   }
 }

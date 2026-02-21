@@ -35,7 +35,7 @@ import { listChannelSessions } from './routes/channel-sessions.js';
 import { listPrompts, getPrompt, updatePrompt, refreshPrompts } from './routes/prompts.js';
 import { getRunningTasks, getActiveProcesses, killZombieTasks } from './routes/debug.js';
 import { handleSessionEvent } from './routes/hooks.js';
-import { createTaskEvent } from './routes/task-events.js';
+import { createTaskEvent, listTaskEvents } from './routes/task-events.js';
 
 function defineRoutes(): Route[] {
   const r = (method: string, path: string, handler: Route['handler']): Route => {
@@ -147,6 +147,7 @@ function defineRoutes(): Route[] {
     r('POST', '/api/debug/kill-zombie-tasks',  killZombieTasks),
 
     // Task Events（AI → Orchestrator 事件通信）
+    r('GET',  '/api/events', listTaskEvents),
     r('POST', '/api/tasks/:taskId/events', createTaskEvent),
 
     // Internal hooks (localhost only, no auth required)
