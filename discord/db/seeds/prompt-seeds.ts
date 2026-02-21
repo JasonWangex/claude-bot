@@ -74,18 +74,6 @@ ${DETAIL_PLAN_NOTE}`,
   });
 
   entries.push({
-    key: 'orchestrator.task.dependencies',
-    category: 'orchestrator',
-    name: '依赖列表 section',
-    description: '列出已完成的前置任务',
-    template: `## Dependencies (completed before this task)
-{{DEP_LIST}}`,
-    variables: ['DEP_LIST'],
-    parentKey: 'orchestrator.task',
-    sortOrder: 2,
-  });
-
-  entries.push({
     key: 'orchestrator.task.requirements',
     category: 'orchestrator',
     name: '通用要求 section',
@@ -212,7 +200,7 @@ Reason: {{FEEDBACK_REASON}}
 1. **NEVER modify completed or skipped tasks** — their IDs: {{IMMUTABLE_COMPLETED}}
 2. **NEVER modify running or dispatched tasks** — their IDs: {{IMMUTABLE_RUNNING}}
 3. New task IDs must not collide with existing IDs
-4. Dependencies must reference valid task IDs (existing or newly added)
+4. Tasks are ordered by phase (phase 1 runs first, then phase 2, etc.). Tasks in the same phase run in parallel.
 5. Keep changes minimal — only modify what the feedback necessitates
 6. Preserve the overall goal direction
 
@@ -221,17 +209,16 @@ Respond with a single JSON object (no markdown fences, no extra text):
 
 {
   "changes": [
-    { "action": "add", "task": { "id": "t8", "description": "...", "type": "代码", "depends": ["t3"], "phase": 3, "complexity": "simple" } },
-    { "action": "modify", "taskId": "t5", "updates": { "description": "new desc", "depends": ["t3", "t8"], "complexity": "complex" } },
-    { "action": "remove", "taskId": "t7", "reason": "superseded by t8" },
-    { "action": "reorder", "taskId": "t6", "newDepends": ["t8"], "newPhase": 3 }
+    { "action": "add", "task": { "id": "t8", "description": "...", "type": "代码", "phase": 3, "complexity": "simple" } },
+    { "action": "modify", "taskId": "t5", "updates": { "description": "new desc", "phase": 2, "complexity": "complex" } },
+    { "action": "remove", "taskId": "t7", "reason": "superseded by t8" }
   ],
   "reasoning": "Explanation of why these changes are needed",
   "impactLevel": "low" | "medium" | "high"
 }
 
 Impact levels (assessed by affected pending tasks):
-- low: affects ≤1 pending task (description tweaks, dependency reorder)
+- low: affects ≤1 pending task (description tweaks, phase adjustment)
 - medium: affects 2-3 pending tasks (task additions/removals, but overall direction unchanged)
 - high: affects ≥4 pending tasks, OR significant restructuring with both add+remove that changes direction
 Note: low/medium changes are auto-applied; high requires user approval.
@@ -239,7 +226,7 @@ Note: low/medium changes are auto-applied; high requires user approval.
 Valid task types: 代码, 手动, 调研, 占位
 Task granularity: split by **feature/functionality**, NOT by technical layer. One feature = one task, even if it touches frontend + backend + API.
 Valid complexity (for 代码 tasks): "simple" (straightforward logic, has patterns to follow) or "complex" (needs architecture design or cross-module coordination). Default: "simple"
-Valid actions: add, modify, remove, reorder
+Valid actions: add, modify, remove
 
 If no changes are needed, return: { "changes": [], "reasoning": "...", "impactLevel": "low" }`,
     variables: ['GOAL_NAME', 'GOAL_BODY', 'COMPLETION_CRITERIA', 'CURRENT_TASKS', 'TRIGGER_TASK_ID', 'FEEDBACK_TYPE', 'FEEDBACK_REASON', 'FEEDBACK_DETAILS', 'COMPLETED_DIFF_STATS', 'IMMUTABLE_COMPLETED', 'IMMUTABLE_RUNNING'],

@@ -294,7 +294,6 @@ export interface Task {
   goalId?: string | null;  // 关联 Goal（null 表示独立任务）
   description: string;
   type: TaskType;
-  depends: string[];
   phase?: number;
 
   // 多模型流水线

@@ -18,8 +18,8 @@ const VALID_COMPLEXITIES: GoalTaskComplexity[] = ['simple', 'complex'];
  * 预期输入格式（由 Claude 实例解析 Goal body 后生成）:
  * ```json
  * [
- *   { "id": "t1", "description": "创建数据模型", "type": "代码", "depends": [], "phase": 1 },
- *   { "id": "t2", "description": "实现 API", "type": "代码", "depends": ["t1"], "phase": 2 }
+ *   { "id": "t1", "description": "创建数据模型", "type": "代码", "phase": 1 },
+ *   { "id": "t2", "description": "实现 API", "type": "代码", "phase": 2 }
  * ]
  * ```
  */
@@ -27,7 +27,6 @@ export function parseTasks(raw: Array<{
   id: string;
   description: string;
   type?: string;
-  depends?: string[];
   phase?: number;
   complexity?: string;
 }>): GoalTask[] {
@@ -45,7 +44,6 @@ export function parseTasks(raw: Array<{
       id: t.id,
       description: t.description,
       type,
-      depends: t.depends || [],
       phase: t.phase,
       complexity,
       status: 'pending' as const,

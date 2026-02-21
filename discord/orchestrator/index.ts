@@ -78,7 +78,6 @@ export interface StartDriveParams {
     id: string;
     description: string;
     type?: string;
-    depends?: string[];
     phase?: number;
     complexity?: string;
   }>;
@@ -630,22 +629,12 @@ export class GoalOrchestrator {
     const fb = task.feedback!;
     const label = this.getTaskLabel(state, task.id);
 
-    let depSection = '';
-    if (task.depends.length > 0) {
-      const depInfos = task.depends.map(depId => {
-        const dep = state.tasks.find(t => t.id === depId);
-        if (!dep) return `  - ${depId}: (unknown)`;
-        return `  - ${this.getTaskLabel(state, dep.id)}: ${dep.description} (status: ${dep.status}, merged: ${dep.merged ?? false})`;
-      });
-      depSection = `\n## Dependencies\n${depInfos.join('\n')}\n`;
-    }
-
     return `Task ${label} reported feedback and needs investigation.
 
 ## Task
 Description: ${task.description}
 Goal branch: ${state.goalBranch}
-${depSection}
+
 ## Feedback
 Type: ${fb.type}
 Reason: ${fb.reason}
@@ -885,14 +874,12 @@ Call \`bot_task_event\` with:
     if (state.status !== 'running') return;
 
     // ── 审查 1: 占位任务拦截 ──
-    // 查看待分发队列中是否有占位任务变为可达状态（依赖已满足）
-    const pendingPlaceholders = state.tasks.filter(t =>
-      t.status === 'pending' && t.type === '占位' &&
-      t.depends.every(depId => {
-        const dep = state.tasks.find(d => d.id === depId);
-        return dep && (dep.status === 'completed' || dep.status === 'skipped' || dep.status === 'cancelled');
-      })
-    );
+    // 查看待分发队列中是否有占位任务变为可达状态（前一阶段已完成）
+    const pendingPlaceholders = state.tasks.filter(t => {
+      if (t.status !== 'pending' || t.type !== '占位') return false;
+      const phase = getPhaseNumber(t);
+      return phase <= 1 || isPhaseFullyMerged(state, phase - 1);
+    });
     if (pendingPlaceholders.length > 0) {
       const placeholderIds = pendingPlaceholders.map(t => t.id).join(', ');
       logger.info(`[Orchestrator] Placeholder tasks ready: ${placeholderIds} — forcing replan`);
@@ -2231,16 +2218,6 @@ Call \`bot_task_event\` with:
       const s = ps.tryRender('orchestrator.task.detail_plan', {
         DETAIL_PLAN_TEXT: task.detailPlan,
       });
-      if (s) parts.push(s);
-    }
-
-    // 条件 section：依赖
-    if (task.depends.length > 0) {
-      const depList = task.depends.map(depId => {
-        const dep = state.tasks.find(t => t.id === depId);
-        return dep ? `  - ${this.getTaskLabel(state, dep.id)}: ${dep.description} (${dep.status})` : `  - ${depId}: (unknown)`;
-      }).join('\n');
-      const s = ps.tryRender('orchestrator.task.dependencies', { DEP_LIST: depList });
       if (s) parts.push(s);
     }
 

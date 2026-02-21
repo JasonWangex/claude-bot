@@ -4,13 +4,13 @@
  * 管理独立 Task 和 Goal 子任务的统一仓库。
  * 主键: id (全局唯一，migration 010 后改为单列主键)
  * goalId 为可选字段（null 表示独立任务，如 qdev）
- * 依赖关系通过 task_deps 表管理。
+ * 任务顺序通过 phase 字段控制，无显式依赖关系。
  */
 
 import type Database from 'better-sqlite3';
 import type { ITaskRepo } from '../../types/repository.js';
 import type { Task, TaskStatus, PipelinePhase, ChatUsageResult } from '../../types/index.js';
-import type { TaskRow, TaskDepRow } from '../../types/db.js';
+import type { TaskRow } from '../../types/db.js';
 
 export class TaskRepo implements ITaskRepo {
   private db: Database.Database;
@@ -23,11 +23,6 @@ export class TaskRepo implements ITaskRepo {
     deleteAllByGoal: Database.Statement;
     findByStatus: Database.Statement;
     findByChannelId: Database.Statement;
-    getDepsByTask: Database.Statement;
-    getDepsByGoal: Database.Statement;
-    deleteDeps: Database.Statement;
-    deleteDepsByGoal: Database.Statement;
-    insertDep: Database.Statement;
   };
 
   constructor(db: Database.Database) {
@@ -99,77 +94,34 @@ export class TaskRepo implements ITaskRepo {
       findByChannelId: this.db.prepare(
         `SELECT * FROM tasks WHERE channel_id = ?`,
       ),
-
-      getDepsByTask: this.db.prepare(
-        `SELECT * FROM task_deps WHERE task_id = ?`,
-      ),
-
-      getDepsByGoal: this.db.prepare(
-        `SELECT * FROM task_deps WHERE goal_id = ?`,
-      ),
-
-      deleteDeps: this.db.prepare(
-        `DELETE FROM task_deps WHERE task_id = ?`,
-      ),
-
-      deleteDepsByGoal: this.db.prepare(
-        `DELETE FROM task_deps WHERE goal_id = ?`,
-      ),
-
-      insertDep: this.db.prepare(
-        `INSERT OR IGNORE INTO task_deps (goal_id, task_id, depends_on_task_id) VALUES (?, ?, ?)`,
-      ),
     };
   }
 
   async getById(taskId: string): Promise<Task | null> {
     const row = this.stmts.getTask.get(taskId) as TaskRow | undefined;
     if (!row) return null;
-
-    const depRows = this.stmts.getDepsByTask.all(taskId) as TaskDepRow[];
-    return rowToTask(row, depRows);
+    return rowToTask(row);
   }
 
   async getAllByGoal(goalId: string): Promise<Task[]> {
     const rows = this.stmts.getTasksByGoal.all(goalId) as TaskRow[];
-    const depRows = this.stmts.getDepsByGoal.all(goalId) as TaskDepRow[];
-
-    // 建立 taskId → deps 映射
-    const depsMap = buildDepsMap(depRows);
-
-    return rows.map((row) => rowToTask(row, depsMap.get(row.id)));
+    return rows.map((row) => rowToTask(row));
   }
 
   async save(task: Task, goalId?: string | null): Promise<void> {
-    const saveTransaction = this.db.transaction(() => {
-      this.stmts.upsertTask.run(taskToRow(task, goalId));
-
-      // 替换依赖关系
-      this.stmts.deleteDeps.run(task.id);
-      const effectiveGoalId = goalId ?? task.goalId ?? null;
-      for (const dep of task.depends) {
-        this.stmts.insertDep.run(effectiveGoalId, task.id, dep);
-      }
-    });
-
-    saveTransaction();
+    this.stmts.upsertTask.run(taskToRow(task, goalId));
   }
 
   async saveAll(tasks: Task[], goalId?: string | null): Promise<void> {
     const saveTransaction = this.db.transaction(() => {
-      // 如果有 goalId，先清除该 goal 下所有依赖和任务
+      // 如果有 goalId，先清除该 goal 下所有任务
       if (goalId) {
-        this.stmts.deleteDepsByGoal.run(goalId);
         this.stmts.deleteAllByGoal.run(goalId);
       }
 
       // 重新插入
       for (const task of tasks) {
-        const effectiveGoalId = goalId ?? task.goalId ?? null;
         this.stmts.upsertTask.run(taskToRow(task, goalId));
-        for (const dep of task.depends) {
-          this.stmts.insertDep.run(effectiveGoalId, task.id, dep);
-        }
       }
     });
 
@@ -177,32 +129,25 @@ export class TaskRepo implements ITaskRepo {
   }
 
   async delete(taskId: string): Promise<boolean> {
-    // CASCADE 会自动删除 task_deps
     const result = this.stmts.deleteTask.run(taskId);
     return result.changes > 0;
   }
 
   async deleteAllByGoal(goalId: string): Promise<void> {
-    // CASCADE 会自动删除 task_deps
     this.stmts.deleteAllByGoal.run(goalId);
   }
 
   async findByStatus(goalId: string, status: TaskStatus): Promise<Task[]> {
     const rows = this.stmts.findByStatus.all(goalId, status) as TaskRow[];
-    const depRows = this.stmts.getDepsByGoal.all(goalId) as TaskDepRow[];
-    const depsMap = buildDepsMap(depRows);
-
-    return rows.map((row) => rowToTask(row, depsMap.get(row.id)));
+    return rows.map((row) => rowToTask(row));
   }
 
   async findByChannelId(channelId: string): Promise<{ goalId: string | null; task: Task } | null> {
     const row = this.stmts.findByChannelId.get(channelId) as TaskRow | undefined;
     if (!row) return null;
-
-    const depRows = this.stmts.getDepsByTask.all(row.id) as TaskDepRow[];
     return {
       goalId: row.goal_id,
-      task: rowToTask(row, depRows),
+      task: rowToTask(row),
     };
   }
 
@@ -262,26 +207,12 @@ function taskToRow(task: Task, goalId?: string | null): Record<string, unknown> 
   };
 }
 
-function rowToTask(
-  row: TaskRow,
-  deps?: TaskDepRow[] | string[],
-): Task {
-  // deps 可能是 TaskDepRow[] 或已经从 map 拿到的 string[]
-  let dependsList: string[];
-  if (!deps || deps.length === 0) {
-    dependsList = [];
-  } else if (typeof deps[0] === 'string') {
-    dependsList = deps as string[];
-  } else {
-    dependsList = (deps as TaskDepRow[]).map((d) => d.depends_on_task_id);
-  }
-
+function rowToTask(row: TaskRow): Task {
   return {
     id: row.id,
     goalId: row.goal_id ?? undefined,
     description: row.description,
     type: row.type,
-    depends: dependsList,
     phase: row.phase ?? undefined,
     complexity: row.complexity ?? undefined,
     pipelinePhase: validatePipelinePhase(row.pipeline_phase),
@@ -313,13 +244,3 @@ function validatePipelinePhase(value: string | null): PipelinePhase | undefined 
     : undefined;
 }
 
-/** 从 deps 行列表构建 taskId → depends_on_task_id[] 映射 */
-function buildDepsMap(depRows: TaskDepRow[]): Map<string, string[]> {
-  const map = new Map<string, string[]>();
-  for (const dep of depRows) {
-    const list = map.get(dep.task_id) || [];
-    list.push(dep.depends_on_task_id);
-    map.set(dep.task_id, list);
-  }
-  return map;
-}

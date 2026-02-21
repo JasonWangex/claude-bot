@@ -148,22 +148,6 @@ export interface GoalTaskRow {
 }
 
 // ================================================================
-// goal_task_deps 表 — GoalTask.depends 多对多关系
-// @deprecated - 已重命名为 TaskDepRow（migration 010）
-// Use TaskDepRow instead
-// ================================================================
-
-/** @deprecated Use TaskDepRow from migration 010 */
-export interface GoalTaskDepRow {
-  /** 任务 ID (FOREIGN KEY → goal_tasks) */
-  task_id: string;
-  /** 所属 Goal ID (FOREIGN KEY → goals.id) */
-  goal_id: string;
-  /** 依赖的任务 ID */
-  depends_on_task_id: string;
-}
-
-// ================================================================
 // devlogs 表
 // ================================================================
 
@@ -396,16 +380,6 @@ export interface TaskRow {
 }
 
 // ================================================================
-// task_deps 表（原 goal_task_deps）
-// ================================================================
-
-export interface TaskDepRow {
-  task_id: string;
-  depends_on_task_id: string;
-  goal_id: string | null;
-}
-
-// ================================================================
 // prompt_configs 表
 // ================================================================
 
@@ -448,16 +422,14 @@ export type GuildStateToRow = (guild: GuildState) => GuildRow;
 /** GuildRow → GuildState */
 export type RowToGuildState = (row: GuildRow) => GuildState;
 
-/** GoalDriveState → GoalRow + GoalTaskRow[] + GoalTaskDepRow[] */
+/** GoalDriveState → GoalRow + GoalTaskRow[] */
 export type GoalDriveStateToRows = (state: GoalDriveState) => {
   goal: Partial<GoalRow>;
   tasks: GoalTaskRow[];
-  deps: GoalTaskDepRow[];
 };
 
-/** GoalRow + GoalTaskRow[] + GoalTaskDepRow[] → GoalDriveState */
+/** GoalRow + GoalTaskRow[] → GoalDriveState */
 export type RowsToGoalDriveState = (
   goal: GoalRow,
   tasks: GoalTaskRow[],
-  deps: GoalTaskDepRow[],
 ) => GoalDriveState;

@@ -9,7 +9,7 @@ function makeTask(overrides: Partial<GoalTask> = {}): GoalTask {
     id: 't1',
     description: 'Test task',
     type: '代码',
-    depends: [],
+    
     status: 'pending',
     ...overrides,
   };
@@ -151,14 +151,14 @@ describe('rollback: affected task identification', () => {
   it('should identify tasks added after checkpoint as affected', () => {
     const snapshotTasks = [
       makeTask({ id: 't1', status: 'completed' }),
-      makeTask({ id: 't2', status: 'pending', depends: ['t1'] }),
+      makeTask({ id: 't2', status: 'pending' }),
     ];
 
     const currentTasks = [
       makeTask({ id: 't1', status: 'completed' }),
-      makeTask({ id: 't2', status: 'running', depends: ['t1'], branchName: 'feat/t2', channelId: 'ch-t2', dispatchedAt: Date.now() - 10_000 }),
+      makeTask({ id: 't2', status: 'running',  branchName: 'feat/t2', channelId: 'ch-t2', dispatchedAt: Date.now() - 10_000 }),
       // t3 was added by replan AFTER the checkpoint
-      makeTask({ id: 't3', status: 'running', depends: ['t1'], branchName: 'feat/t3', channelId: 'ch-t3', dispatchedAt: Date.now() - 5_000 }),
+      makeTask({ id: 't3', status: 'running',  branchName: 'feat/t3', channelId: 'ch-t3', dispatchedAt: Date.now() - 5_000 }),
     ];
 
     const snapshotTaskIds = new Set(snapshotTasks.map(t => t.id));
@@ -195,12 +195,12 @@ describe('rollback: affected task identification', () => {
   it('should NOT identify already-completed-before-checkpoint tasks as affected', () => {
     const snapshotTasks = [
       makeTask({ id: 't1', status: 'completed' }),
-      makeTask({ id: 't2', status: 'completed', depends: ['t1'] }),
+      makeTask({ id: 't2', status: 'completed' }),
     ];
 
     const currentTasks = [
       makeTask({ id: 't1', status: 'completed' }),
-      makeTask({ id: 't2', status: 'completed', depends: ['t1'] }),
+      makeTask({ id: 't2', status: 'completed' }),
     ];
 
     const snapshotTaskIds = new Set(snapshotTasks.map(t => t.id));
@@ -231,13 +231,13 @@ describe('rollback: affected task identification', () => {
   it('should identify tasks that completed AFTER checkpoint as affected', () => {
     const snapshotTasks = [
       makeTask({ id: 't1', status: 'completed' }),
-      makeTask({ id: 't2', status: 'pending', depends: ['t1'] }),
+      makeTask({ id: 't2', status: 'pending' }),
     ];
 
     const currentTasks = [
       makeTask({ id: 't1', status: 'completed' }),
       // t2 was pending in snapshot but completed now
-      makeTask({ id: 't2', status: 'completed', depends: ['t1'], branchName: 'feat/t2', merged: true }),
+      makeTask({ id: 't2', status: 'completed',  branchName: 'feat/t2', merged: true }),
     ];
 
     const snapshotTaskIds = new Set(snapshotTasks.map(t => t.id));
@@ -410,14 +410,14 @@ describe('rollback: task cleanup identification', () => {
   it('should identify tasks needing cleanup (branch/thread exists but snapshot says pending)', () => {
     const snapshotTasks = [
       makeTask({ id: 't1', status: 'completed' }),
-      makeTask({ id: 't2', status: 'pending', depends: ['t1'] }),
+      makeTask({ id: 't2', status: 'pending' }),
     ];
 
     const currentTasks = [
       makeTask({ id: 't1', status: 'completed', branchName: 'feat/t1', merged: true }),
-      makeTask({ id: 't2', status: 'running', depends: ['t1'], branchName: 'feat/t2', channelId: 'ch-t2' }),
+      makeTask({ id: 't2', status: 'running',  branchName: 'feat/t2', channelId: 'ch-t2' }),
       // t3 新增的，不在快照中
-      makeTask({ id: 't3', status: 'completed', depends: ['t1'], branchName: 'feat/t3', channelId: 'ch-t3' }),
+      makeTask({ id: 't3', status: 'completed',  branchName: 'feat/t3', channelId: 'ch-t3' }),
     ];
 
     const snapshotTaskMap = new Map(snapshotTasks.map(t => [t.id, t]));

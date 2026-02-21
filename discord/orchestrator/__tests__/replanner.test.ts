@@ -3,7 +3,6 @@ import type { GoalTask } from '../../types/index.js';
 import type { ReplanChange } from '../replanner.js';
 import {
   applyReplanChanges,
-  validateDependencies,
   renderTaskListMarkdown,
   updateGoalBodyWithTasks,
 } from '../replanner.js';
@@ -15,7 +14,6 @@ function makeTask(overrides: Partial<GoalTask> = {}): GoalTask {
     id: 't1',
     description: 'Test task',
     type: '代码',
-    depends: [],
     status: 'pending',
     ...overrides,
   };
@@ -23,10 +21,10 @@ function makeTask(overrides: Partial<GoalTask> = {}): GoalTask {
 
 function makeTasks(): GoalTask[] {
   return [
-    makeTask({ id: 't1', description: '创建数据模型', status: 'completed' }),
-    makeTask({ id: 't2', description: '实现 API', depends: ['t1'], status: 'pending' }),
-    makeTask({ id: 't3', description: '编写测试', depends: ['t2'], status: 'pending' }),
-    makeTask({ id: 't4', description: '手动部署', type: '手动', depends: ['t3'], status: 'pending' }),
+    makeTask({ id: 't1', description: '创建数据模型', status: 'completed', phase: 1 }),
+    makeTask({ id: 't2', description: '实现 API', phase: 2, status: 'pending' }),
+    makeTask({ id: 't3', description: '编写测试', phase: 2, status: 'pending' }),
+    makeTask({ id: 't4', description: '手动部署', type: '手动', phase: 3, status: 'pending' }),
   ];
 }
 
@@ -38,7 +36,7 @@ describe('applyReplanChanges', () => {
       const tasks = makeTasks();
       const changes: ReplanChange[] = [{
         action: 'add',
-        task: { id: 't5', description: '新任务', type: '代码', depends: ['t1'], phase: 2 },
+        task: { id: 't5', description: '新任务', type: '代码', phase: 2 },
       }];
 
       const result = applyReplanChanges(tasks, changes);
@@ -49,14 +47,14 @@ describe('applyReplanChanges', () => {
       const added = result.updatedTasks.find(t => t.id === 't5');
       expect(added).toBeDefined();
       expect(added!.status).toBe('pending');
-      expect(added!.depends).toEqual(['t1']);
+      expect(added!.phase).toBe(2);
     });
 
     it('should reject add with duplicate id', () => {
       const tasks = makeTasks();
       const changes: ReplanChange[] = [{
         action: 'add',
-        task: { id: 't2', description: '重复ID', type: '代码', depends: [] },
+        task: { id: 't2', description: '重复ID', type: '代码' },
       }];
 
       const result = applyReplanChanges(tasks, changes);
@@ -66,24 +64,11 @@ describe('applyReplanChanges', () => {
       expect(result.rejected[0].reason).toContain('already exists');
     });
 
-    it('should reject add with invalid dependency', () => {
-      const tasks = makeTasks();
-      const changes: ReplanChange[] = [{
-        action: 'add',
-        task: { id: 't5', description: '新任务', type: '代码', depends: ['t99'] },
-      }];
-
-      const result = applyReplanChanges(tasks, changes);
-
-      expect(result.rejected).toHaveLength(1);
-      expect(result.rejected[0].reason).toContain('Invalid depends');
-    });
-
-    it('should allow chaining: add t5, then add t6 depending on t5', () => {
+    it('should allow adding multiple tasks in sequence', () => {
       const tasks = makeTasks();
       const changes: ReplanChange[] = [
-        { action: 'add', task: { id: 't5', description: '步骤5', type: '代码', depends: [] } },
-        { action: 'add', task: { id: 't6', description: '步骤6', type: '代码', depends: ['t5'] } },
+        { action: 'add', task: { id: 't5', description: '步骤5', type: '代码', phase: 2 } },
+        { action: 'add', task: { id: 't6', description: '步骤6', type: '代码', phase: 3 } },
       ];
 
       const result = applyReplanChanges(tasks, changes);
@@ -109,19 +94,19 @@ describe('applyReplanChanges', () => {
       expect(modified!.description).toBe('更新后的 API');
     });
 
-    it('should modify task depends', () => {
+    it('should modify task phase', () => {
       const tasks = makeTasks();
       const changes: ReplanChange[] = [{
         action: 'modify',
         taskId: 't3',
-        updates: { depends: ['t1'] },
+        updates: { phase: 3 },
       }];
 
       const result = applyReplanChanges(tasks, changes);
 
       expect(result.applied).toHaveLength(1);
       const modified = result.updatedTasks.find(t => t.id === 't3');
-      expect(modified!.depends).toEqual(['t1']);
+      expect(modified!.phase).toBe(3);
     });
 
     it('should reject modify on completed task', () => {
@@ -151,20 +136,6 @@ describe('applyReplanChanges', () => {
 
       expect(result.rejected).toHaveLength(1);
       expect(result.rejected[0].reason).toContain('running');
-    });
-
-    it('should reject modify with invalid dependency reference', () => {
-      const tasks = makeTasks();
-      const changes: ReplanChange[] = [{
-        action: 'modify',
-        taskId: 't2',
-        updates: { depends: ['t99'] },
-      }];
-
-      const result = applyReplanChanges(tasks, changes);
-
-      expect(result.rejected).toHaveLength(1);
-      expect(result.rejected[0].reason).toContain('Invalid depends');
     });
 
     it('should reject modify on non-existent task', () => {
@@ -212,44 +183,11 @@ describe('applyReplanChanges', () => {
     });
   });
 
-  describe('reorder', () => {
-    it('should update depends and phase', () => {
-      const tasks = makeTasks();
-      const changes: ReplanChange[] = [{
-        action: 'reorder',
-        taskId: 't3',
-        newDepends: ['t1'],
-        newPhase: 2,
-      }];
-
-      const result = applyReplanChanges(tasks, changes);
-
-      expect(result.applied).toHaveLength(1);
-      const reordered = result.updatedTasks.find(t => t.id === 't3');
-      expect(reordered!.depends).toEqual(['t1']);
-      expect(reordered!.phase).toBe(2);
-    });
-
-    it('should reject reorder with invalid dependency reference', () => {
-      const tasks = makeTasks();
-      const changes: ReplanChange[] = [{
-        action: 'reorder',
-        taskId: 't3',
-        newDepends: ['t99'],
-      }];
-
-      const result = applyReplanChanges(tasks, changes);
-
-      expect(result.rejected).toHaveLength(1);
-      expect(result.rejected[0].reason).toContain('Invalid depends');
-    });
-  });
-
   describe('mixed changes', () => {
     it('should process multiple changes, partial success', () => {
       const tasks = makeTasks();
       const changes: ReplanChange[] = [
-        { action: 'add', task: { id: 't5', description: '新任务', type: '代码', depends: ['t1'] } },
+        { action: 'add', task: { id: 't5', description: '新任务', type: '代码', phase: 2 } },
         { action: 'modify', taskId: 't1', updates: { description: '不可修改' } }, // rejected: completed
         { action: 'remove', taskId: 't4', reason: 'not needed' },
       ];
@@ -267,7 +205,7 @@ describe('applyReplanChanges', () => {
       const originalDesc = tasks[1].description;
 
       applyReplanChanges(tasks, [
-        { action: 'add', task: { id: 't5', description: '新任务', type: '代码', depends: [] } },
+        { action: 'add', task: { id: 't5', description: '新任务', type: '代码', phase: 2 } },
         { action: 'modify', taskId: 't2', updates: { description: 'changed' } },
       ]);
 
@@ -277,126 +215,21 @@ describe('applyReplanChanges', () => {
   });
 });
 
-// ==================== validateDependencies ====================
-
-describe('validateDependencies', () => {
-  it('should pass for valid dependency graph', () => {
-    const tasks = makeTasks();
-    const result = validateDependencies(tasks);
-    expect(result.valid).toBe(true);
-    expect(result.errors).toHaveLength(0);
-  });
-
-  it('should detect dangling dependency reference', () => {
-    const tasks = [
-      makeTask({ id: 't1', depends: ['t99'], status: 'pending' }),
-    ];
-
-    const result = validateDependencies(tasks);
-
-    expect(result.valid).toBe(false);
-    expect(result.errors.some(e => e.includes('non-existent'))).toBe(true);
-  });
-
-  it('should detect simple circular dependency (A → B → A)', () => {
-    const tasks = [
-      makeTask({ id: 't1', depends: ['t2'], status: 'pending' }),
-      makeTask({ id: 't2', depends: ['t1'], status: 'pending' }),
-    ];
-
-    const result = validateDependencies(tasks);
-
-    expect(result.valid).toBe(false);
-    expect(result.errors.some(e => e.includes('Circular'))).toBe(true);
-  });
-
-  it('should detect longer cycle (A → B → C → A)', () => {
-    const tasks = [
-      makeTask({ id: 't1', depends: ['t3'], status: 'pending' }),
-      makeTask({ id: 't2', depends: ['t1'], status: 'pending' }),
-      makeTask({ id: 't3', depends: ['t2'], status: 'pending' }),
-    ];
-
-    const result = validateDependencies(tasks);
-
-    expect(result.valid).toBe(false);
-    expect(result.errors.some(e => e.includes('Circular'))).toBe(true);
-  });
-
-  it('should detect self-dependency', () => {
-    const tasks = [
-      makeTask({ id: 't1', depends: ['t1'], status: 'pending' }),
-    ];
-
-    const result = validateDependencies(tasks);
-
-    expect(result.valid).toBe(false);
-    expect(result.errors.some(e => e.includes('Circular'))).toBe(true);
-  });
-
-  it('should ignore cancelled tasks in validation', () => {
-    const tasks = [
-      makeTask({ id: 't1', depends: [], status: 'pending' }),
-      makeTask({ id: 't2', depends: ['t1'], status: 'cancelled' }),
-      makeTask({ id: 't3', depends: ['t1'], status: 'pending' }),
-    ];
-
-    const result = validateDependencies(tasks);
-    expect(result.valid).toBe(true);
-  });
-
-  it('should detect dependency on cancelled task', () => {
-    const tasks = [
-      makeTask({ id: 't1', depends: [], status: 'cancelled' }),
-      makeTask({ id: 't2', depends: ['t1'], status: 'pending' }),
-    ];
-
-    const result = validateDependencies(tasks);
-
-    expect(result.valid).toBe(false);
-    expect(result.errors.some(e => e.includes('cancelled'))).toBe(true);
-  });
-
-  it('should pass for tasks with no dependencies', () => {
-    const tasks = [
-      makeTask({ id: 't1', depends: [], status: 'pending' }),
-      makeTask({ id: 't2', depends: [], status: 'pending' }),
-    ];
-
-    const result = validateDependencies(tasks);
-    expect(result.valid).toBe(true);
-  });
-
-  it('should pass for diamond dependency (no cycle)', () => {
-    // t1 → t2 → t4
-    // t1 → t3 → t4
-    const tasks = [
-      makeTask({ id: 't1', depends: [], status: 'completed' }),
-      makeTask({ id: 't2', depends: ['t1'], status: 'pending' }),
-      makeTask({ id: 't3', depends: ['t1'], status: 'pending' }),
-      makeTask({ id: 't4', depends: ['t2', 't3'], status: 'pending' }),
-    ];
-
-    const result = validateDependencies(tasks);
-    expect(result.valid).toBe(true);
-  });
-});
-
 // ==================== renderTaskListMarkdown ====================
 
 describe('renderTaskListMarkdown', () => {
   it('should render tasks as markdown table', () => {
     const tasks = [
-      makeTask({ id: 't1', description: '创建数据模型', status: 'completed', type: '代码' }),
-      makeTask({ id: 't2', description: '实现 API', depends: ['t1'], status: 'running', type: '代码' }),
+      makeTask({ id: 't1', description: '创建数据模型', status: 'completed', type: '代码', phase: 1 }),
+      makeTask({ id: 't2', description: '实现 API', phase: 2, status: 'running', type: '代码' }),
     ];
 
     const md = renderTaskListMarkdown(tasks);
 
     expect(md).toContain('## 子任务');
-    expect(md).toContain('| ID | 类型 | 描述 | 依赖 | 状态 |');
-    expect(md).toContain('| t1 | 代码 | 创建数据模型 | — | ✅ completed |');
-    expect(md).toContain('| t2 | 代码 | 实现 API | t1 | 🔄 running |');
+    expect(md).toContain('| ID | 类型 | 描述 | Phase | 状态 |');
+    expect(md).toContain('| t1 | 代码 | 创建数据模型 | 1 | ✅ completed |');
+    expect(md).toContain('| t2 | 代码 | 实现 API | 2 | 🔄 running |');
   });
 
   it('should handle empty task list', () => {
@@ -418,13 +251,14 @@ describe('renderTaskListMarkdown', () => {
     expect(md).toContain('A \\| B');
   });
 
-  it('should join multiple depends with comma', () => {
+  it('should default to phase 1 when no phase set', () => {
     const tasks = [
-      makeTask({ id: 't1', depends: ['t2', 't3'], status: 'pending' }),
+      makeTask({ id: 't1', status: 'pending' }), // no phase
     ];
 
     const md = renderTaskListMarkdown(tasks);
-    expect(md).toContain('t2, t3');
+    expect(md).toContain('| t1 | 代码 |');
+    expect(md).toContain('| 1 |'); // defaults to phase 1
   });
 });
 
