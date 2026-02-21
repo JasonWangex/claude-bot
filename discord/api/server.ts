@@ -21,6 +21,8 @@ import { clearSession, compactSession, rewindSession, stopSession } from './rout
 import { getModels, setDefaultModel } from './routes/models.js';
 import { startDrive, getDriveStatus, pauseDrive, resumeDrive, skipTask, markTaskDone, retryTask, refixTask, pauseTask, resumeTask, rollback, confirmRollback, cancelRollback } from './routes/goals.js';
 import { listGoals, createGoal, getGoal, updateGoal, getGoalTimeline } from './routes/goal-crud.js';
+import { setGoalTasks } from './routes/goal-tasks.js';
+import { createGoalEvent } from './routes/goal-events.js';
 import { listGoalTodos, createGoalTodo, updateGoalTodo, deleteGoalTodo } from './routes/goal-todos.js';
 import { qdev } from './routes/qdev.js';
 import { listDevLogs, getDevLog, createDevLog } from './routes/devlogs.js';
@@ -90,6 +92,10 @@ function defineRoutes(): Route[] {
     r('GET',    '/api/goals/:goalId', getGoal),
     r('PATCH',  '/api/goals/:goalId', updateGoal),
     r('GET',    '/api/goals/:goalId/timeline', getGoalTimeline),
+
+    // Goal Tasks & Events (pre-drive)
+    r('POST', '/api/goals/:goalId/tasks', setGoalTasks),
+    r('POST', '/api/goals/:goalId/events', createGoalEvent),
 
     // Goal Drive
     r('POST', '/api/goals/:goalId/drive', startDrive),

@@ -19,7 +19,7 @@ import { stat } from 'fs/promises';
 import { getAuthorizedGuildId, getGoalLogChannelId } from '../utils/env.js';
 import { generateTopicTitle } from '../utils/llm.js';
 import { execGit, resolveMainWorktree } from './git-ops.js';
-import { parseTasks, goalNameToBranch, translateToBranchName } from './goal-state.js';
+import { goalNameToBranch, translateToBranchName } from './goal-state.js';
 import { getNextBatch, isGoalComplete, isGoalStuck, getProgressSummary, getPhaseNumber, isPhaseFullyMerged, getCurrentPhase } from './task-scheduler.js';
 import { parseTaskDetailPlans, formatDetailPlanForPrompt } from './goal-body-parser.js';
 import {
@@ -52,6 +52,7 @@ import type { IGoalMetaRepo, ITaskRepo, IGoalCheckpointRepo, IGoalTodoRepo } fro
 import type { PromptConfigService } from '../services/prompt-config-service.js';
 import { TaskEventRepo } from '../db/repo/task-event-repo.js';
 import type { GoalTimelineRepo } from '../db/repo/goal-timeline-repo.js';
+import { GoalEventRepo } from '../db/repo/goal-event-repo.js';
 
 interface OrchestratorDeps {
   stateManager: StateManager;
@@ -68,6 +69,7 @@ interface OrchestratorDeps {
   promptService: PromptConfigService;
   taskEventRepo: TaskEventRepo;
   goalTimelineRepo: GoalTimelineRepo;
+  goalEventRepo: GoalEventRepo;
 }
 
 interface MergeConflictPayload {
@@ -77,19 +79,12 @@ interface MergeConflictPayload {
   taskDescription: string;
 }
 
-/** startDrive 的入参 */
+/** startDrive 的入参（tasks 已提前由 Claude 写入 DB，此处不再传递） */
 export interface StartDriveParams {
   goalId: string;
   goalName: string;
   goalChannelId: string;
   baseCwd: string;
-  tasks: Array<{
-    id: string;
-    description: string;
-    type?: string;
-    phase?: number;
-    complexity?: string;
-  }>;
   maxConcurrent?: number;
 }
 
@@ -106,6 +101,9 @@ export class GoalOrchestrator {
   // Reviewer 轻推状态（completed + unmerged 任务）
   private reviewerNudgeCounts = new Map<string, number>();   // taskId → 轻推次数
   private lastReviewerNudgeAt = new Map<string, number>();   // taskId → 上次轻推时间
+
+  // goal event 重试计数（eventId → 失败次数），超过上限后放弃并标记已处理
+  private goalEventRetryCounts = new Map<string, number>();
 
   constructor(deps: OrchestratorDeps) {
     this.deps = deps;
@@ -222,13 +220,20 @@ export class GoalOrchestrator {
 
   /** 启动 Goal 自动推进 */
   async startDrive(params: StartDriveParams): Promise<GoalDriveState> {
-    const { goalId, goalName, goalChannelId, baseCwd: inputCwd, tasks: rawTasks, maxConcurrent = 3 } = params;
+    const { goalId, goalName, goalChannelId, baseCwd: inputCwd, maxConcurrent = 3 } = params;
 
+    // 已有 drive 时：paused → 自动 resume；running → 直接返回当前状态
     const existing = this.activeDrives.get(goalId) || await this.deps.goalRepo.get(goalId);
-    if (existing && (existing.status === 'running' || existing.status === 'paused')) {
-      const hint = existing.status === 'paused' ? ' Use resumeDrive to continue.' : '';
-      await this.notify(goalChannelId, `Goal "${goalName}" is already ${existing.status}.${hint}`, 'info');
-      return existing;
+    if (existing) {
+      if (existing.status === 'paused') {
+        logger.info(`[Orchestrator] Goal "${goalName}" is paused, auto-resuming`);
+        await this.resumeDrive(goalId);
+        return this.activeDrives.get(goalId) ?? existing;
+      }
+      if (existing.status === 'running') {
+        await this.notify(goalChannelId, `Goal "${goalName}" is already running.`, 'info');
+        return existing;
+      }
     }
 
     let baseCwd: string;
@@ -252,9 +257,25 @@ export class GoalOrchestrator {
       throw err;
     }
 
-    // 获取 goalMeta（seq + body），全方法共用
+    // 获取 goalMeta（seq + body）
     const goalMeta = await this.deps.goalMetaRepo.get(goalId);
     const goalSeq = goalMeta?.seq ?? 0;
+
+    // tasks 由 Claude 提前通过 bot_goal_tasks(action="set") 写入 DB
+    const storedTasks = await this.deps.taskRepo.getAllByGoal(goalId);
+    if (storedTasks.length === 0) {
+      const err = new Error(`No tasks found for goal ${goalId}. Use bot_goal_tasks(action="set") to initialize tasks before starting drive.`);
+      await this.notify(goalChannelId, err.message, 'error');
+      throw err;
+    }
+    logger.info(`[Orchestrator] Loaded ${storedTasks.length} tasks from DB for goal ${goalId}`);
+
+    // 附加详细计划（来自 goal body）
+    const plans = goalMeta?.body ? parseTaskDetailPlans(goalMeta.body) : new Map();
+    const tasks = storedTasks.map(t => {
+      const plan = plans.get(t.id);
+      return plan ? { ...t, detailPlan: formatDetailPlanForPrompt(plan) } : t;
+    }) as GoalTask[];
 
     const state: GoalDriveState = {
       goalId,
@@ -267,19 +288,8 @@ export class GoalOrchestrator {
       createdAt: Date.now(),
       updatedAt: Date.now(),
       maxConcurrent,
-      tasks: parseTasks(rawTasks),
+      tasks,
     };
-
-    // 从 Goal body 解析详细计划，一次性附加到 task 上
-    if (goalMeta?.body) {
-      const plans = parseTaskDetailPlans(goalMeta.body);
-      for (const task of state.tasks) {
-        const plan = plans.get(task.id);
-        if (plan) {
-          task.detailPlan = formatDetailPlanForPrompt(plan);
-        }
-      }
-    }
 
     // 创建审核员专用 channel（与 goal channel 同一 Category 下）
     const guildId = this.getGuildId();
@@ -2426,6 +2436,11 @@ export class GoalOrchestrator {
     const INTERVAL = 5_000;
     const tick = async () => {
       try {
+        await this.processGoalEvents();
+      } catch (e) {
+        logger.error('[Scanner] Error processing goal events:', e);
+      }
+      try {
         await this.processPendingEvents();
       } catch (e) {
         logger.error('[Scanner] Error processing pending events:', e);
@@ -2439,6 +2454,52 @@ export class GoalOrchestrator {
     };
     setTimeout(tick, INTERVAL);
     logger.info('[Scanner] Event scanner started (5s interval)');
+  }
+
+  /** 扫描并处理 goal 级别事件（goal.drive 等） */
+  private async processGoalEvents(): Promise<void> {
+    const MAX_RETRIES = 5;
+    const pending = this.deps.goalEventRepo.findPending();
+    for (const ev of pending) {
+      try {
+        if (ev.eventType === 'goal.drive') {
+          const p = ev.payload as {
+            goalName: string;
+            goalChannelId: string;
+            baseCwd: string;
+            maxConcurrent?: number;
+          };
+          logger.info(`[Scanner] Processing goal.drive for goal ${ev.goalId}`);
+          await this.startDrive({
+            goalId: ev.goalId,
+            goalName: p.goalName,
+            goalChannelId: p.goalChannelId,
+            baseCwd: p.baseCwd,
+            maxConcurrent: p.maxConcurrent,
+          });
+        }
+        this.goalEventRetryCounts.delete(ev.id);
+        this.deps.goalEventRepo.markProcessed(ev.id);
+      } catch (err: any) {
+        const retries = (this.goalEventRetryCounts.get(ev.id) ?? 0) + 1;
+        this.goalEventRetryCounts.set(ev.id, retries);
+        if (retries >= MAX_RETRIES) {
+          logger.error(`[Scanner] goal.drive for ${ev.goalId} failed ${retries} times, giving up: ${err.message}`);
+          this.deps.goalEventRepo.markProcessed(ev.id);
+          this.goalEventRetryCounts.delete(ev.id);
+          try {
+            const p = ev.payload as { goalChannelId?: string };
+            if (p.goalChannelId) {
+              await this.notify(p.goalChannelId, `Drive 启动失败（已重试 ${retries} 次）：${err.message}\n请检查任务列表和目录配置后重新发送 goal.drive 事件。`, 'error');
+            }
+          } catch (notifyErr: any) {
+            logger.warn(`[Scanner] Failed to notify goal channel about drive failure: ${notifyErr.message}`);
+          }
+        } else {
+          logger.warn(`[Scanner] goal.drive for ${ev.goalId} failed (attempt ${retries}/${MAX_RETRIES}): ${err.message} — will retry next tick`);
+        }
+      }
+    }
   }
 
   private async processPendingEvents(): Promise<void> {

@@ -73,16 +73,40 @@ Difference from standard plan mode: plan is written to Goal body (`bot_goals(act
 
 ## Drive launch
 
-All places that need to start Drive use this unified flow:
+Drive is **skill-driven** — Claude reviews, confirms with user, initializes tasks in DB, then signals the Orchestrator via event.
 
-1. Build tasks: prefer `tasks` from API response; if empty, parse `[代码]`/`[调研]` types from body, filter completed. IDs must use `g<seq>t<N>` format (seq = Goal's `seq` field from API), preventing cross-goal ID collisions.
-   ```json
-   [{"id":"g2t1","description":"description","type":"代码|调研|手动|占位","complexity":"simple|complex","phase":1,"status":"pending"}]
-   ```
-   Tasks are ordered by phase: phase 1 runs first (all parallel), then phase 2, etc.
-2. Get current thread ID: `bot_tasks(action="list")` → match task's `cwd` field with current cwd → get `channel_id`
-3. Call:
-   ```
-   bot_goals(action="drive", goal_id="<goal-id>", goal_name="<n>", goal_channel_id="<channel_id>", base_cwd="<cwd>", tasks="<JSON array string>", max_concurrent=3)
-   ```
-4. Success → `bot_goals(action="update", goal_id=..., status="Processing")`; Failure → output error, keep current status, prompt retry
+### Step 1 — Review & discuss
+Read the goal body. Summarize the task list by phase (e.g. "Phase 1: 3 tasks in parallel, Phase 2: 2 tasks sequentially"). Ask the user if anything needs adjusting before proceeding. **Wait for explicit confirmation** (ok / lgtm / yes).
+
+### Step 2 — Pre-flight checks (after user confirms)
+From `bot_goals(action="get")` verify:
+- `drive_status` is `null` → new launch; `paused` → will auto-resume; `running` → report and stop
+- Each pending task has a valid `id` in `g<seq>t<N>` format, a `type`, and a `p:N` phase annotation — if any task is missing `p:N`, infer phase from dependencies and update the body (`bot_goals(action="update", body=...)`) before proceeding
+
+### Step 3 — Initialize tasks in DB
+Write the complete pending task list (with phase) to the database:
+```
+bot_goal_tasks(action="set", goal_id="<id>", tasks='[
+  {"id":"g2t1","description":"...","type":"代码","complexity":"simple","phase":1},
+  {"id":"g2t2","description":"...","type":"调研","phase":1},
+  {"id":"g2t3","description":"...","type":"代码","complexity":"complex","phase":2}
+]')
+```
+Only include tasks that are **not yet completed** (unchecked `- [ ]` in body).
+
+### Step 4 — Get thread ID
+`bot_tasks(action="list")` → match task's `cwd` with current cwd → get `channel_id`
+
+### Step 5 — Send drive event
+```
+bot_goal_event(goal_id="<id>", event_type="goal.drive", payload={
+  "goalName": "<name>",
+  "goalChannelId": "<channel_id>",
+  "baseCwd": "<cwd>",
+  "maxConcurrent": 3
+})
+```
+Orchestrator picks up the event within 5 seconds and starts Drive automatically.
+
+### Step 6 — Update status
+`bot_goals(action="update", goal_id=..., status="Processing")`

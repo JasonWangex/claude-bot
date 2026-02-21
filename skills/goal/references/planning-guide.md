@@ -15,12 +15,12 @@ Split by **feature**, not by technical layer. One feature = one subtask, even if
 
 ## Phase ordering
 
-Tasks are grouped into phases. **All tasks in phase N must complete before phase N+1 begins.** Tasks within the same phase run in parallel.
+Tasks run in phase order. **All tasks in phase N must complete before phase N+1 begins.** Tasks within the same phase run in parallel.
 
-- Use `Phase 1`, `Phase 2`, `Phase 3` to group tasks by execution order
-- Tasks that can run concurrently go in the same phase
-- A phase must be complete (all tasks merged or skipped) before the next phase starts
-- If a task has no phase specified, it defaults to Phase 1
+- Annotate each task with `p:N` in its type bracket: `[代码, simple, p:1]`, `[调研, p:2]`
+- Phase is stored per-task in the database (`tasks.phase` column) — set via `bot_goal_tasks(action="set")` during Drive launch
+- Tasks that can run concurrently share the same phase number
+- If no `p:N` specified, phase defaults to 1
 
 ## Each subtask must include
 
