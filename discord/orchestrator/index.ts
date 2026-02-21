@@ -295,9 +295,20 @@ export class GoalOrchestrator {
     this.activeDrives.set(goalId, state);
     await this.syncGoalMetaStatus(goalId, 'Processing');
 
-    // 为审核员 channel 创建 Opus 会话
+    // 为审核员 channel 创建 Opus 会话并发送初始化 prompt
     if (guildId) {
       this.ensureGoalChannelSession(state, guildId);
+      const reviewerChannelId = state.reviewerChannelId ?? state.goalChannelId;
+      const initPrompt = this.deps.promptService.render('orchestrator.reviewer_init', {
+        GOAL_NAME: goalName,
+        GOAL_BRANCH: goalBranch,
+        TASK_COUNT: String(state.tasks.length),
+      });
+      try {
+        await this.deps.messageHandler.handleBackgroundChat(guildId, reviewerChannelId, initPrompt);
+      } catch (err: any) {
+        logger.warn(`[Orchestrator] Failed to send reviewer init prompt: ${err.message}`);
+      }
     }
 
     await this.notify(goalChannelId,
@@ -2549,28 +2560,14 @@ Call \`bot_task_event\` with:
           // diff stats 收集失败不影响审核
         }
 
-        // 构造 per-task 审核消息（内联 prompt，非 DB 模板）
-        const prompt = [
-          `## Task Review: ${this.getTaskLabel(state, taskId)}`,
-          `**Description:** ${task.description}`,
-          `**Branch:** \`${task.branchName}\``,
-          `**Diff stats:**`,
-          '```',
-          diffStats,
-          '```',
-          '',
-          `Please review this completed task:`,
-          `1. Use a sub-agent to checkout branch \`${task.branchName}\` and run \`/code-audit\` to audit the code changes`,
-          `2. Evaluate whether the implementation matches the task description`,
-          `3. Check for any quality issues, security concerns, or missed requirements`,
-          '',
-          `Then call \`bot_task_event\` with:`,
-          `- \`task_id\`: "${taskId}"`,
-          `- \`event_type\`: "review.task_result"`,
-          `- \`payload\`: \`{ "verdict": "pass" | "fail", "summary": "brief review summary", "issues": [] }\``,
-          '',
-          `If the verdict is "fail", include specific issues that need to be fixed.`,
-        ].join('\n');
+        const ps = this.deps.promptService;
+        const prompt = ps.render('orchestrator.task_review', {
+          TASK_LABEL: this.getTaskLabel(state, taskId),
+          TASK_DESCRIPTION: task.description,
+          BRANCH_NAME: task.branchName ?? '(unknown)',
+          DIFF_STATS: diffStats,
+          TASK_ID: taskId,
+        });
 
         await this.notify(goalChannelId,
           `[GoalOrchestrator] Reviewing task ${taskId}: ${task.description}`,
