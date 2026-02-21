@@ -1333,7 +1333,7 @@ Call \`bot_task_event\` with:
         task.durationMs = usage.duration_ms;
       }
 
-      // 检测 feedback 文件：worktree/feedback/<taskId>.json
+      // 检测 task.feedback 事件（Claude 通过 bot_task_event 写入 DB）
       const feedback = await this.checkFeedbackFile(state, task);
       if (feedback) {
         task.feedback = feedback;
