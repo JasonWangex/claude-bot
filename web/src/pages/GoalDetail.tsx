@@ -11,6 +11,7 @@ import { TaskPanel } from '@/components/goals/TaskPanel';
 import { DriveControls } from '@/components/goals/DriveControls';
 import { GoalStatusBadge, taskStatusLabels } from '@/components/goals/StatusBadge';
 import { TodoPanel } from '@/components/goals/TodoPanel';
+import { GoalTimeline } from '@/components/goals/GoalTimeline';
 import { useGoal, useGoalDrive, updateGoal } from '@/lib/hooks/use-goals';
 import type { GoalStatus, GoalType, GoalTaskStatus } from '@/lib/types';
 
@@ -154,6 +155,11 @@ export default function GoalDetail() {
       key: 'todos',
       label: 'Todos',
       children: <TodoPanel goalId={goalId} />,
+    },
+    {
+      key: 'timeline',
+      label: 'Timeline',
+      children: <GoalTimeline goalId={goalId} />,
     },
     ...(goal.body ? [{
       key: 'detail',

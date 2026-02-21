@@ -13,3 +13,5 @@ export { ClaudeSessionRepository } from './claude-session-repo.js';
 export { ChannelSessionLinkRepository } from './channel-session-link-repo.js';
 export type { ChannelSessionLink } from './channel-session-link-repo.js';
 export { SyncCursorRepository } from './sync-cursor-repo.js';
+export { GoalTimelineRepo } from './goal-timeline-repo.js';
+export type { GoalTimelineEvent, TimelineEventType } from './goal-timeline-repo.js';

@@ -155,6 +155,17 @@ export interface KnowledgeBaseEntry {
   updated_at: number;
 }
 
+// Goal Timeline
+export type GoalTimelineEventType = 'success' | 'error' | 'warning' | 'info' | 'pipeline';
+
+export interface GoalTimelineEvent {
+  id: string;
+  goalId: string;
+  type: GoalTimelineEventType;
+  message: string;
+  createdAt: number;
+}
+
 // Task Event
 export interface TaskEvent {
   id: string;

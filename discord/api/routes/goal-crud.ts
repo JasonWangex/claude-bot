@@ -11,7 +11,7 @@
 
 import type { RouteHandler } from '../types.js';
 import { sendJson, readJsonBody } from '../middleware.js';
-import { getDb, GoalMetaRepo } from '../../db/index.js';
+import { getDb, GoalMetaRepo, GoalTimelineRepo } from '../../db/index.js';
 import type { Goal, GoalStatus, GoalType } from '../../types/repository.js';
 
 const VALID_STATUSES: GoalStatus[] = ['Pending', 'Collecting', 'Planned', 'Processing', 'Blocking', 'Completed', 'Merged'];
@@ -251,5 +251,17 @@ export const updateGoal: RouteHandler = async (req, res, params) => {
     sendJson(res, 200, { ok: true, data: toApiGoal(updated) });
   } catch (error: any) {
     sendJson(res, 500, { ok: false, error: `Failed to update goal: ${error.message}` });
+  }
+};
+
+// GET /api/goals/:goalId/timeline
+export const getGoalTimeline: RouteHandler = async (_req, res, params) => {
+  try {
+    const db = getDb();
+    const timelineRepo = new GoalTimelineRepo(db);
+    const events = timelineRepo.listByGoal(params.goalId);
+    sendJson(res, 200, { ok: true, data: events });
+  } catch (error: any) {
+    sendJson(res, 500, { ok: false, error: `Failed to get goal timeline: ${error.message}` });
   }
 };

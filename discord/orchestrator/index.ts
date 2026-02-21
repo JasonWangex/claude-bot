@@ -51,6 +51,7 @@ import {
 import type { IGoalMetaRepo, ITaskRepo, IGoalCheckpointRepo, IGoalTodoRepo } from '../types/repository.js';
 import type { PromptConfigService } from '../services/prompt-config-service.js';
 import { TaskEventRepo } from '../db/repo/task-event-repo.js';
+import type { GoalTimelineRepo } from '../db/repo/goal-timeline-repo.js';
 
 interface OrchestratorDeps {
   stateManager: StateManager;
@@ -66,6 +67,7 @@ interface OrchestratorDeps {
   goalTodoRepo: IGoalTodoRepo;
   promptService: PromptConfigService;
   taskEventRepo: TaskEventRepo;
+  goalTimelineRepo: GoalTimelineRepo;
 }
 
 interface MergeConflictPayload {
@@ -322,7 +324,7 @@ export class GoalOrchestrator {
       }
     }
 
-    await this.notify(goalChannelId,
+    await this.notifyGoal(state,
       `**Goal Drive started:** ${goalName}\n` +
       `Branch: \`${goalBranch}\`\n` +
       `Tasks: ${state.tasks.length}\n` +
@@ -341,7 +343,7 @@ export class GoalOrchestrator {
     if (!state || state.status !== 'running') return false;
     state.status = 'paused';
     await this.saveState(state);
-    await this.notify(state.goalChannelId, `Goal "${state.goalName}" paused`, 'warning');
+    await this.notifyGoal(state, `Goal "${state.goalName}" paused`, 'warning');
     return true;
   }
 
@@ -350,7 +352,7 @@ export class GoalOrchestrator {
     if (!state || state.status !== 'paused') return false;
     state.status = 'running';
     await this.saveState(state);
-    await this.notify(state.goalChannelId, `Goal "${state.goalName}" resumed`, 'success');
+    await this.notifyGoal(state, `Goal "${state.goalName}" resumed`, 'success');
 
     // 确保 reviewer session 存在（Bot 重启后 paused drive 不经过 restoreRunningDrives）
     const guildId = this.getGuildId();
@@ -384,7 +386,7 @@ export class GoalOrchestrator {
 
     task.status = 'skipped';
     await this.saveState(state);
-    await this.notify(state.goalChannelId, `Skipped task: ${this.getTaskLabel(state, task.id)} - ${task.description}`, 'info');
+    await this.notifyGoal(state, `Skipped task: ${this.getTaskLabel(state, task.id)} - ${task.description}`, 'info');
     if (state.status === 'running') await this.reviewAndDispatch(state);
     return true;
   }
@@ -397,7 +399,7 @@ export class GoalOrchestrator {
     task.status = 'completed';
     task.completedAt = Date.now();
     await this.saveState(state);
-    await this.notify(state.goalChannelId, `Manual task completed: ${this.getTaskLabel(state, task.id)} - ${task.description}`, 'success');
+    await this.notifyGoal(state, `Manual task completed: ${this.getTaskLabel(state, task.id)} - ${task.description}`, 'success');
     if (state.status === 'running') await this.reviewAndDispatch(state, taskId);
     return true;
   }
@@ -437,7 +439,7 @@ export class GoalOrchestrator {
     this.deps.taskEventRepo.clearByTask(taskId);
     this.clearCheckInState(taskId);
     await this.saveState(state);
-    await this.notify(state.goalChannelId, `Retrying task: ${this.getTaskLabel(state, task.id)} - ${task.description}`, 'warning');
+    await this.notifyGoal(state, `Retrying task: ${this.getTaskLabel(state, task.id)} - ${task.description}`, 'warning');
     if (state.status === 'running') await this.reviewAndDispatch(state);
     return true;
   }
@@ -468,7 +470,7 @@ export class GoalOrchestrator {
     task.auditRetries = (task.auditRetries ?? 0) + 1;
     await this.saveState(state);
 
-    await this.notify(state.goalChannelId,
+    await this.notifyGoal(state,
       `Refixing task: ${this.getTaskLabel(state, task.id)} - ${task.description}`,
       'warning',
     );
@@ -487,7 +489,7 @@ export class GoalOrchestrator {
     const task = state.tasks.find(t => t.id === taskId);
     if (!task || task.status !== 'failed') return false;
 
-    await this.notify(state.goalChannelId,
+    await this.notifyGoal(state,
       `Triggering replan from task ${this.getTaskLabel(state, task.id)}...`,
       'info',
     );
@@ -533,7 +535,7 @@ export class GoalOrchestrator {
         this.switchSessionModel(guildId, channelId, sonnetModel, 'execute');
         await this.updatePipelinePhase(goalId, taskId, 'execute');
 
-        await this.notify(state.goalChannelId,
+        await this.notifyGoal(state,
           `[GoalOrchestrator] ${taskId}: AI 调查 blocked feedback...`,
           'pipeline',
         );
@@ -551,7 +553,7 @@ export class GoalOrchestrator {
         switch (conclusion.action) {
           case 'continue':
             // Claude 已在调查中修复了问题 → 走 audit → fix 循环验证
-            await this.notify(state.goalChannelId,
+            await this.notifyGoal(state,
               `[GoalOrchestrator] ${taskId}: 调查结论 — 问题已修复，继续执行`,
               'info',
               { logOnly: true },
@@ -562,7 +564,7 @@ export class GoalOrchestrator {
 
           case 'retry':
             // 需要完全重试
-            await this.notify(state.goalChannelId,
+            await this.notifyGoal(state,
               `[GoalOrchestrator] ${taskId}: 调查结论 — 需要完全重试\n原因: ${conclusion.reason}`,
               'warning',
               { logOnly: true },
@@ -581,7 +583,7 @@ export class GoalOrchestrator {
 
           case 'replan': {
             // 需要重新规划
-            await this.notify(state.goalChannelId,
+            await this.notifyGoal(state,
               `[GoalOrchestrator] ${taskId}: 调查结论 — 需要重新规划\n原因: ${conclusion.reason}`,
               'info',
               { logOnly: true },
@@ -623,7 +625,7 @@ export class GoalOrchestrator {
               freshTask.status = 'blocked_feedback';
               freshTask.pipelinePhase = undefined;
               await this.saveState(freshState);
-              await this.notify(freshState.goalChannelId,
+              await this.notifyGoal(freshState,
                 `[GoalOrchestrator] ${taskId}: AI 调查无法自动解决\n原因: ${conclusion.reason}\n需要人工干预。`,
                 'error',
                 { logOnly: true },
@@ -645,7 +647,7 @@ export class GoalOrchestrator {
             freshTask.status = 'blocked_feedback';
             freshTask.pipelinePhase = undefined;
             await this.saveState(freshState);
-            await this.notify(freshState.goalChannelId,
+            await this.notifyGoal(freshState,
               `[GoalOrchestrator] ${taskId}: AI 调查出错: ${err.message}\n已回退到 blocked_feedback，需要人工干预。`,
               'error',
               { logOnly: true },
@@ -768,7 +770,7 @@ Call \`bot_task_event\` with:
     task.status = 'paused';
     // 保留 branchName, threadId, dispatchedAt — 恢复时复用
     await this.saveState(state);
-    await this.notify(state.goalChannelId,
+    await this.notifyGoal(state,
       `Paused task: ${this.getTaskLabel(state, task.id)} - ${task.description}\nBranch/thread preserved for resume.`,
       'warning'
     );
@@ -791,7 +793,7 @@ Call \`bot_task_event\` with:
     if (task.channelId && task.branchName) {
       task.status = 'running';
       await this.saveState(state);
-      await this.notify(state.goalChannelId,
+      await this.notifyGoal(state,
         `Resumed task: ${this.getTaskLabel(state, task.id)} - ${task.description}`,
         'success'
       );
@@ -808,7 +810,7 @@ Call \`bot_task_event\` with:
     task.channelId = undefined;
     task.dispatchedAt = undefined;
     await this.saveState(state);
-    await this.notify(state.goalChannelId,
+    await this.notifyGoal(state,
       `Resumed task: ${this.getTaskLabel(state, task.id)} - ${task.description} (re-dispatch)`,
       'success'
     );
@@ -825,7 +827,7 @@ Call \`bot_task_event\` with:
         logger.error(`[Orchestrator] baseCwd does not exist for ${state.goalName}: ${state.baseCwd}`);
         state.status = 'paused';
         await this.saveState(state);
-        await this.notify(state.goalChannelId,
+        await this.notifyGoal(state,
           `Goal "${state.goalName}" restore failed: working directory not found\n` +
           `Path: ${state.baseCwd}\n` +
           `Auto-paused. Check and resume manually.`,
@@ -946,7 +948,7 @@ Call \`bot_task_event\` with:
     if (pendingPlaceholders.length > 0) {
       const placeholderIds = pendingPlaceholders.map(t => t.id).join(', ');
       logger.info(`[Orchestrator] Placeholder tasks ready: ${placeholderIds} — forcing replan`);
-      await this.notify(state.goalChannelId,
+      await this.notifyGoal(state,
         `**占位任务触发重规划:** ${placeholderIds}\n` +
         `占位任务的依赖已满足，需要重新规划将其替换为具体任务。`,
         'info',
@@ -981,7 +983,7 @@ Call \`bot_task_event\` with:
         logger.info(
           `[Orchestrator] Research task ${completedTaskId} completed without replan feedback — triggering deep review`,
         );
-        await this.notify(state.goalChannelId,
+        await this.notifyGoal(state,
           `**调研任务深度审查:** ${completedTask.id} - ${completedTask.description}\n` +
           `调研任务完成但未提交 replan feedback，自动触发深度审查。`,
           'info',
@@ -1069,7 +1071,7 @@ Call \`bot_task_event\` with:
         logger.warn(`[Orchestrator] Failed to fetch goal todos: ${err.message}`);
       }
 
-      await this.notify(state.goalChannelId,
+      await this.notifyGoal(state,
         `**Goal "${state.goalName}" completed!**\n` +
         `Review branch \`${state.goalBranch}\` and merge to main.` +
         todoWarning,
@@ -1080,7 +1082,7 @@ Call \`bot_task_event\` with:
 
     if (isGoalStuck(state)) {
       await this.syncGoalMeta(state);
-      await this.notify(state.goalChannelId,
+      await this.notifyGoal(state,
         `Goal "${state.goalName}" is stuck\n` +
         `May have unresolved dependencies or failed tasks\n` +
         `Progress: ${getProgressSummary(state)}`,
@@ -1095,7 +1097,7 @@ Call \`bot_task_event\` with:
     for (const task of blockedTasks) {
       if (!task.notifiedBlocked) {
         task.notifiedBlocked = true;
-        await this.notify(state.goalChannelId,
+        await this.notifyGoal(state,
           `Manual task pending: ${this.getTaskLabel(state, task.id)} - ${task.description}\nReply "done ${task.id}" when complete.`,
           'warning'
         );
@@ -1176,7 +1178,7 @@ Call \`bot_task_event\` with:
       task.status = 'running';
       await this.saveState(state);
 
-      await this.notify(state.goalChannelId,
+      await this.notifyGoal(state,
         `Dispatched: ${taskLabel} - ${task.description} → \`${branchName}\``,
         'info'
       );
@@ -1187,7 +1189,7 @@ Call \`bot_task_event\` with:
       task.status = 'failed';
       task.error = err.message;
       await this.saveState(state);
-      await this.notify(state.goalChannelId,
+      await this.notifyGoal(state,
         `Dispatch failed: ${this.getTaskLabel(state, task.id)} - ${task.description}\nError: ${err.message}`,
         'error'
       );
@@ -1305,7 +1307,7 @@ Call \`bot_task_event\` with:
         this.switchSessionModel(guildId, channelId, model, 'execute');
         await this.updatePipelinePhase(goalId, taskId, 'execute');
 
-        await this.notify(state.goalChannelId,
+        await this.notifyGoal(state,
           `[GoalOrchestrator] ${taskId}: ${task.type === '调研' ? 'Opus' : 'Sonnet'} 执行`,
           'pipeline',
         );
@@ -1374,7 +1376,7 @@ Call \`bot_task_event\` with:
           task.completedAt = Date.now();
           await this.saveState(state);
 
-          await this.notify(state.goalChannelId,
+          await this.notifyGoal(state,
             `**Replan feedback:** ${this.getTaskLabel(state, task.id)} - ${task.description}\n` +
             `Reason: ${feedback.reason}`,
             'info'
@@ -1395,7 +1397,7 @@ Call \`bot_task_event\` with:
         // 非 replan 类型 → 标记为 blocked_feedback 等待人工处理
         task.status = 'blocked_feedback';
         await this.saveState(state);
-        await this.notify(state.goalChannelId,
+        await this.notifyGoal(state,
           `**Feedback received:** ${this.getTaskLabel(state, task.id)} - ${task.description}\n` +
           `Type: ${feedback.type}\n` +
           `Reason: ${feedback.reason}` +
@@ -1412,7 +1414,7 @@ Call \`bot_task_event\` with:
       await this.saveState(state);
 
       const costInfo = usage ? ` ($${usage.total_cost_usd.toFixed(4)}, ${Math.round(usage.duration_ms / 1000)}s)` : '';
-      await this.notify(state.goalChannelId, `Completed: ${this.getTaskLabel(state, task.id)} - ${task.description}${costInfo}`, 'success');
+      await this.notifyGoal(state, `Completed: ${this.getTaskLabel(state, task.id)} - ${task.description}${costInfo}`, 'success');
 
       // Phase Review: 不立即 merge，先触发 per-task 审核
       const guildId = this.getGuildId();
@@ -1461,7 +1463,7 @@ Call \`bot_task_event\` with:
       const buttons = hasContext
         ? buildTaskFailedButtons(goalId, task.id)
         : undefined;
-      await this.notify(state.goalChannelId,
+      await this.notifyGoal(state,
         `Failed: ${this.getTaskLabel(state, task.id)} - ${task.description}${costInfo}\nError: ${error}\n\n${hint}`,
         'error',
         buttons ? { components: buttons } : undefined,
@@ -1518,7 +1520,7 @@ Call \`bot_task_event\` with:
       const raw = this.deps.taskEventRepo.read<ReplanResult>(triggerTaskId, 'replan.result');
       if (!raw || !Array.isArray(raw.changes) || typeof raw.reasoning !== 'string') {
         logger.warn(`[Orchestrator] triggerReplan: missing or invalid replan.result event for task ${triggerTaskId}`);
-        await this.notify(state.goalChannelId,
+        await this.notifyGoal(state,
           `Replan 跳过 — Reviewer 未返回有效结果，当前计划保持不变`,
           'warning',
         );
@@ -1530,7 +1532,7 @@ Call \`bot_task_event\` with:
       this.deps.taskEventRepo.markProcessedByTask(triggerTaskId, 'replan.result');
 
       if (result.changes.length === 0) {
-        await this.notify(state.goalChannelId,
+        await this.notifyGoal(state,
           `Replan: 无需变更 — ${result.reasoning || '（无说明）'}`,
           'info',
         );
@@ -1556,7 +1558,7 @@ Call \`bot_task_event\` with:
       }
     } catch (err: any) {
       logger.error(`[Orchestrator] triggerReplan failed: ${err.message}`);
-      await this.notify(state.goalChannelId,
+      await this.notifyGoal(state,
         `Replan 失败: ${err.message}`,
         'error',
       );
@@ -1572,7 +1574,7 @@ Call \`bot_task_event\` with:
     if (!state) return false;
 
     if (!state.pendingReplan) {
-      await this.notify(state.goalChannelId, '没有待审批的计划变更', 'info');
+      await this.notifyGoal(state, '没有待审批的计划变更', 'info');
       return false;
     }
 
@@ -1588,7 +1590,7 @@ Call \`bot_task_event\` with:
     delete state.pendingReplan;
     await this.saveState(state);
 
-    await this.notify(state.goalChannelId,
+    await this.notifyGoal(state,
       `✅ **计划变更已批准并执行**\n` +
       `已应用 ${applyResult.applied.length} 项变更` +
       (applyResult.rejected.length > 0
@@ -1655,7 +1657,7 @@ Call \`bot_task_event\` with:
     delete state.pendingReplan;
     await this.saveState(state);
 
-    await this.notify(state.goalChannelId,
+    await this.notifyGoal(state,
       `✅ **修改后的计划已批准并执行**\n` +
       `已应用 ${applyResult.applied.length} 项变更` +
       (applyResult.rejected.length > 0
@@ -1688,7 +1690,7 @@ Call \`bot_task_event\` with:
 
     const pending = state.pendingReplan;
     if (!pending) {
-      await this.notify(state.goalChannelId, '没有待审批的计划变更', 'info');
+      await this.notifyGoal(state, '没有待审批的计划变更', 'info');
       return false;
     }
 
@@ -1696,7 +1698,7 @@ Call \`bot_task_event\` with:
     delete state.pendingReplan;
     await this.saveState(state);
 
-    await this.notify(state.goalChannelId,
+    await this.notifyGoal(state,
       `🚫 **计划变更已拒绝**\n快照 ID: \`${pending.checkpointId}\``,
       'info',
     );
@@ -1731,7 +1733,7 @@ Call \`bot_task_event\` with:
       }
 
       if (state.pendingRollback) {
-        await this.notify(state.goalChannelId,
+        await this.notifyGoal(state,
           `已有待确认的回滚操作（检查点: \`${state.pendingRollback.checkpointId}\`）\n` +
           `请先 \`confirm rollback\` 或 \`cancel rollback\``,
           'warning',
@@ -1742,15 +1744,15 @@ Call \`bot_task_event\` with:
       // 1. 加载检查点
       const checkpoint = await this.deps.checkpointRepo.get(checkpointId);
       if (!checkpoint) {
-        await this.notify(state.goalChannelId, `检查点 \`${checkpointId}\` 不存在`, 'error');
+        await this.notifyGoal(state, `检查点 \`${checkpointId}\` 不存在`, 'error');
         return null;
       }
       if (checkpoint.goalId !== goalId) {
-        await this.notify(state.goalChannelId, `检查点 \`${checkpointId}\` 不属于此 Goal`, 'error');
+        await this.notifyGoal(state, `检查点 \`${checkpointId}\` 不属于此 Goal`, 'error');
         return null;
       }
       if (!checkpoint.tasksSnapshot) {
-        await this.notify(state.goalChannelId, `检查点 \`${checkpointId}\` 没有任务快照`, 'error');
+        await this.notifyGoal(state, `检查点 \`${checkpointId}\` 没有任务快照`, 'error');
         return null;
       }
 
@@ -1857,7 +1859,7 @@ Call \`bot_task_event\` with:
         `⏪ **回滚评估：检查点 \`${checkpointId}\`**\n\n` +
         costSummary;
 
-      await this.notify(state.goalChannelId, confirmMessage, 'warning', {
+      await this.notifyGoal(state, confirmMessage, 'warning', {
         components: buildRollbackConfirmButtons(goalId),
       });
 
@@ -1881,7 +1883,7 @@ Call \`bot_task_event\` with:
 
       const pending = state.pendingRollback;
       if (!pending) {
-        await this.notify(state.goalChannelId, '没有待确认的回滚操作', 'info');
+        await this.notifyGoal(state, '没有待确认的回滚操作', 'info');
         return false;
       }
 
@@ -1890,7 +1892,7 @@ Call \`bot_task_event\` with:
       // 1. 恢复检查点的任务快照
       const snapshotTasks = await this.deps.checkpointRepo.restoreCheckpoint(pending.checkpointId);
       if (!snapshotTasks) {
-        await this.notify(state.goalChannelId,
+        await this.notifyGoal(state,
           `回滚失败：检查点 \`${pending.checkpointId}\` 快照数据不可用`,
           'error',
         );
@@ -1973,7 +1975,7 @@ Call \`bot_task_event\` with:
             logger.info(`[Orchestrator] rollback: reset ${state.goalBranch} to ${checkpoint.gitRef}`);
           } catch (err: any) {
             logger.warn(`[Orchestrator] rollback: git reset failed: ${err.message}`);
-            await this.notify(state.goalChannelId,
+            await this.notifyGoal(state,
               `Git reset 失败: ${err.message}\n任务计划已恢复，但 git 历史可能需要手动处理`,
               'warning',
             );
@@ -2007,7 +2009,7 @@ Call \`bot_task_event\` with:
       }
 
       const cleanedCount = tasksToCleanup.length;
-      await this.notify(state.goalChannelId,
+      await this.notifyGoal(state,
         `✅ **回滚完成**\n` +
         `已恢复到检查点 \`${pending.checkpointId}\`\n` +
         `清理了 ${cleanedCount} 个受影响任务的资源\n` +
@@ -2034,7 +2036,7 @@ Call \`bot_task_event\` with:
 
       const pending = state.pendingRollback;
       if (!pending) {
-        await this.notify(state.goalChannelId, '没有待确认的回滚操作', 'info');
+        await this.notifyGoal(state, '没有待确认的回滚操作', 'info');
         return false;
       }
 
@@ -2059,7 +2061,7 @@ Call \`bot_task_event\` with:
       delete state.pendingRollback;
       await this.saveState(state);
 
-      await this.notify(state.goalChannelId,
+      await this.notifyGoal(state,
         `🚫 **回滚已取消**\n已暂停的任务将重新派发（之前的执行进度无法恢复）`,
         'info',
       );
@@ -2184,7 +2186,7 @@ Call \`bot_task_event\` with:
       );
       goalWorktreeDir = this.findWorktreeDir(stdout, state.goalBranch) ?? undefined;
       if (!goalWorktreeDir) {
-        await this.notify(state.goalChannelId, `Cannot find goal worktree, skipping merge: ${branchName}`, 'warning');
+        await this.notifyGoal(state, `Cannot find goal worktree, skipping merge: ${branchName}`, 'warning');
         return;
       }
 
@@ -2210,7 +2212,7 @@ Call \`bot_task_event\` with:
         }
 
         await this.saveState(state);
-        await this.notify(state.goalChannelId, `Merged: \`${branchName}\` → \`${state.goalBranch}\``, 'success');
+        await this.notifyGoal(state, `Merged: \`${branchName}\` → \`${state.goalBranch}\``, 'success');
 
         if (subtaskDir) {
           await cleanupSubtask(state.baseCwd, subtaskDir, branchName);
@@ -2235,7 +2237,7 @@ Call \`bot_task_event\` with:
           ? `Merge conflict`
           : `Merge failed (treated as conflict): ${result.error ?? 'unknown error'}`;
         await abortMerge(goalWorktreeDir);
-        await this.notify(state.goalChannelId,
+        await this.notifyGoal(state,
           `${reason}: \`${branchName}\` → \`${state.goalBranch}\`. Queued for reviewer...`,
           'warning'
         );
@@ -2254,7 +2256,7 @@ Call \`bot_task_event\` with:
       // 任何异常都视为 conflict，提交事件交由 reviewer 处理（前提是已知 goalWorktreeDir）
       if (goalWorktreeDir) {
         await abortMerge(goalWorktreeDir);
-        await this.notify(state.goalChannelId,
+        await this.notifyGoal(state,
           `Merge exception (treated as conflict): \`${branchName}\` → \`${state.goalBranch}\`. Queued for reviewer...\nError: ${err.message}`,
           'warning'
         );
@@ -2382,6 +2384,43 @@ Call \`bot_task_event\` with:
       }
     } catch (err: any) {
       logger.error(`[Orchestrator] Failed to send notification: ${err.message}`);
+    }
+  }
+
+  /**
+   * 记录 Timeline 事件（同步，fire-and-forget 错误）
+   */
+  private appendTimeline(goalId: string, message: string, type: string = 'info'): void {
+    const VALID_TYPES = ['success', 'error', 'warning', 'info', 'pipeline'] as const;
+    type ValidType = typeof VALID_TYPES[number];
+    const safeType: ValidType = (VALID_TYPES as readonly string[]).includes(type)
+      ? type as ValidType
+      : 'info';
+    try {
+      this.deps.goalTimelineRepo.append(goalId, message, safeType);
+    } catch (err: any) {
+      logger.warn(`[Orchestrator] appendTimeline failed: ${err.message}`);
+    }
+  }
+
+  /**
+   * 通知 + 记录 Timeline（有 state 上下文的场景统一走此方法）
+   *
+   * 规则：非 logOnly 的通知自动写入 goal_timeline，logOnly 的只发通知不写 timeline。
+   */
+  private async notifyGoal(
+    state: GoalDriveState,
+    message: string,
+    type?: 'success' | 'error' | 'warning' | 'info' | 'pipeline',
+    options?: {
+      components?: import('discord.js').ActionRowBuilder<import('discord.js').MessageActionRowComponentBuilder>[];
+      logOnly?: boolean;
+      driveChannel?: boolean;
+    },
+  ): Promise<void> {
+    await this.notify(state.goalChannelId, message, type, options);
+    if (!options?.logOnly) {
+      this.appendTimeline(state.goalId, message, type ?? 'info');
     }
   }
 
@@ -2612,7 +2651,7 @@ Call \`bot_task_event\` with:
           task.status = 'blocked';
           task.error = `Reviewer did not respond after ${GoalOrchestrator.MAX_CHECK_INS} nudge attempts`;
           await this.saveState(state);
-          await this.notify(state.goalChannelId,
+          await this.notifyGoal(state,
             `Task ${this.getTaskLabel(state, task.id)} reviewer stalled (${GoalOrchestrator.MAX_CHECK_INS} nudges). Manual intervention needed.`,
             'error',
           );
@@ -2656,7 +2695,7 @@ Call \`bot_task_event\` with:
             : '',
         });
 
-        await this.notify(state.goalChannelId,
+        await this.notifyGoal(state,
           `[GoalOrchestrator] Check-in #${attempt} for ${taskId} (session idle, no event received)`,
           'warning',
         );
@@ -2798,7 +2837,7 @@ Call \`bot_task_event\` with:
 
       if (result.verdict === 'pass') {
         logger.info(`[PhaseReview] Task ${taskId} passed review: ${result.summary}`);
-        await this.notify(state.goalChannelId,
+        await this.notifyGoal(state,
           `Review passed: ${this.getTaskLabel(state, taskId)} - ${result.summary || 'OK'}`,
           'success',
         );
@@ -2822,7 +2861,7 @@ Call \`bot_task_event\` with:
         // fail → 打回 subtask 修复
         const issues = result.issues?.join('\n- ') || result.summary || 'Review failed';
         logger.info(`[PhaseReview] Task ${taskId} failed review: ${issues}`);
-        await this.notify(state.goalChannelId,
+        await this.notifyGoal(state,
           `Review failed: ${this.getTaskLabel(state, taskId)}\nIssues: ${issues}`,
           'warning',
         );
@@ -2838,7 +2877,7 @@ Call \`bot_task_event\` with:
             task.auditSessionKey = undefined;
           }
           await this.saveState(state);
-          await this.notify(state.goalChannelId,
+          await this.notifyGoal(state,
             `Task ${this.getTaskLabel(state, taskId)} failed review ${refixCount} times, marking as failed`,
             'error',
           );
@@ -2881,7 +2920,7 @@ Call \`bot_task_event\` with:
           GOAL_WORKTREE_DIR: payload.goalWorktreeDir,
           TASK_ID: task.id,
         });
-        await this.notify(state.goalChannelId,
+        await this.notifyGoal(state,
           `[GoalOrchestrator] Conflict review queued: ${this.getTaskLabel(state, task.id)}`,
           'pipeline',
         );
@@ -2921,7 +2960,7 @@ Call \`bot_task_event\` with:
         }
         const subtaskDir = this.findWorktreeDir(stdout, branchName);
 
-        await this.notify(state.goalChannelId,
+        await this.notifyGoal(state,
           `[GoalOrchestrator] Conflict review nudge #${attempt} for ${this.getTaskLabel(state, task.id)} (reviewer stalled)`,
           'warning',
         );
@@ -2957,7 +2996,7 @@ Call \`bot_task_event\` with:
         task.merged = true;
         this.clearReviewerNudgeState(taskId);
         await this.saveState(state);
-        await this.notify(state.goalChannelId,
+        await this.notifyGoal(state,
           `Reviewer resolved conflict and merged: ${this.getTaskLabel(state, taskId)} — ${result.summary ?? 'OK'}`,
           'success',
         );
@@ -3000,7 +3039,7 @@ Call \`bot_task_event\` with:
         task.status = 'blocked';
         task.error = `merge conflict (reviewer could not resolve: ${result.summary ?? 'unknown'})`;
         await this.saveState(state);
-        await this.notify(state.goalChannelId,
+        await this.notifyGoal(state,
           `Reviewer could not resolve conflict for ${this.getTaskLabel(state, taskId)}: ${result.summary ?? 'unknown'}\nManual resolution needed.`,
           'error',
         );
@@ -3042,7 +3081,7 @@ Call \`bot_task_event\` with:
           PHASE_TASK_ID: phaseTaskId,
         });
 
-        await this.notify(state.goalChannelId,
+        await this.notifyGoal(state,
           `[GoalOrchestrator] Phase ${phase} complete — triggering evaluation`,
           'pipeline',
         );
@@ -3089,7 +3128,7 @@ Call \`bot_task_event\` with:
 
       if (result.decision === 'replan') {
         logger.info(`[PhaseReview] Phase evaluation recommends replan: ${result.summary}`);
-        await this.notify(state.goalChannelId,
+        await this.notifyGoal(state,
           `**Phase evaluation → replan:** ${result.summary}`,
           'warning',
         );
@@ -3111,7 +3150,7 @@ Call \`bot_task_event\` with:
       } else {
         // continue
         logger.info(`[PhaseReview] Phase evaluation: continue — ${result.summary}`);
-        await this.notify(state.goalChannelId,
+        await this.notifyGoal(state,
           `**Phase evaluation → continue:** ${result.summary || 'OK'}`,
           'success',
         );

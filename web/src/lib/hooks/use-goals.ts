@@ -1,6 +1,6 @@
 import useSWR from 'swr';
 import { apiFetch, apiPost, apiPatch } from '@/lib/api';
-import type { Goal, GoalStatus, GoalType, GoalDriveState } from '@/lib/types';
+import type { Goal, GoalStatus, GoalType, GoalDriveState, GoalTimelineEvent } from '@/lib/types';
 
 export function useGoals(status?: string) {
   const params = status ? `?status=${status}` : '';
@@ -83,4 +83,12 @@ export interface UpdateGoalData {
 
 export async function updateGoal(goalId: string, data: UpdateGoalData) {
   return apiPatch<Goal>(`/api/goals/${goalId}`, data);
+}
+
+export function useGoalTimeline(goalId: string | null) {
+  return useSWR<GoalTimelineEvent[]>(
+    goalId ? `/api/goals/${goalId}/timeline` : null,
+    apiFetch,
+    { refreshInterval: 5000 },
+  );
 }

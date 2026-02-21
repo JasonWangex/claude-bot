@@ -44,6 +44,7 @@ import migration028 from './migrations/028_update_reviewer_init_prompt.js';
 import migration029 from './migrations/029_fix_replan_task_id_format.js';
 import migration030 from './migrations/030_update_task_review_prompt.js';
 import migration031 from './migrations/031_add_hidden_session.js';
+import migration032 from './migrations/032_create_goal_timeline.js';
 
 const allMigrations: Migration[] = [
   migration001,
@@ -77,6 +78,7 @@ const allMigrations: Migration[] = [
   migration029,
   migration030,
   migration031,
+  migration032,
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -176,3 +178,5 @@ export { PromptConfigRepository } from './prompt-config-repo.js';
 export { GoalTodoRepository } from './goal-todo-repo.js';
 export { TaskEventRepo, EVENT_TYPES } from './repo/task-event-repo.js';
 export type { EventType, PendingEvent } from './repo/task-event-repo.js';
+export { GoalTimelineRepo } from './repo/goal-timeline-repo.js';
+export type { GoalTimelineEvent, TimelineEventType } from './repo/goal-timeline-repo.js';
