@@ -155,6 +155,23 @@ export interface KnowledgeBaseEntry {
   updated_at: number;
 }
 
+// Task Event
+export interface TaskEvent {
+  id: string;
+  taskId: string;
+  goalId: string | null;
+  eventType: string;
+  payload: unknown;
+  source: string;
+  createdAt: number;
+  processedAt: number | null;
+}
+
+export interface TaskEventPage {
+  items: TaskEvent[];
+  total: number;
+}
+
 // System status
 export interface SystemStatus {
   default_cwd: string;

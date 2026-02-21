@@ -12,6 +12,7 @@ import {
   MessageOutlined,
   SettingOutlined,
   LogoutOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons';
 import { Outlet, useLocation, useNavigate } from 'react-router';
 import { clearToken } from '@/lib/auth';
@@ -26,6 +27,7 @@ const menuItems = [
   { key: '/devlogs', icon: <FileTextOutlined />, label: 'DevLogs' },
   { key: '/ideas', icon: <BulbOutlined />, label: 'Ideas' },
   { key: '/kb', icon: <BookOutlined />, label: 'KB' },
+  { key: '/events', icon: <ThunderboltOutlined />, label: 'Events' },
   { key: '/commands', icon: <CodeOutlined />, label: 'Commands' },
   { key: '/prompts', icon: <MessageOutlined />, label: 'Prompts' },
   { key: '/settings', icon: <SettingOutlined />, label: 'Settings' },

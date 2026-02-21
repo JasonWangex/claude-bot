@@ -18,6 +18,7 @@ import Commands from '@/pages/Commands';
 import Prompts from '@/pages/Prompts';
 import Settings from '@/pages/Settings';
 import Login from '@/pages/Login';
+import Events from '@/pages/Events';
 
 function RequireAuth() {
   return getToken() ? <Outlet /> : <Navigate to="/login" replace />;
@@ -42,6 +43,7 @@ export default function App() {
             <Route path="ideas" element={<Ideas />} />
             <Route path="kb" element={<KnowledgeBase />} />
             <Route path="kb/:kbId" element={<KBDetail />} />
+            <Route path="events" element={<Events />} />
             <Route path="commands" element={<Commands />} />
             <Route path="prompts" element={<Prompts />} />
             <Route path="settings" element={<Settings />} />
