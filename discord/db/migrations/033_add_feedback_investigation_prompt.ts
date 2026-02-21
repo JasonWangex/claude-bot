@@ -8,7 +8,7 @@ import type { Migration } from '../migrate.js';
  * 原来该 prompt 硬编码在 buildFeedbackInvestigationPrompt() 中，现迁移至数据库。
  */
 const migration: Migration = {
-  version: 32,
+  version: 33,
   name: 'add_feedback_investigation_prompt',
 
   up(db) {

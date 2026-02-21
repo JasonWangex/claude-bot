@@ -45,6 +45,8 @@ import migration029 from './migrations/029_fix_replan_task_id_format.js';
 import migration030 from './migrations/030_update_task_review_prompt.js';
 import migration031 from './migrations/031_add_hidden_session.js';
 import migration032 from './migrations/032_create_goal_timeline.js';
+import migration033 from './migrations/033_add_feedback_investigation_prompt.js';
+import migration034 from './migrations/034_simplify_prompts.js';
 
 const allMigrations: Migration[] = [
   migration001,
@@ -79,6 +81,8 @@ const allMigrations: Migration[] = [
   migration030,
   migration031,
   migration032,
+  migration033,
+  migration034,
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

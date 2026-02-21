@@ -12,7 +12,7 @@ import type { Migration } from '../migrate.js';
  * - orchestrator.reviewer_init     — 精简职责描述
  */
 const migration: Migration = {
-  version: 33,
+  version: 34,
   name: 'simplify_prompts',
 
   up(db) {
