@@ -97,9 +97,13 @@ export class GoalOrchestrator {
   private stateLocks = new Map<string, Promise<void>>();
   private activeDrives = new Map<string, GoalDriveState>();
 
-  // Check-in 监工状态
-  private checkInCounts = new Map<string, number>();    // taskId → check-in 次数
-  private lastCheckInAt = new Map<string, number>();    // taskId → 上次 check-in 时间
+  // Check-in 监工状态（subtask）
+  private checkInCounts = new Map<string, number>();         // taskId → check-in 次数
+  private lastCheckInAt = new Map<string, number>();         // taskId → 上次 check-in 时间
+
+  // Reviewer 轻推状态（completed + unmerged 任务）
+  private reviewerNudgeCounts = new Map<string, number>();   // taskId → 轻推次数
+  private lastReviewerNudgeAt = new Map<string, number>();   // taskId → 上次轻推时间
 
   constructor(deps: OrchestratorDeps) {
     this.deps = deps;
@@ -2172,6 +2176,7 @@ Call \`bot_task_event\` with:
 
       if (result.success) {
         task.merged = true;
+        this.clearReviewerNudgeState(task.id);
         await this.saveState(state);
         await this.notify(state.goalChannelId, `Merged: \`${branchName}\` → \`${state.goalBranch}\``, 'success');
 
@@ -2205,7 +2210,8 @@ Call \`bot_task_event\` with:
           subtaskDir: subtaskDir ?? null,
           taskDescription: task.description,
         }, 'orchestrator');
-        // task 保持 completed 状态（execution done，merge pending）
+        // task 保持 completed 状态（execution done，merge pending）；标记 conflict 阶段供轻推机制识别
+        task.pipelinePhase = 'conflict';
         await this.saveState(state);
       } else {
         await this.notify(state.goalChannelId, `Merge failed: ${branchName}\nError: ${result.error}`, 'error');
@@ -2533,6 +2539,45 @@ Call \`bot_task_event\` with:
         this.checkInCounts.set(task.id, count + 1);
         this.lastCheckInAt.set(task.id, now);
       }
+
+      // ── Reviewer 监工：completed + unmerged 任务 ──
+      // 纯状态检测，不依赖事件（bot 重启后事件可能丢失）
+      const reviewerChannelId = state.reviewerChannelId ?? state.goalChannelId;
+      const reviewerLockKey = StateManager.channelLockKey(guildId, reviewerChannelId);
+
+      for (const task of state.tasks) {
+        if (task.status !== 'completed' || task.merged) continue;
+
+        // reviewer 正在工作 → 本轮所有 unmerged 任务都跳过
+        if (this.deps.claudeClient.isRunning(reviewerLockKey)) break;
+
+        // Cooldown 检查（基于完成时间或上次轻推时间）
+        const lastNudge = this.lastReviewerNudgeAt.get(task.id) ?? (task.completedAt ?? Date.now());
+        if (now - lastNudge < GoalOrchestrator.CHECK_IN_COOLDOWN) continue;
+
+        const count = this.reviewerNudgeCounts.get(task.id) ?? 0;
+        if (count >= GoalOrchestrator.MAX_CHECK_INS) {
+          logger.warn(`[ReviewerNudge] Task ${task.id} exceeded max nudges, marking blocked`);
+          task.status = 'blocked';
+          task.error = `Reviewer did not respond after ${GoalOrchestrator.MAX_CHECK_INS} nudge attempts`;
+          await this.saveState(state);
+          await this.notify(state.goalChannelId,
+            `Task ${this.getTaskLabel(state, task.id)} reviewer stalled (${GoalOrchestrator.MAX_CHECK_INS} nudges). Manual intervention needed.`,
+            'error',
+          );
+          this.clearReviewerNudgeState(task.id);
+          continue;
+        }
+
+        logger.info(`[ReviewerNudge] Nudging reviewer for task ${task.id} (attempt ${count + 1}, phase=${task.pipelinePhase})`);
+        if (task.pipelinePhase === 'conflict') {
+          this.nudgeConflictReview(state, task, guildId, count + 1);
+        } else {
+          this.triggerTaskReview(state, task, guildId);
+        }
+        this.reviewerNudgeCounts.set(task.id, count + 1);
+        this.lastReviewerNudgeAt.set(task.id, now);
+      }
     }
   }
 
@@ -2573,10 +2618,17 @@ Call \`bot_task_event\` with:
     })();
   }
 
-  /** 清除任务的 check-in 追踪状态 */
+  /** 清除任务的 check-in 追踪状态（subtask + reviewer nudge） */
   private clearCheckInState(taskId: string): void {
     this.checkInCounts.delete(taskId);
     this.lastCheckInAt.delete(taskId);
+    this.clearReviewerNudgeState(taskId);
+  }
+
+  /** 清除任务的 reviewer 轻推追踪状态 */
+  private clearReviewerNudgeState(taskId: string): void {
+    this.reviewerNudgeCounts.delete(taskId);
+    this.lastReviewerNudgeAt.delete(taskId);
   }
 
   // ========== Phase Review ==========
@@ -2778,6 +2830,51 @@ Call \`bot_task_event\` with:
   }
 
   /**
+   * Reviewer 轻推：conflict 阶段 — 运行时重建 payload，不依赖已处理的 merge.conflict 事件。
+   * 用于 bot 重启后事件丢失时恢复 conflict review 流程。
+   */
+  private nudgeConflictReview(
+    state: GoalDriveState,
+    task: GoalTask,
+    guildId: string,
+    attempt: number,
+  ): void {
+    const branchName = task.branchName;
+    if (!branchName) {
+      logger.warn(`[ReviewerNudge] Task ${task.id} has no branchName, skipping conflict nudge`);
+      return;
+    }
+    (async () => {
+      try {
+        const stdout = await execGit(
+          ['worktree', 'list', '--porcelain'],
+          state.baseCwd,
+          `nudgeConflictReview(${task.id}): list worktrees`,
+        );
+        const goalWorktreeDir = this.findWorktreeDir(stdout, state.goalBranch);
+        if (!goalWorktreeDir) {
+          logger.warn(`[ReviewerNudge] Cannot find goal worktree for ${task.id}, skipping nudge`);
+          return;
+        }
+        const subtaskDir = this.findWorktreeDir(stdout, branchName);
+
+        await this.notify(state.goalChannelId,
+          `[GoalOrchestrator] Conflict review nudge #${attempt} for ${this.getTaskLabel(state, task.id)} (reviewer stalled)`,
+          'warning',
+        );
+        this.triggerConflictReview(state, task, guildId, {
+          branchName,
+          goalWorktreeDir,
+          subtaskDir: subtaskDir ?? null,
+          taskDescription: task.description,
+        });
+      } catch (err: any) {
+        logger.error(`[ReviewerNudge] nudgeConflictReview failed for ${task.id}: ${err.message}`);
+      }
+    })();
+  }
+
+  /**
    * 处理 reviewer 的冲突解决结果。
    * resolved=true → 标记 merged，清理，继续 pipeline。
    * resolved=false → 设为 blocked，通知人工介入。
@@ -2795,6 +2892,7 @@ Call \`bot_task_event\` with:
 
       if (result.resolved) {
         task.merged = true;
+        this.clearReviewerNudgeState(taskId);
         await this.saveState(state);
         await this.notify(state.goalChannelId,
           `Reviewer resolved conflict and merged: ${this.getTaskLabel(state, taskId)} — ${result.summary ?? 'OK'}`,

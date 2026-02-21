@@ -287,7 +287,7 @@ export interface TaskFeedback {
 }
 
 export type TaskComplexity = 'simple' | 'complex';
-export type PipelinePhase = 'execute';
+export type PipelinePhase = 'execute' | 'conflict';
 
 export interface Task {
   id: string;

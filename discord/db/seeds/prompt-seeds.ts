@@ -199,7 +199,7 @@ Reason: {{FEEDBACK_REASON}}
 ## Constraints
 1. **NEVER modify completed or skipped tasks** — their IDs: {{IMMUTABLE_COMPLETED}}
 2. **NEVER modify running or dispatched tasks** — their IDs: {{IMMUTABLE_RUNNING}}
-3. New task IDs MUST use `g{{GOAL_SEQ}}t<N>` format (e.g. `g{{GOAL_SEQ}}t8`) — never bare `t<N>`
+3. New task IDs MUST use \`g{{GOAL_SEQ}}t<N>\` format (e.g. \`g{{GOAL_SEQ}}t8\`) — never bare \`t<N>\`
 4. New task IDs must not collide with existing IDs
 5. Tasks are ordered by phase (phase 1 runs first, then phase 2, etc.). Tasks in the same phase run in parallel.
 6. Keep changes minimal — only modify what the feedback necessitates
