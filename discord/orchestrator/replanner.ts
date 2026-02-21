@@ -608,6 +608,7 @@ export function buildReplanPrompt(ctx: ReplanContext): string {
     COMPLETED_DIFF_STATS: completedStats,
     IMMUTABLE_COMPLETED: immutableCompleted,
     IMMUTABLE_RUNNING: immutableRunning,
+    GOAL_SEQ: String(state.goalSeq),
   });
 }
 

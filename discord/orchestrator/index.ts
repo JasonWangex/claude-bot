@@ -29,8 +29,8 @@ import {
   cleanupSubtask,
   hasUncommittedChanges,
   autoCommit,
+  abortMerge,
 } from './goal-branch.js';
-import { resolveConflictsWithAI } from './conflict-resolver.js';
 import { logger } from '../utils/logger.js';
 import {
   buildReplanPrompt,
@@ -73,7 +73,6 @@ interface MergeConflictPayload {
   goalWorktreeDir: string;
   subtaskDir: string | null;
   taskDescription: string;
-  error: string;
 }
 
 /** startDrive 的入参 */
@@ -310,7 +309,7 @@ export class GoalOrchestrator {
       const initPrompt = this.deps.promptService.render('orchestrator.reviewer_init', {
         GOAL_NAME: goalName,
         GOAL_BRANCH: goalBranch,
-        TASK_COUNT: String(state.tasks.length),
+        GOAL_ID: goalId,
       });
       try {
         await this.deps.messageHandler.handleBackgroundChat(guildId, reviewerChannelId, initPrompt);
@@ -2194,61 +2193,20 @@ Call \`bot_task_event\` with:
           }
         }
       } else if (result.conflict) {
-        // 尝试 AI 自动解决冲突
+        // 直接交由 reviewer 处理
+        await abortMerge(goalWorktreeDir);
         await this.notify(state.goalChannelId,
-          `Merge conflict: \`${branchName}\` → \`${state.goalBranch}\`, trying AI resolution...`,
+          `Merge conflict: \`${branchName}\` → \`${state.goalBranch}\`. Queued for reviewer...`,
           'warning'
         );
-
-        const resolution = await resolveConflictsWithAI(
-          this.deps.claudeClient,
-          goalWorktreeDir,
+        this.deps.taskEventRepo.write(task.id, state.goalId, 'merge.conflict', {
           branchName,
-          task.description,
-          this.deps.promptService,
-        );
-
-        if (resolution.resolved) {
-          task.merged = true;
-          await this.saveState(state);
-          await this.notify(state.goalChannelId,
-            `AI resolved conflict and merged: \`${branchName}\` → \`${state.goalBranch}\``,
-            'success'
-          );
-
-          if (subtaskDir) {
-            await cleanupSubtask(state.baseCwd, subtaskDir, branchName);
-          }
-
-          if (task.channelId) {
-            const guildId = this.getGuildId();
-            if (guildId) {
-              this.deps.stateManager.archiveSession(guildId, task.channelId, undefined, 'merged');
-              try {
-                const channel = await this.deps.client.channels.fetch(task.channelId);
-                if (channel && 'delete' in channel) {
-                  await (channel as any).delete('Task merged and cleaned up').catch(() => {});
-                }
-              } catch { /* ignore */ }
-            }
-          }
-        } else {
-          // AI 无法解决 → 写 merge.conflict 事件，由 reviewer 排队处理
-          await this.notify(state.goalChannelId,
-            `AI could not resolve conflict: \`${branchName}\` → \`${state.goalBranch}\`\n` +
-            `Reason: ${resolution.error}\nQueued for reviewer...`,
-            'warning'
-          );
-          this.deps.taskEventRepo.write(task.id, state.goalId, 'merge.conflict', {
-            branchName,
-            goalWorktreeDir,
-            subtaskDir: subtaskDir ?? null,
-            taskDescription: task.description,
-            error: resolution.error ?? 'unknown',
-          }, 'orchestrator');
-          // task 保持 completed 状态（execution done，merge pending）
-          await this.saveState(state);
-        }
+          goalWorktreeDir,
+          subtaskDir: subtaskDir ?? null,
+          taskDescription: task.description,
+        }, 'orchestrator');
+        // task 保持 completed 状态（execution done，merge pending）
+        await this.saveState(state);
       } else {
         await this.notify(state.goalChannelId, `Merge failed: ${branchName}\nError: ${result.error}`, 'error');
       }
@@ -2805,7 +2763,6 @@ Call \`bot_task_event\` with:
           BRANCH_NAME: payload.branchName,
           GOAL_BRANCH: state.goalBranch,
           TASK_DESCRIPTION: payload.taskDescription,
-          AI_ERROR: payload.error,
           GOAL_WORKTREE_DIR: payload.goalWorktreeDir,
           TASK_ID: task.id,
         });

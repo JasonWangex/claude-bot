@@ -101,7 +101,7 @@ export async function createSubtaskBranch(
  * 合并子任务分支到 goal 分支
  *
  * 在 goal worktree 中执行 merge 操作。
- * 冲突时保留冲突状态（不自动 abort），让调用者决定是否用 AI 解决。
+ * 冲突时保留冲突状态（不自动 abort），让调用者 abort 后转交 reviewer 处理。
  */
 export async function mergeSubtaskBranch(
   goalWorktreeDir: string,

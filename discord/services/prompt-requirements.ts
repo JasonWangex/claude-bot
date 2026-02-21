@@ -12,12 +12,11 @@ export const PROMPT_REQUIREMENTS: PromptRequirement[] = [
   // Orchestrator 层 — 主模板
   // ================================================================
   { key: 'orchestrator.task',                   variables: ['GOAL_NAME', 'TASK_LABEL', 'TASK_TYPE', 'TASK_DESCRIPTION'] },
-  { key: 'orchestrator.replan',                 variables: ['GOAL_NAME', 'GOAL_BODY', 'COMPLETION_CRITERIA', 'CURRENT_TASKS', 'TRIGGER_TASK_ID', 'FEEDBACK_TYPE', 'FEEDBACK_REASON', 'FEEDBACK_DETAILS', 'COMPLETED_DIFF_STATS', 'IMMUTABLE_COMPLETED', 'IMMUTABLE_RUNNING'] },
-  { key: 'orchestrator.conflict_resolver',      variables: ['SUBTASK_BRANCH', 'TASK_DESCRIPTION', 'CONFLICT_FILES'] },
-  { key: 'orchestrator.conflict_review',        variables: ['TASK_LABEL', 'BRANCH_NAME', 'GOAL_BRANCH', 'TASK_DESCRIPTION', 'AI_ERROR', 'GOAL_WORKTREE_DIR', 'TASK_ID'] },
+  { key: 'orchestrator.replan',                 variables: ['GOAL_NAME', 'GOAL_BODY', 'COMPLETION_CRITERIA', 'CURRENT_TASKS', 'TRIGGER_TASK_ID', 'FEEDBACK_TYPE', 'FEEDBACK_REASON', 'FEEDBACK_DETAILS', 'COMPLETED_DIFF_STATS', 'IMMUTABLE_COMPLETED', 'IMMUTABLE_RUNNING', 'GOAL_SEQ'] },
+  { key: 'orchestrator.conflict_review',        variables: ['TASK_LABEL', 'BRANCH_NAME', 'GOAL_BRANCH', 'TASK_DESCRIPTION', 'GOAL_WORKTREE_DIR', 'TASK_ID'] },
   { key: 'orchestrator.check_in',               variables: ['TASK_LABEL', 'REVIEW_ISSUES'] },
   { key: 'orchestrator.phase_review',            variables: ['PHASE_NUMBER', 'GOAL_NAME', 'TASK_REVIEW_SUMMARIES', 'PROGRESS_SUMMARY', 'PHASE_TASK_ID'] },
-  { key: 'orchestrator.reviewer_init',           variables: ['GOAL_NAME', 'GOAL_BRANCH', 'TASK_COUNT'] },
+  { key: 'orchestrator.reviewer_init',           variables: ['GOAL_NAME', 'GOAL_BRANCH', 'GOAL_ID'] },
   { key: 'orchestrator.task_review',             variables: ['TASK_LABEL', 'TASK_DESCRIPTION', 'BRANCH_NAME', 'DIFF_STATS', 'TASK_ID'] },
 
   // ================================================================

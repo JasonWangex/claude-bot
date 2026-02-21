@@ -18,10 +18,11 @@ const VALID_COMPLEXITIES: GoalTaskComplexity[] = ['simple', 'complex'];
  * 预期输入格式（由 Claude 实例解析 Goal body 后生成）:
  * ```json
  * [
- *   { "id": "t1", "description": "创建数据模型", "type": "代码", "phase": 1 },
- *   { "id": "t2", "description": "实现 API", "type": "代码", "phase": 2 }
+ *   { "id": "g6t1", "description": "创建数据模型", "type": "代码", "phase": 1 },
+ *   { "id": "g6t2", "description": "实现 API", "type": "代码", "phase": 2 }
  * ]
  * ```
+ * ID 格式必须为 `g<seq>t<N>`，其中 seq 为 Goal 的自增序号（来自 API `seq` 字段）。
  */
 export function parseTasks(raw: Array<{
   id: string;

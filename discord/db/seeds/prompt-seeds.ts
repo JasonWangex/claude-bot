@@ -199,10 +199,11 @@ Reason: {{FEEDBACK_REASON}}
 ## Constraints
 1. **NEVER modify completed or skipped tasks** — their IDs: {{IMMUTABLE_COMPLETED}}
 2. **NEVER modify running or dispatched tasks** — their IDs: {{IMMUTABLE_RUNNING}}
-3. New task IDs must not collide with existing IDs
-4. Tasks are ordered by phase (phase 1 runs first, then phase 2, etc.). Tasks in the same phase run in parallel.
-5. Keep changes minimal — only modify what the feedback necessitates
-6. Preserve the overall goal direction
+3. New task IDs MUST use `g{{GOAL_SEQ}}t<N>` format (e.g. `g{{GOAL_SEQ}}t8`) — never bare `t<N>`
+4. New task IDs must not collide with existing IDs
+5. Tasks are ordered by phase (phase 1 runs first, then phase 2, etc.). Tasks in the same phase run in parallel.
+6. Keep changes minimal — only modify what the feedback necessitates
+7. Preserve the overall goal direction
 
 ## Output
 Call \`bot_task_event\` with:
@@ -212,9 +213,9 @@ Call \`bot_task_event\` with:
 \`\`\`json
 {
   "changes": [
-    { "action": "add", "task": { "id": "t8", "description": "...", "type": "代码", "phase": 3, "complexity": "simple" } },
-    { "action": "modify", "taskId": "t5", "updates": { "description": "new desc", "phase": 2, "complexity": "complex" } },
-    { "action": "remove", "taskId": "t7", "reason": "superseded by t8" }
+    { "action": "add", "task": { "id": "g{{GOAL_SEQ}}t8", "description": "...", "type": "代码", "phase": 3, "complexity": "simple" } },
+    { "action": "modify", "taskId": "g{{GOAL_SEQ}}t5", "updates": { "description": "new desc", "phase": 2, "complexity": "complex" } },
+    { "action": "remove", "taskId": "g{{GOAL_SEQ}}t7", "reason": "superseded by g{{GOAL_SEQ}}t8" }
   ],
   "reasoning": "Explanation of why these changes are needed",
   "impactLevel": "low" | "medium" | "high"
@@ -233,47 +234,10 @@ Valid complexity (for 代码 tasks): "simple" (straightforward logic, has patter
 Valid actions: add, modify, remove
 
 If no changes are needed, call \`bot_task_event\` with: \`{ "changes": [], "reasoning": "...", "impactLevel": "low" }\``,
-    variables: ['GOAL_NAME', 'GOAL_BODY', 'COMPLETION_CRITERIA', 'CURRENT_TASKS', 'TRIGGER_TASK_ID', 'FEEDBACK_TYPE', 'FEEDBACK_REASON', 'FEEDBACK_DETAILS', 'COMPLETED_DIFF_STATS', 'IMMUTABLE_COMPLETED', 'IMMUTABLE_RUNNING', 'TASK_ID'],
+    variables: ['GOAL_NAME', 'GOAL_BODY', 'COMPLETION_CRITERIA', 'CURRENT_TASKS', 'TRIGGER_TASK_ID', 'FEEDBACK_TYPE', 'FEEDBACK_REASON', 'FEEDBACK_DETAILS', 'COMPLETED_DIFF_STATS', 'IMMUTABLE_COMPLETED', 'IMMUTABLE_RUNNING', 'TASK_ID', 'GOAL_SEQ'],
     parentKey: null,
     sortOrder: 0,
   });
-
-  // ---- orchestrator.conflict_resolver (单模板) — 不改动 ----
-  entries.push({
-    key: 'orchestrator.conflict_resolver',
-    category: 'orchestrator',
-    name: 'Git 冲突解决',
-    description: 'AI 自动解决 Git 合并冲突',
-    template: `You are resolving Git merge conflicts. Branch \`{{SUBTASK_BRANCH}}\` is being merged into the current branch.
-
-Subtask description: {{TASK_DESCRIPTION}}
-
-The following files have conflicts:
-{{CONFLICT_FILES}}
-
-Instructions:
-1. Read each conflicted file to understand the conflict markers (<<<<<<< HEAD, =======, >>>>>>>)
-2. HEAD is the current goal branch (accumulated work from other subtasks)
-3. The incoming changes are from the subtask branch (the work described above)
-4. Resolve by keeping BOTH sides' valid changes — do not discard either side's work
-5. Use the Edit tool to fix each file, removing all conflict markers
-
-Common patterns:
-- Import conflicts: keep all imports from both sides
-- package.json / config files: merge both sets of entries
-- Adjacent code changes: include both additions in the correct order
-- Same function modified: carefully combine the logic from both sides
-
-Rules:
-- Do NOT run git add, git commit, or any git commands
-- Do NOT run install, build, or test commands
-- ONLY edit the conflicted files to resolve the conflicts`,
-    variables: ['SUBTASK_BRANCH', 'TASK_DESCRIPTION', 'CONFLICT_FILES'],
-    parentKey: null,
-    sortOrder: 0,
-  });
-
-
 
 
 
@@ -336,19 +300,23 @@ Please confirm your status:
     category: 'orchestrator',
     name: 'Reviewer 初始化',
     description: 'Goal Drive 启动时发送给 reviewer channel，告知角色和上下文',
-    template: `You are the **code reviewer** for Goal "{{GOAL_NAME}}" (branch: \`{{GOAL_BRANCH}}\`).
+    template: `You are the **code orchestrator** for Goal "{{GOAL_NAME}}" (branch: \`{{GOAL_BRANCH}}\`).
+Goal ID: \`{{GOAL_ID}}\`
 
-This goal has **{{TASK_COUNT}} tasks** to complete. Your responsibilities:
+Your responsibilities:
 
-1. Review each completed task's code changes when prompted
+1. Review each completed task's code changes when prompted, use \`/code-audit\` to check for quality issues, security concerns, or missed requirements
 2. Evaluate whether the implementation matches the task description
-3. Check for quality issues, security concerns, or missed requirements
-4. At the end of each phase, evaluate overall progress and decide whether to continue or replan
+
+When you find non-critical issues (low impact, doesn't block task acceptance), record them via \`bot_goal_todos\`:
+- \`action: "add"\`, \`goal_id: "{{GOAL_ID}}"\`, \`source: "reviewer"\`
+- Set \`priority\`: \`重要\` (should fix before release) / \`高\` (significant improvement) / \`中\` (nice to have) / \`低\` (trivial)
+- Example: content \`auth/login.ts: missing rate limiting\`, \`priority: "高"\`
 
 You will receive review requests automatically. For each review, report your findings using \`bot_task_event\`.
 
-**No action needed now — wait for the first review request.**`,
-    variables: ['GOAL_NAME', 'GOAL_BRANCH', 'TASK_COUNT'],
+**No action needed now — echo \`Ready\` when you ready**`,
+    variables: ['GOAL_NAME', 'GOAL_BRANCH', 'GOAL_ID'],
     parentKey: null,
     sortOrder: 0,
   });
@@ -388,13 +356,12 @@ If the verdict is "fail", include specific issues that need to be fixed.`,
     key: 'orchestrator.conflict_review',
     category: 'orchestrator',
     name: '冲突解决请求',
-    description: 'AI 无法自动解决 merge 冲突时，发给 reviewer 让其手动处理',
+    description: 'Merge 冲突时发给 reviewer 让其手动处理',
     template: `## Merge Conflict Resolution Needed: {{TASK_LABEL}}
 
 Branch \`{{BRANCH_NAME}}\` could not be automatically merged into \`{{GOAL_BRANCH}}\`.
 
 **Task:** {{TASK_DESCRIPTION}}
-**AI resolution failed:** {{AI_ERROR}}
 
 ## Steps
 
@@ -423,7 +390,7 @@ Branch \`{{BRANCH_NAME}}\` could not be automatically merged into \`{{GOAL_BRANC
 
 If you cannot resolve the conflict, report:
    - \`payload\`: \`{ "resolved": false, "summary": "why it cannot be resolved" }\``,
-    variables: ['TASK_LABEL', 'BRANCH_NAME', 'GOAL_BRANCH', 'TASK_DESCRIPTION', 'AI_ERROR', 'GOAL_WORKTREE_DIR', 'TASK_ID'],
+    variables: ['TASK_LABEL', 'BRANCH_NAME', 'GOAL_BRANCH', 'TASK_DESCRIPTION', 'GOAL_WORKTREE_DIR', 'TASK_ID'],
     parentKey: null,
     sortOrder: 0,
   });
