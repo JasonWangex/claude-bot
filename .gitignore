@@ -5,4 +5,5 @@ data/
 .env
 .env.*
 *.log
+logs/
 feedback/
