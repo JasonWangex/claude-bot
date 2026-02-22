@@ -461,6 +461,11 @@ export class GoalOrchestrator {
     task.cacheWriteIn = undefined;
     task.costUsd = undefined;
     task.durationMs = undefined;
+    // 清除上一轮 review 遗留的 issues，避免污染新一轮 check-in
+    if (task.metadata?.lastReviewIssues) {
+      const { lastReviewIssues: _, ...rest } = task.metadata;
+      task.metadata = Object.keys(rest).length ? rest : undefined;
+    }
     // 清除旧事件，防止 check-in 监工误判新一轮执行已上报
     this.deps.taskEventRepo.clearByTask(taskId);
     this.clearCheckInState(taskId);
@@ -2681,8 +2686,8 @@ export class GoalOrchestrator {
           continue;
         }
 
-        // 发送 check-in
-        this.sendCheckIn(state, task, guildId, count + 1);
+        // 发送 check-in（若有 review 遗留的 issues，继续携带上下文）
+        this.sendCheckIn(state, task, guildId, count + 1, task.metadata?.lastReviewIssues as string | undefined);
         this.checkInCounts.set(task.id, count + 1);
         this.lastCheckInAt.set(task.id, now);
       }
@@ -2881,6 +2886,38 @@ export class GoalOrchestrator {
   }
 
   /**
+   * 将 review.task_result payload 中的单个 issue 项目规范化为可读字符串。
+   * AI 输出不可信：可能是字符串、对象、数字、null 等。
+   */
+  private static normalizeIssueItem(item: unknown): string {
+    if (item === null || item === undefined) return '';
+    if (typeof item === 'string') return item.trim();
+    if (typeof item === 'number' || typeof item === 'boolean') return String(item);
+    if (typeof item === 'object') {
+      const obj = item as Record<string, unknown>;
+      // 尝试提取常见的可读文本字段
+      const readable = obj.description ?? obj.message ?? obj.text ?? obj.issue ?? obj.title ?? obj.content;
+      if (typeof readable === 'string' && readable.trim()) {
+        // 有 file/line 时附加位置信息
+        const loc = [obj.file, obj.line].filter(Boolean).join(':');
+        return loc ? `${loc}: ${readable.trim()}` : readable.trim();
+      }
+      return JSON.stringify(obj);
+    }
+    return String(item);
+  }
+
+  /**
+   * 将 review.task_result payload 的 issues 字段规范化为字符串数组。
+   * 容忍：undefined/null、字符串（未包数组）、对象数组、混合数组。
+   */
+  private static normalizeIssues(issues: unknown): string[] {
+    if (!issues) return [];
+    const arr = Array.isArray(issues) ? issues : [issues];
+    return arr.map(GoalOrchestrator.normalizeIssueItem).filter(Boolean);
+  }
+
+  /**
    * 处理 per-task 审核结果。
    * verdict=pass → merge → 检查 phase 完成情况
    * verdict=fail → 打回 subtask 修复
@@ -2922,7 +2959,9 @@ export class GoalOrchestrator {
         if (refreshed && refreshed.status === 'running') await this.reviewAndDispatch(refreshed, taskId);
       } else {
         // fail → 打回 subtask 修复
-        const issues = result.issues?.join('\n- ') || result.summary || 'Review failed';
+        // normalizeIssues 容忍 AI 返回的各种非标准格式（对象、字符串、混合数组等）
+        const issueTexts = GoalOrchestrator.normalizeIssues(result.issues);
+        const issues = issueTexts.join('\n- ') || result.summary || 'Review failed';
         logger.info(`[PhaseReview] Task ${taskId} failed review: ${issues}`);
         await this.notifyGoal(state,
           `Review failed: ${this.getTaskLabel(state, taskId)}\nIssues: ${issues}`,
@@ -2948,13 +2987,16 @@ export class GoalOrchestrator {
         }
 
         // 恢复为 running，发送 check-in 带 issues 信息让 subtask 修复
+        // 同时将 issues 存入 metadata，供后续周期性 check-in 继续传递上下文
+        const reviewIssuesText = `- ${issues}`;
         task.status = 'running';
         task.auditRetries = refixCount;
+        task.metadata = { ...task.metadata, lastReviewIssues: reviewIssuesText };
         await this.saveState(state);
 
         const guildId = this.getGuildId();
         if (guildId && task.channelId) {
-          this.sendCheckIn(state, task, guildId, 1, `- ${issues}`);
+          this.sendCheckIn(state, task, guildId, 1, reviewIssuesText);
         }
       }
     });
