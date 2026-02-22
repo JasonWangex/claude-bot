@@ -381,6 +381,7 @@ export interface TaskRow {
   duration_ms: number | null;
   detail_plan: string | null;
   audit_session_key: string | null;  // hidden audit session 的虚拟 channelId（'audit-{taskId}'）
+  metadata_json: string | null;      // JSON: Record<string, any>，存储运行时扩展字段
 }
 
 // ================================================================

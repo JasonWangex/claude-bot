@@ -90,58 +90,93 @@ export class GoalRepo implements IGoalRepo {
       // 1. Upsert goal row
       this.stmts.upsertGoal.run(goalDriveStateToGoalRow(state));
 
-      // 2. Replace tasks: delete all then re-insert
-      this.db.prepare(`DELETE FROM tasks WHERE goal_id = ?`).run(state.goalId);
-
-      if (state.tasks.length > 0) {
-        const insertTask = this.db.prepare(`
-          INSERT INTO tasks (
-            id, goal_id, description, type, phase, status,
-            branch_name, channel_id, dispatched_at, completed_at,
-            error, merged, notified_blocked, feedback_json,
-            complexity, pipeline_phase, audit_retries,
-            tokens_in, tokens_out, cache_read_in, cache_write_in, cost_usd, duration_ms,
-            detail_plan, audit_session_key
-          ) VALUES (
-            @id, @goal_id, @description, @type, @phase, @status,
-            @branch_name, @channel_id, @dispatched_at, @completed_at,
-            @error, @merged, @notified_blocked, @feedback_json,
-            @complexity, @pipeline_phase, @audit_retries,
-            @tokens_in, @tokens_out, @cache_read_in, @cache_write_in, @cost_usd, @duration_ms,
-            @detail_plan, @audit_session_key
-          )
-        `);
-
-        for (const task of state.tasks) {
-          insertTask.run({
-            id: task.id,
-            goal_id: state.goalId,
-            description: task.description,
-            type: task.type,
-            phase: task.phase ?? null,
-            status: task.status,
-            branch_name: task.branchName ?? null,
-            channel_id: task.channelId ?? null,
-            dispatched_at: task.dispatchedAt ?? null,
-            completed_at: task.completedAt ?? null,
-            error: task.error ?? null,
-            merged: task.merged ? 1 : 0,
-            notified_blocked: task.notifiedBlocked ? 1 : 0,
-            feedback_json: task.feedback ? JSON.stringify(task.feedback) : null,
-            complexity: task.complexity ?? null,
-            pipeline_phase: task.pipelinePhase ?? null,
-            audit_retries: task.auditRetries ?? 0,
-            tokens_in: task.tokensIn ?? null,
-            tokens_out: task.tokensOut ?? null,
-            cache_read_in: task.cacheReadIn ?? null,
-            cache_write_in: task.cacheWriteIn ?? null,
-            cost_usd: task.costUsd ?? null,
-            duration_ms: task.durationMs ?? null,
-            detail_plan: task.detailPlan ?? null,
-            audit_session_key: task.auditSessionKey ?? null,
-          });
-        }
+      if (state.tasks.length === 0) {
+        // 无任务时直接清空（replan 后任务全部重建的边界情况）
+        this.db.prepare(`DELETE FROM tasks WHERE goal_id = ?`).run(state.goalId);
+        return;
       }
+
+      // 2. Upsert 各任务（保留行 ID，task_events 不受影响）
+      const upsertTask = this.db.prepare(`
+        INSERT INTO tasks (
+          id, goal_id, description, type, phase, status,
+          branch_name, channel_id, dispatched_at, completed_at,
+          error, merged, notified_blocked, feedback_json,
+          complexity, pipeline_phase, audit_retries,
+          tokens_in, tokens_out, cache_read_in, cache_write_in, cost_usd, duration_ms,
+          detail_plan, audit_session_key, metadata_json
+        ) VALUES (
+          @id, @goal_id, @description, @type, @phase, @status,
+          @branch_name, @channel_id, @dispatched_at, @completed_at,
+          @error, @merged, @notified_blocked, @feedback_json,
+          @complexity, @pipeline_phase, @audit_retries,
+          @tokens_in, @tokens_out, @cache_read_in, @cache_write_in, @cost_usd, @duration_ms,
+          @detail_plan, @audit_session_key, @metadata_json
+        )
+        ON CONFLICT(id) DO UPDATE SET
+          status           = @status,
+          description      = @description,
+          type             = @type,
+          phase            = @phase,
+          branch_name      = @branch_name,
+          channel_id       = @channel_id,
+          dispatched_at    = @dispatched_at,
+          completed_at     = @completed_at,
+          error            = @error,
+          merged           = @merged,
+          notified_blocked = @notified_blocked,
+          feedback_json    = @feedback_json,
+          complexity       = @complexity,
+          pipeline_phase   = @pipeline_phase,
+          audit_retries    = @audit_retries,
+          tokens_in        = @tokens_in,
+          tokens_out       = @tokens_out,
+          cache_read_in    = @cache_read_in,
+          cache_write_in   = @cache_write_in,
+          cost_usd         = @cost_usd,
+          duration_ms      = @duration_ms,
+          detail_plan      = @detail_plan,
+          audit_session_key = @audit_session_key,
+          metadata_json    = @metadata_json
+      `);
+
+      for (const task of state.tasks) {
+        upsertTask.run({
+          id: task.id,
+          goal_id: state.goalId,
+          description: task.description,
+          type: task.type,
+          phase: task.phase ?? null,
+          status: task.status,
+          branch_name: task.branchName ?? null,
+          channel_id: task.channelId ?? null,
+          dispatched_at: task.dispatchedAt ?? null,
+          completed_at: task.completedAt ?? null,
+          error: task.error ?? null,
+          merged: task.merged ? 1 : 0,
+          notified_blocked: task.notifiedBlocked ? 1 : 0,
+          feedback_json: task.feedback ? JSON.stringify(task.feedback) : null,
+          complexity: task.complexity ?? null,
+          pipeline_phase: task.pipelinePhase ?? null,
+          audit_retries: task.auditRetries ?? 0,
+          tokens_in: task.tokensIn ?? null,
+          tokens_out: task.tokensOut ?? null,
+          cache_read_in: task.cacheReadIn ?? null,
+          cache_write_in: task.cacheWriteIn ?? null,
+          cost_usd: task.costUsd ?? null,
+          duration_ms: task.durationMs ?? null,
+          detail_plan: task.detailPlan ?? null,
+          audit_session_key: task.auditSessionKey ?? null,
+          metadata_json: task.metadata ? JSON.stringify(task.metadata) : null,
+        });
+      }
+
+      // 3. 删除孤儿任务（replan 期间被移除的任务）
+      const ids = state.tasks.map(t => t.id);
+      const placeholders = ids.map(() => '?').join(',');
+      this.db
+        .prepare(`DELETE FROM tasks WHERE goal_id = ? AND id NOT IN (${placeholders})`)
+        .run(state.goalId, ...ids);
     });
 
     saveTransaction();
@@ -242,6 +277,7 @@ function rowsToGoalDriveState(
       durationMs: t.duration_ms ?? undefined,
       detailPlan: t.detail_plan ?? undefined,
       auditSessionKey: t.audit_session_key ?? undefined,
+      metadata: t.metadata_json ? (() => { try { return JSON.parse(t.metadata_json); } catch { return undefined; } })() : undefined,
     })),
   };
 }
