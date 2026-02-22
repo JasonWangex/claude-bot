@@ -48,6 +48,8 @@ import migration032 from './migrations/032_create_goal_timeline.js';
 import migration033 from './migrations/033_add_feedback_investigation_prompt.js';
 import migration034 from './migrations/034_simplify_prompts.js';
 import migration035 from './migrations/035_create_goal_events.js';
+import migration036 from './migrations/036_add_task_metadata.js';
+import migration037 from './migrations/037_create_deleted_events_log.js';
 
 const allMigrations: Migration[] = [
   migration001,
@@ -85,6 +87,8 @@ const allMigrations: Migration[] = [
   migration033,
   migration034,
   migration035,
+  migration036,
+  migration037,
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
