@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
-import { Typography, Card, Table, Tag, Segmented, Space, Alert, Tooltip, Dropdown, Button } from 'antd';
-import { SettingOutlined } from '@ant-design/icons';
+import { Typography, Card, Table, Tag, Segmented, Space, Alert, Tooltip, Dropdown, Button, Switch } from 'antd';
+import { SettingOutlined, EyeInvisibleOutlined } from '@ant-design/icons';
 import { Link } from 'react-router';
 import { useSessions } from '@/lib/hooks/use-sessions';
 import type { SessionSummary } from '@/lib/hooks/use-sessions';
@@ -202,7 +202,8 @@ const FIXED_KEYS = new Set(['title']);
 
 export default function Sessions() {
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'closed'>('all');
-  const { data: sessions, error, isLoading } = useSessions(statusFilter);
+  const [includeHidden, setIncludeHidden] = useState(false);
+  const { data: sessions, error, isLoading } = useSessions(statusFilter, 1000, 0, undefined, includeHidden);
   const [hiddenKeys, setHiddenKeys] = useState<string[]>(loadHiddenColumns);
 
   const toggleColumn = (key: string) => {
@@ -240,6 +241,16 @@ export default function Sessions() {
           <Text type="secondary">Claude CLI 会话历史</Text>
         </div>
         <Space>
+          <Tooltip title="显示内部 audit session">
+            <Space size={4}>
+              <EyeInvisibleOutlined style={{ color: includeHidden ? '#1677ff' : '#999' }} />
+              <Switch
+                size="small"
+                checked={includeHidden}
+                onChange={setIncludeHidden}
+              />
+            </Space>
+          </Tooltip>
           <Dropdown
             menu={{ items: columnMenuItems, onClick: ({ key }) => toggleColumn(key) }}
             trigger={['click']}
@@ -270,7 +281,9 @@ export default function Sessions() {
             pagination={{ pageSize: 50 }}
             size="small"
             scroll={{ x: 'max-content' }}
+            rowClassName={(record: SessionSummary) => record.hidden ? 'session-row-hidden' : ''}
           />
+          <style>{`.session-row-hidden td { opacity: 0.45; }`}</style>
         </Card>
       )}
     </Space>

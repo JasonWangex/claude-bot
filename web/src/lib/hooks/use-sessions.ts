@@ -36,6 +36,7 @@ export interface SessionSummary {
     costUsd: number;
     turnCount: number;
   }> | null;
+  hidden: boolean;
 }
 
 // ========== JSONL Event Types (matching Claude Code format) ==========
@@ -110,10 +111,11 @@ export function useChannelSessions(channelId: string | null) {
   );
 }
 
-export function useSessions(status?: 'active' | 'closed' | 'all', limit = 1000, offset = 0, goalId?: string) {
+export function useSessions(status?: 'active' | 'closed' | 'all', limit = 1000, offset = 0, goalId?: string, includeHidden = false) {
   const query = new URLSearchParams();
   if (status && status !== 'all') query.set('status', status);
   if (goalId) query.set('goal_id', goalId);
+  if (includeHidden) query.set('include_hidden', 'true');
   query.set('limit', String(limit));
   query.set('offset', String(offset));
   const qs = query.toString();
