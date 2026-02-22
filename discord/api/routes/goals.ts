@@ -240,6 +240,25 @@ export const resumeTask: RouteHandler = async (_req, res, params, deps) => {
   sendJson(res, 200, { ok: true, data: { status: 'running' } });
 };
 
+// POST /api/goals/:goalId/tasks/:taskId/nudge
+export const nudgeTask: RouteHandler = async (_req, res, params, deps) => {
+  const guildId = requireAuth(res);
+  if (!guildId) return;
+
+  if (!deps.orchestrator) {
+    sendJson(res, 503, { ok: false, error: 'Orchestrator not available' });
+    return;
+  }
+
+  const result = await deps.orchestrator.nudgeTask(params.goalId, params.taskId);
+  if (!result.ok) {
+    sendJson(res, 400, { ok: false, error: result.message });
+    return;
+  }
+
+  sendJson(res, 200, { ok: true, data: { message: result.message } });
+};
+
 // POST /api/goals/:goalId/rollback
 export const rollback: RouteHandler = async (req, res, params, deps) => {
   const guildId = requireAuth(res);

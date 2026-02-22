@@ -835,6 +835,107 @@ export class GoalOrchestrator {
     return true;
   }
 
+  /**
+   * 轻推任务：向已有 channel 发送简短提示，让 agent 自行判断状态并继续
+   *
+   * 各状态处理策略：
+   *   failed / paused / blocked_feedback / dispatched（有 channel）→ 状态改 running，发轻推
+   *   running（有 channel）→ 不改状态，直接发轻推
+   *   completed & !merged（有 channel）→ 不改状态，发轻推提示重新上报
+   *   completed & merged               → 仅通知 goal channel，无需操作
+   *   无 channel 的非 running 任务     → 重置为 pending，触发重新派发
+   */
+  async nudgeTask(goalId: string, taskId: string): Promise<{ ok: boolean; message: string }> {
+    const state = await this.getState(goalId);
+    if (!state) return { ok: false, message: 'Goal not found' };
+
+    const task = state.tasks.find(t => t.id === taskId);
+    if (!task) return { ok: false, message: 'Task not found' };
+
+    const guildId = this.getGuildId();
+    if (!guildId) return { ok: false, message: 'Bot not authorized' };
+
+    const label = this.getTaskLabel(state, task.id);
+
+    // 已完成且已合并 → 无需操作，仅通知 goal channel
+    if (task.status === 'completed' && task.merged) {
+      await this.notifyGoal(state,
+        `Nudge: ${label} - ${task.description} 已完成且已合并，无需操作。`,
+        'info'
+      );
+      return { ok: true, message: 'Already completed and merged' };
+    }
+
+    const nudgePrompt = this.buildNudgePrompt(task, label);
+
+    // 有 channel → 改状态后发轻推
+    if (task.channelId) {
+      const channelId = task.channelId;
+      const prevStatus = task.status;
+      const needsStatusChange = ['failed', 'paused', 'blocked_feedback', 'dispatched'].includes(task.status);
+
+      // running 任务：先 abort 当前进程，再轻推，防止并发执行器竞争
+      if (task.status === 'running') {
+        const lockKey = StateManager.channelLockKey(guildId, channelId);
+        this.deps.claudeClient.abort(lockKey);
+      }
+
+      if (needsStatusChange) {
+        task.status = 'running';
+        task.error = undefined;
+        await this.saveState(state);
+      }
+
+      await this.notifyGoal(state,
+        `Nudge: ${label} (${prevStatus}${needsStatusChange ? ' → running' : ''}) - ${task.description}`,
+        'info'
+      );
+      this.executeTaskInBackground(goalId, taskId, guildId, channelId, nudgePrompt);
+      return { ok: true, message: `Nudged task ${label} (prev: ${prevStatus})` };
+    }
+
+    // completed & !merged & 无 channel → 通知 goal channel，无法轻推
+    if (task.status === 'completed' && !task.merged) {
+      await this.notifyGoal(state,
+        `Nudge: ${label} - 已完成但无 channel 可推，请人工检查分支 \`${task.branchName ?? '未知'}\` 并触发合并。`,
+        'warning'
+      );
+      return { ok: true, message: `Notified goal channel: ${label} completed but no channel` };
+    }
+
+    // 无 channel + 可重派状态 → 重置为 pending，重新派发
+    const redispatchable = ['failed', 'paused', 'blocked_feedback'].includes(task.status);
+    if (redispatchable) {
+      task.status = 'pending';
+      task.branchName = undefined;
+      task.channelId = undefined;
+      task.dispatchedAt = undefined;
+      task.error = undefined;
+      await this.saveState(state);
+      await this.notifyGoal(state,
+        `Nudge: ${label} - ${task.description}（无 channel，重新派发）`,
+        'info'
+      );
+      if (state.status === 'running') await this.dispatchNext(state);
+      return { ok: true, message: `Re-dispatching task ${label}` };
+    }
+
+    return { ok: false, message: `Cannot nudge task in status: ${task.status}` };
+  }
+
+  private buildNudgePrompt(task: GoalTask, label: string): string {
+    if (task.status === 'completed' && !task.merged) {
+      return `[Nudge] 任务 ${label} 已标记完成但尚未合并。如工作确实已完成，请重新发送 task.completed 事件触发合并；如还有未完成工作，请继续开发后再上报。`;
+    }
+    const errorHint = task.error ? `\n上次错误：${task.error}` : '';
+    return `[Nudge] 任务 ${label}（先前状态：${task.status}）${errorHint}
+
+请自行评估工作区现有进度，判断下一步：
+- 仍有未完成工作 → 继续开发
+- 工作已全部完成 → 发送 task.completed 事件
+- 遇到无法解决的问题 → 发送 task.feedback 事件说明原因`;
+  }
+
   async restoreRunningDrives(): Promise<void> {
     const states = await this.deps.goalRepo.findByStatus('running');
     for (const state of states) {
@@ -1150,7 +1251,7 @@ export class GoalOrchestrator {
         throw new Error(`Goal worktree for ${state.goalBranch} not found`);
       }
 
-      const subtaskDir = await createSubtaskBranch(
+      const { worktreeDir: subtaskDir, isExisting } = await createSubtaskBranch(
         goalWorktreeDir,
         branchName,
         this.deps.config.worktreesDir
@@ -1158,6 +1259,34 @@ export class GoalOrchestrator {
 
       const guildId = this.getGuildId();
       if (!guildId) throw new Error('Bot not authorized');
+
+      const taskLabel = this.getTaskLabel(state, task.id);
+
+      // 分支已存在且 task 持有 channelId → 直接 resume，跳过创建 channel
+      if (isExisting && task.channelId) {
+        const channelId = task.channelId;
+        task.status = 'running';
+        await this.saveState(state);
+
+        // 确保 session 存在（bot 重启后可能丢失）
+        this.deps.stateManager.getOrCreateSession(guildId, channelId, {
+          name: taskLabel,
+          cwd: subtaskDir,
+        });
+        this.deps.stateManager.setSessionForkInfo(guildId, channelId, state.goalChannelId, branchName);
+
+        await this.notifyGoal(state,
+          `Resumed (branch existed): ${taskLabel} - ${task.description} → \`${branchName}\``,
+          'info'
+        );
+        // 用轻量 continuation prompt 而非完整 buildTaskPrompt，
+        // 避免向已有 channel 重复发送初始任务描述
+        this.executeTaskInBackground(
+          state.goalId, task.id, guildId, channelId,
+          `[Resumed] 分支 \`${branchName}\` 已存在，请检查工作区现有进度并继续完成任务。`
+        );
+        return;
+      }
 
       const categoryId = await this.findCategoryId(state.goalChannelId);
 
@@ -1167,7 +1296,6 @@ export class GoalOrchestrator {
 
       const guild = await this.deps.client.guilds.fetch(guildId);
       const title = await generateTopicTitle(task.description);
-      const taskLabel = this.getTaskLabel(state, task.id);
       const channelName = `${taskLabel} ${title}`.slice(0, 100);
 
       const textChannel = await guild.channels.create({
@@ -1195,10 +1323,10 @@ export class GoalOrchestrator {
       task.status = 'running';
       await this.saveState(state);
 
-      await this.notifyGoal(state,
-        `Dispatched: ${taskLabel} - ${task.description} → \`${branchName}\``,
-        'info'
-      );
+      const dispatchMsg = isExisting
+        ? `Resumed (branch existed, new channel): ${taskLabel} - ${task.description} → \`${branchName}\``
+        : `Dispatched: ${taskLabel} - ${task.description} → \`${branchName}\``;
+      await this.notifyGoal(state, dispatchMsg, 'info');
 
       this.executeTaskPipeline(state.goalId, task.id, guildId, newThreadId, task, state);
 

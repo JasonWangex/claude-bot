@@ -71,30 +71,67 @@ export async function createGoalBranch(
   return worktreeDir;
 }
 
+export interface SubtaskBranchResult {
+  worktreeDir: string;
+  /** true = 分支/worktree 已存在，本次为复用而非新建 */
+  isExisting: boolean;
+}
+
 /**
  * 在 goal 分支的 worktree 中创建子任务分支
+ *
+ * 若分支已存在（上次 dispatch 中途失败等情况）：
+ *   - worktree 也存在 → 直接返回已有路径（isExisting=true）
+ *   - worktree 不存在 → 以已有分支 attach worktree（isExisting=true）
+ * 若分支不存在 → 正常 -b 创建（isExisting=false）
  *
  * @param goalWorktreeDir goal 分支 worktree 目录
  * @param subtaskBranch 子任务分支名
  * @param worktreesDir worktree 根目录
- * @returns 子任务 worktree 目录路径
+ * @returns SubtaskBranchResult
  */
 export async function createSubtaskBranch(
   goalWorktreeDir: string,
   subtaskBranch: string,
   worktreesDir: string
-): Promise<string> {
+): Promise<SubtaskBranchResult> {
   const stdout = await execGit(['rev-parse', '--show-toplevel'], goalWorktreeDir, 'createSubtaskBranch: toplevel');
   const repoRoot = stdout.trim();
   const repoName = repoRoot.split('/').pop() || 'repo';
   const worktreeDir = resolve(worktreesDir, `${repoName}-${subtaskBranch.replace(/\//g, '-')}`);
 
   await mkdir(worktreesDir, { recursive: true });
-  // 从 goal 分支 fork 出子任务分支
-  await execGit(['worktree', 'add', worktreeDir, '-b', subtaskBranch], goalWorktreeDir, 'createSubtaskBranch: add');
 
+  const exists = await branchExists(goalWorktreeDir, subtaskBranch);
+  if (exists) {
+    // 检查 worktree 是否已挂载
+    const listOutput = await execGit(['worktree', 'list', '--porcelain'], goalWorktreeDir, 'createSubtaskBranch: list');
+    const existingDir = findWorktreeDirByBranch(listOutput, subtaskBranch);
+    if (existingDir) {
+      logger.info(`Subtask branch already has worktree (reusing): ${subtaskBranch} → ${existingDir}`);
+      return { worktreeDir: existingDir, isExisting: true };
+    }
+    // 分支存在但 worktree 未挂载 → attach（不带 -b）
+    await execGit(['worktree', 'add', worktreeDir, subtaskBranch], goalWorktreeDir, 'createSubtaskBranch: attach existing');
+    logger.info(`Attached worktree to existing branch: ${subtaskBranch} → ${worktreeDir}`);
+    return { worktreeDir, isExisting: true };
+  }
+
+  // 正常新建
+  await execGit(['worktree', 'add', worktreeDir, '-b', subtaskBranch], goalWorktreeDir, 'createSubtaskBranch: add');
   logger.info(`Created subtask branch: ${subtaskBranch} → ${worktreeDir}`);
-  return worktreeDir;
+  return { worktreeDir, isExisting: false };
+}
+
+/** 从 worktree list --porcelain 输出中按分支名查找 worktree 目录 */
+function findWorktreeDirByBranch(listOutput: string, branchName: string): string | null {
+  const lines = listOutput.split('\n');
+  let currentPath = '';
+  for (const line of lines) {
+    if (line.startsWith('worktree ')) currentPath = line.slice('worktree '.length);
+    if (line.startsWith('branch ') && line.includes(branchName)) return currentPath;
+  }
+  return null;
 }
 
 /**

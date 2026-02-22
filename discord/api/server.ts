@@ -19,7 +19,7 @@ import { listChannels, createChannel, getChannel, updateChannel, deleteChannel, 
 import { sendMessage } from './routes/messages.js';
 import { clearSession, compactSession, rewindSession, stopSession } from './routes/session-ops.js';
 import { getModels, setDefaultModel } from './routes/models.js';
-import { startDrive, getDriveStatus, pauseDrive, resumeDrive, skipTask, markTaskDone, retryTask, refixTask, pauseTask, resumeTask, rollback, confirmRollback, cancelRollback } from './routes/goals.js';
+import { startDrive, getDriveStatus, pauseDrive, resumeDrive, skipTask, markTaskDone, retryTask, refixTask, pauseTask, resumeTask, nudgeTask, rollback, confirmRollback, cancelRollback } from './routes/goals.js';
 import { listGoals, createGoal, getGoal, updateGoal, getGoalTimeline } from './routes/goal-crud.js';
 import { setGoalTasks } from './routes/goal-tasks.js';
 import { createGoalEvent } from './routes/goal-events.js';
@@ -108,6 +108,7 @@ function defineRoutes(): Route[] {
     r('POST', '/api/goals/:goalId/tasks/:taskId/refix', refixTask),
     r('POST', '/api/goals/:goalId/tasks/:taskId/pause', pauseTask),
     r('POST', '/api/goals/:goalId/tasks/:taskId/resume', resumeTask),
+    r('POST', '/api/goals/:goalId/tasks/:taskId/nudge', nudgeTask),
     r('POST', '/api/goals/:goalId/rollback', rollback),
     r('POST', '/api/goals/:goalId/confirm-rollback', confirmRollback),
     r('POST', '/api/goals/:goalId/cancel-rollback', cancelRollback),
