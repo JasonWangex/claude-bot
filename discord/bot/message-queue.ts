@@ -137,7 +137,7 @@ export class MessageQueue {
         return channel as TextBasedChannel;
       }
     } catch (err: any) {
-      logger.error(`Failed to fetch channel ${channelId}:`, err.message);
+      logger.error(`Failed to fetch channel ${channelId}:`, err);
     }
     return null;
   }
@@ -472,7 +472,7 @@ export class MessageQueue {
           await this.backoffRateLimit(error);
           continue;
         }
-        logger.error('MessageQueue send failed:', error.message);
+        logger.error('MessageQueue send failed:', error);
         op.reject(error);
         return;
       }
@@ -537,7 +537,7 @@ export class MessageQueue {
           await this.backoffRateLimit(error);
           continue;
         }
-        logger.error('MessageQueue sendDocument failed:', error.message);
+        logger.error('MessageQueue sendDocument failed:', error);
         op.reject(error);
         return;
       }

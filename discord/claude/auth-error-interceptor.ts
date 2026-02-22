@@ -54,7 +54,7 @@ export class AuthErrorInterceptor {
       try {
         this.onEmergency();
       } catch (err: any) {
-        logger.error('[AuthErrorInterceptor] onEmergency callback failed:', err.message);
+        logger.error('[AuthErrorInterceptor] onEmergency callback failed:', err);
       }
       return;
     }

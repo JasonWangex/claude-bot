@@ -164,7 +164,7 @@ export class ClaudeSessionRepository {
     try {
       this.stmts.upsert.run(claudeSessionToParams(session));
     } catch (err: any) {
-      logger.error(`[ClaudeSessionRepo] save failed: claude_session_id=${session.claudeSessionId}, code=${err.code}`, err.message);
+      logger.error(`[ClaudeSessionRepo] save failed: claude_session_id=${session.claudeSessionId}, code=${err.code}`, err);
     }
   }
 

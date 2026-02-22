@@ -218,7 +218,7 @@ async function handleStop(
     await interaction.reply(`Interrupting and sending: ${followUpMessage.slice(0, 100)}...`);
     // 新消息通过正常流程发送，会自动 acquireLock 等待进程退出后执行
     messageHandler.sendChatByIds(guildId, channelId, followUpMessage).catch(err => {
-      logger.error(`[/stop follow-up] error:`, err.message);
+      logger.error(`[/stop follow-up] error:`, err);
     });
   } else {
     // 无 message: 原有行为，全停

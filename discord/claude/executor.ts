@@ -195,7 +195,7 @@ export class ClaudeExecutor {
       return await this.tailOutputFile(outputFile, stderrFile, child, lockKey, flags, onProgress);
     } catch (error: any) {
       if (error instanceof ClaudeExecutionError) throw error;
-      logger.error('Claude CLI execution failed:', error.message);
+      logger.error('Claude CLI execution failed:', error);
       throw new ClaudeExecutionError(`Claude CLI 执行失败: ${error.message}`, ClaudeErrorType.FATAL);
     } finally {
       this.activeProcesses.delete(lockKey);
@@ -874,7 +874,7 @@ export class ClaudeExecutor {
         writeFileSync(this.registryFile, JSON.stringify(registry, null, 2));
         logger.info(`Saved ${registry.length} process(es) to registry for reconnection`);
       } catch (e: any) {
-        logger.error('Failed to save process registry:', e.message);
+        logger.error('Failed to save process registry:', e);
       }
     }
 
@@ -1036,7 +1036,7 @@ export class ClaudeExecutor {
         }
       }
     } catch (e: any) {
-      logger.error(`Failed to create archive directory: ${e.message}`);
+      logger.error('Failed to create archive directory:', e);
     }
 
     return archivedJsonlPath;

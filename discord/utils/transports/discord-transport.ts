@@ -50,21 +50,35 @@ export class DiscordTransport implements LoggerTransport {
     let message = `**[${entry.level.toUpperCase()}]** ${timestamp}\n${entry.message}`;
 
     // 如果有额外参数，尝试格式化
+    // 若 entry.stack 存在，Error 对象的 message 已在 stack 第一行，跳过避免重复
     if (entry.args.length > 0) {
-      const argsStr = entry.args.map(arg => {
-        if (typeof arg === 'object') {
-          try {
-            return JSON.stringify(arg, null, 2);
-          } catch {
-            return String(arg);
+      const argsStr = entry.args
+        .map((arg) => {
+          if (arg instanceof Error) {
+            return entry.stack ? null : arg.message;
           }
-        }
-        return String(arg);
-      }).join(' ');
+          if (typeof arg === 'object' && arg !== null) {
+            try {
+              return JSON.stringify(arg, null, 2);
+            } catch {
+              return String(arg);
+            }
+          }
+          return String(arg);
+        })
+        .filter((s) => s !== null)
+        .join(' ');
 
       if (argsStr) {
         message += `\n\`\`\`\n${argsStr}\n\`\`\``;
       }
+    }
+
+    // error 级别附加 stack trace
+    if (entry.stack) {
+      // 截断过长的堆栈，避免超出 Discord 消息限制
+      const stackLines = entry.stack.split('\n').slice(0, 10).join('\n');
+      message += `\n\`\`\`\n${stackLines}\n\`\`\``;
     }
 
     // 异步发送，不阻塞日志调用

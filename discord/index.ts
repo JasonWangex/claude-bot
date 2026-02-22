@@ -47,7 +47,7 @@ async function main(): Promise<void> {
   try {
     await bot.launch();
   } catch (err: any) {
-    logger.error('Failed to start bot:', err.message || err.code || err);
+    logger.error('Failed to start bot:', err);
     process.exit(1);
   }
 }

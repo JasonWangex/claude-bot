@@ -83,7 +83,7 @@ export class ClaudeClient {
         try {
           return await this.executeChat(message, { ...options, sessionId: undefined }, onProgress);
         } catch (retryError: any) {
-          logger.error('Retry after session reset also failed:', retryError.message);
+          logger.error('Retry after session reset also failed:', retryError);
           throw error; // 抛出原始错误
         }
       }
@@ -97,7 +97,7 @@ export class ClaudeClient {
       try {
         return await this.executeChat(message, options, onProgress);
       } catch (retryError: any) {
-        logger.error('Retry also failed:', retryError.message);
+        logger.error('Retry also failed:', retryError);
         throw error; // 抛出原始错误
       }
     }

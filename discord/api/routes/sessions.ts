@@ -70,12 +70,12 @@ export const getSessionConversation: RouteHandler = async (_req, res, params, de
       },
       (error) => {
         // 读取错误（可能已经发送了部分数据，无法返回 500）
-        logger.error(`Failed to stream session conversation: ${error.message}`);
+        logger.error('Failed to stream session conversation:', error);
         res.end();
       },
     );
   } catch (error: any) {
-    logger.error(`Error in getSessionConversation: ${error.message}`);
+    logger.error('Error in getSessionConversation:', error);
     // 如果还没发送响应头，可以返回 500
     if (!res.headersSent) {
       res.writeHead(500, { 'Content-Type': 'application/json' });

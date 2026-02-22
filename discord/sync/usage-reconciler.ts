@@ -111,7 +111,7 @@ export class UsageReconciler {
           try {
             await this.reconcile();
           } catch (retryErr: any) {
-            logger.error(`[UsageReconciler] Retry failed: ${retryErr.message}`);
+            logger.error('[UsageReconciler] Retry failed:', retryErr);
           }
           this.scheduleNext();
         }, RETRY_DELAY_MS);

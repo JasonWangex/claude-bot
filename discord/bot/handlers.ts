@@ -183,7 +183,7 @@ export class MessageHandler {
       const caption = message.content?.trim() || 'Please look at this image';
       await this.sendChatInternal(guildId, session, caption, undefined, [image]);
     } catch (error: any) {
-      logger.error(`[${session.name}] Photo processing error:`, error.message);
+      logger.error(`[${session.name}] Photo processing error:`, error);
       this.mq.edit(channelId, processingMsgId, `Image processing failed: ${error.message}`);
     }
   }
@@ -778,7 +778,7 @@ export class MessageHandler {
 
       if (!isHidden) await mq.drain(5000);
 
-      logger.error(`[${session.name}] error:`, error.message);
+      logger.error(`[${session.name}] error:`, error);
 
       if (!isHidden && progressMsgId) {
         let hint = 'Tip: Use /clear to reset session';
