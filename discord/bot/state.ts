@@ -594,6 +594,19 @@ export class StateManager {
     return true;
   }
 
+  /**
+   * 关闭 channel 当前活跃的 claude_session（标记为 closed）。
+   * 用于 AUTH_ERROR 等异常退出场景：CLI 崩溃时 Stop hook 不会触发，
+   * session 会停留在 'active'，导致 checkOrphanedTasks 误认为 Claude 仍在工作而跳过轻推。
+   */
+  closeActiveSessionForChannel(channelId: string): void {
+    if (!this.claudeSessionRepo) return;
+    const activeSession = this.claudeSessionRepo.getActiveByChannel(channelId);
+    if (activeSession) {
+      this.claudeSessionRepo.close(activeSession.claudeSessionId);
+    }
+  }
+
   deleteSession(guildId: string, channelId: string): boolean {
     const key = this.channelKey(guildId, channelId);
     const existed = this.sessions.has(key);

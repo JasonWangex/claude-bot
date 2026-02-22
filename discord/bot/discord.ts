@@ -14,7 +14,7 @@ import { InteractionRegistry } from './interaction-registry.js';
 import { MessageQueue, EmbedColors } from './message-queue.js';
 import { MessageHandler } from './handlers.js';
 import { ClaudeClient } from '../claude/client.js';
-import { DiscordBotConfig } from '../types/index.js';
+import { DiscordBotConfig, ClaudeErrorType, ClaudeExecutionError } from '../types/index.js';
 import { checkAuth } from './auth.js';
 import { logger } from '../utils/logger.js';
 import { DiscordTransport } from '../utils/transports/discord-transport.js';
@@ -994,7 +994,10 @@ export class DiscordBot {
       (guildId, channelId) => {
         this.messageHandler.handleBackgroundChat(guildId, channelId, 'continue').catch((err: any) => {
           logger.error('[AuthErrorInterceptor] Retry "continue" failed:', err);
-          // 重试失败（非 AUTH_ERROR，如 session 已消失），主动重置计数避免 Map 泄漏
+          // AUTH_ERROR：handleAuthError 已在 sendChatInternal 内部调用并安排了下一次重试，
+          // 此处不能调 onSuccess（会重置计数并取消已安排的 timer）
+          if (err instanceof ClaudeExecutionError && err.errorType === ClaudeErrorType.AUTH_ERROR) return;
+          // 其他错误（如 session 已消失）：重置计数避免 Map 泄漏
           authErrorInterceptor.onSuccess(guildId, channelId);
         });
       },

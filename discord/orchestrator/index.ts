@@ -14,6 +14,7 @@ import type { ClaudeClient } from '../claude/client.js';
 import type { MessageHandler } from '../bot/handlers.js';
 import { type MessageQueue, EmbedColors, type EmbedColor } from '../bot/message-queue.js';
 import type { DiscordBotConfig, GoalDriveState, GoalTask, GoalTaskFeedback, PipelinePhase, PendingRollback, ChatUsageResult } from '../types/index.js';
+import { ClaudeErrorType, ClaudeExecutionError } from '../types/index.js';
 import type { IGoalRepo } from '../types/repository.js';
 import { stat } from 'fs/promises';
 import { getAuthorizedGuildId, getGoalLogChannelId } from '../utils/env.js';
@@ -1376,6 +1377,11 @@ export class GoalOrchestrator {
         logger.info(`[Orchestrator] Task ${taskId} completed`);
         await this.onTaskCompleted(goalId, taskId, usage);
       } catch (err: any) {
+        // AUTH_ERROR：拦截器已调度自动重试，task 保持 running 等待 Claude 完成后上报 bot_task_event
+        if (err instanceof ClaudeExecutionError && err.errorType === ClaudeErrorType.AUTH_ERROR) {
+          logger.warn(`[Orchestrator] Task ${taskId} got AUTH_ERROR in background, keeping task running for interceptor retry`);
+          return;
+        }
         logger.error(`[Orchestrator] Task ${taskId} failed:`, err);
         try {
           await this.onTaskFailed(goalId, taskId, err.message, usage);
@@ -1471,6 +1477,12 @@ export class GoalOrchestrator {
         // 事件扫描器会处理，这里作为 fallback 直接调用
         await this.onTaskCompleted(goalId, taskId, usage);
       } catch (err: any) {
+        // AUTH_ERROR：拦截器已调度自动重试，task 保持 running 等待 Claude 完成后上报 bot_task_event
+        // checkOrphanedTasks 会在 session idle 后轻推兜底
+        if (err instanceof ClaudeExecutionError && err.errorType === ClaudeErrorType.AUTH_ERROR) {
+          logger.warn(`[Orchestrator] Pipeline ${taskId} got AUTH_ERROR, keeping task running for interceptor retry`);
+          return;
+        }
         logger.error(`[Orchestrator] Pipeline ${taskId} failed:`, err);
         const stillRunning = await this.isTaskStillRunning(goalId, taskId);
         if (!stillRunning) {
@@ -3235,7 +3247,8 @@ export class GoalOrchestrator {
         );
 
         // 清理 subtask worktree 和分支
-        const conflictPayload = this.deps.taskEventRepo.read<MergeConflictPayload>(taskId, 'merge.conflict');
+        // merge.conflict 事件在前一 scanner tick 已被 markProcessed，需用 readAny 读取历史 payload
+        const conflictPayload = this.deps.taskEventRepo.readAny<MergeConflictPayload>(taskId, 'merge.conflict');
         if (task.branchName && conflictPayload?.subtaskDir) {
           await cleanupSubtask(state.baseCwd, conflictPayload.subtaskDir, task.branchName).catch(() => {});
         }

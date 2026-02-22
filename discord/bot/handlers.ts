@@ -772,8 +772,13 @@ export class MessageHandler {
         if (!isHidden && progressMsgId) {
           mq.edit(channelId, progressMsgId, 'Auth Error (403)\nAuto-recovering...', { embedColor: EmbedColors.YELLOW });
         }
+        // 主动关闭 active session：CLI 异常退出时 Stop hook 不触发，session 会卡在 'active'，
+        // 导致 checkOrphanedTasks 跳过该任务，轻推永远不触发
+        this.stateManager.closeActiveSessionForChannel(channelId);
         this.authErrorInterceptor?.handleAuthError(guildId, channelId);
-        return totalUsage;
+        // re-throw 让调用方（如 executeTaskPipeline）感知到 AUTH_ERROR，
+        // 避免 orchestrator 把未完成的任务错误标记为 completed
+        throw error;
       }
 
       if (!isHidden) await mq.drain(5000);

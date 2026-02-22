@@ -78,7 +78,7 @@ export class TaskEventRepo {
       `),
       read: db.prepare(`
         SELECT * FROM task_events
-        WHERE task_id = ? AND event_type = ?
+        WHERE task_id = ? AND event_type = ? AND processed_at IS NULL
         LIMIT 1
       `),
       findPending: db.prepare(`
@@ -111,9 +111,29 @@ export class TaskEventRepo {
     });
   }
 
-  /** 读取指定 task 的最新事件，找不到返回 null */
+  /**
+   * 读取指定 task 的最新未处理事件，找不到返回 null。
+   * 仅返回 processed_at IS NULL 的记录，用于"是否有待处理事件"的判断。
+   * 如需读取已处理的历史记录（如获取 payload 用于清理），请用 readAny。
+   */
   read<T = unknown>(taskId: string, type: EventType): T | null {
     const row = this.stmts.read.get(taskId, type) as TaskEventRow | undefined;
+    if (!row) return null;
+    try {
+      return JSON.parse(row.payload) as T;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * 读取指定 task 的任意事件（含已处理），找不到返回 null。
+   * 用于 handleConflictResolutionResult 等需要读取已处理事件 payload 的场景。
+   */
+  readAny<T = unknown>(taskId: string, type: EventType): T | null {
+    const row = this.db
+      .prepare(`SELECT * FROM task_events WHERE task_id = ? AND event_type = ? LIMIT 1`)
+      .get(taskId, type) as TaskEventRow | undefined;
     if (!row) return null;
     try {
       return JSON.parse(row.payload) as T;
