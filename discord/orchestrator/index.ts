@@ -667,7 +667,7 @@ export class GoalOrchestrator {
       } catch (err: any) {
         const stillRunning = await this.isTaskStillRunning(goalId, taskId);
         if (!stillRunning) return;
-        logger.error(`[Orchestrator] Feedback investigation failed for ${taskId}:`, err.message);
+        logger.error(`[Orchestrator] Feedback investigation failed for ${taskId}:`, err);
         // 调查本身失败 → 回到 blocked_feedback 等用户处理
         try {
           await this.withStateLock(goalId, async () => {
@@ -685,7 +685,7 @@ export class GoalOrchestrator {
             );
           });
         } catch (cbErr: any) {
-          logger.error(`[Orchestrator] startFeedbackInvestigation cleanup also failed:`, cbErr.message);
+          logger.error(`[Orchestrator] startFeedbackInvestigation cleanup also failed:`, cbErr);
         }
       }
     })();
@@ -1248,11 +1248,11 @@ export class GoalOrchestrator {
         logger.info(`[Orchestrator] Task ${taskId} completed`);
         await this.onTaskCompleted(goalId, taskId, usage);
       } catch (err: any) {
-        logger.error(`[Orchestrator] Task ${taskId} failed:`, err.message);
+        logger.error(`[Orchestrator] Task ${taskId} failed:`, err);
         try {
           await this.onTaskFailed(goalId, taskId, err.message, usage);
         } catch (cbErr: any) {
-          logger.error(`[Orchestrator] onTaskFailed callback also failed:`, cbErr.message);
+          logger.error(`[Orchestrator] onTaskFailed callback also failed:`, cbErr);
         }
       }
     })();
@@ -1343,7 +1343,7 @@ export class GoalOrchestrator {
         // 事件扫描器会处理，这里作为 fallback 直接调用
         await this.onTaskCompleted(goalId, taskId, usage);
       } catch (err: any) {
-        logger.error(`[Orchestrator] Pipeline ${taskId} failed:`, err.message);
+        logger.error(`[Orchestrator] Pipeline ${taskId} failed:`, err);
         const stillRunning = await this.isTaskStillRunning(goalId, taskId);
         if (!stillRunning) {
           logger.info(`[Orchestrator] Pipeline ${taskId}: task already ${await this.getTaskStatus(goalId, taskId)}, skipping onTaskFailed`);
@@ -1352,7 +1352,7 @@ export class GoalOrchestrator {
         try {
           await this.onTaskFailed(goalId, taskId, err.message, usage);
         } catch (cbErr: any) {
-          logger.error(`[Orchestrator] onTaskFailed callback also failed:`, cbErr.message);
+          logger.error(`[Orchestrator] onTaskFailed callback also failed:`, cbErr);
         }
       }
     })();
@@ -1574,7 +1574,7 @@ export class GoalOrchestrator {
         );
       }
     } catch (err: any) {
-      logger.error(`[Orchestrator] triggerReplan failed: ${err.message}`);
+      logger.error('[Orchestrator] triggerReplan failed:', err);
       await this.notifyGoal(state,
         `Replan 失败: ${err.message}`,
         'error',
@@ -2269,7 +2269,7 @@ export class GoalOrchestrator {
         await this.saveState(state);
       }
     } catch (err: any) {
-      logger.error(`[Orchestrator] mergeAndCleanup error: ${err.message}`);
+      logger.error('[Orchestrator] mergeAndCleanup error:', err);
       // 任何异常都视为 conflict，提交事件交由 reviewer 处理（前提是已知 goalWorktreeDir）
       if (goalWorktreeDir) {
         await abortMerge(goalWorktreeDir);
@@ -2400,7 +2400,7 @@ export class GoalOrchestrator {
         });
       }
     } catch (err: any) {
-      logger.error(`[Orchestrator] Failed to send notification: ${err.message}`);
+      logger.error('[Orchestrator] Failed to send notification:', err);
     }
   }
 
@@ -2505,7 +2505,7 @@ export class GoalOrchestrator {
         const retries = (this.goalEventRetryCounts.get(ev.id) ?? 0) + 1;
         this.goalEventRetryCounts.set(ev.id, retries);
         if (retries >= MAX_RETRIES) {
-          logger.error(`[Scanner] goal.drive for ${ev.goalId} failed ${retries} times, giving up: ${err.message}`);
+          logger.error(`[Scanner] goal.drive for ${ev.goalId} failed ${retries} times, giving up:`, err);
           this.deps.goalEventRepo.markProcessed(ev.id);
           this.goalEventRetryCounts.delete(ev.id);
           try {
@@ -2635,7 +2635,7 @@ export class GoalOrchestrator {
         }
         this.deps.taskEventRepo.markProcessed(ev.id);
       } catch (err: any) {
-        logger.error(`[Scanner] Failed to process event ${ev.id}: ${err.message}`);
+        logger.error(`[Scanner] Failed to process event ${ev.id}:`, err);
       }
     }
   }
@@ -2771,7 +2771,7 @@ export class GoalOrchestrator {
         logger.info(`[CheckIn] Sending check-in #${attempt} for task ${taskId}`);
         await this.deps.messageHandler.handleBackgroundChat(guildId, channelId, prompt);
       } catch (err: any) {
-        logger.error(`[CheckIn] Failed to send check-in for task ${taskId}: ${err.message}`);
+        logger.error(`[CheckIn] Failed to send check-in for task ${taskId}:`, err);
       }
     })();
   }
@@ -2879,7 +2879,7 @@ export class GoalOrchestrator {
       // 3. 纯事件驱动：fire-and-forget，结果由 event scanner 处理
       logger.info(`[PhaseReview] Firing review for ${taskId} via hidden audit session ${auditSessionKey}`);
       this.deps.messageHandler.handleBackgroundChat(guildId, auditSessionKey, prompt)
-        .catch(err => logger.error(`[AuditSession] handleBackgroundChat error for ${taskId}: ${err.message}`));
+        .catch(err => logger.error(`[AuditSession] handleBackgroundChat error for ${taskId}:`, err));
 
       // audit session 不在此处清理，生命周期延伸到 mergeAndCleanup
     })();
@@ -3031,7 +3031,7 @@ export class GoalOrchestrator {
         );
         await this.deps.messageHandler.handleBackgroundChat(guildId, reviewerChannelId, prompt);
       } catch (err: any) {
-        logger.error(`[ConflictReview] Failed to trigger conflict review for ${task.id}: ${err.message}`);
+        logger.error(`[ConflictReview] Failed to trigger conflict review for ${task.id}:`, err);
       }
     })();
   }
@@ -3076,7 +3076,7 @@ export class GoalOrchestrator {
           taskDescription: task.description,
         });
       } catch (err: any) {
-        logger.error(`[ReviewerNudge] nudgeConflictReview failed for ${task.id}: ${err.message}`);
+        logger.error(`[ReviewerNudge] nudgeConflictReview failed for ${task.id}:`, err);
       }
     })();
   }
@@ -3211,7 +3211,7 @@ export class GoalOrchestrator {
         }
       } catch (err: any) {
         // 评估失败 → 默认 continue
-        logger.error(`[PhaseReview] Phase ${phase} evaluation failed: ${err.message}`);
+        logger.error(`[PhaseReview] Phase ${phase} evaluation failed:`, err);
         await this.handlePhaseResult(goalId, 'fallback', { decision: 'continue', summary: `Evaluation failed: ${err.message}` });
       }
     })();

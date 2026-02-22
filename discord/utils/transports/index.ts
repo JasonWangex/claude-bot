@@ -4,3 +4,4 @@
 
 export { ConsoleTransport } from './console-transport.js';
 export { DiscordTransport, type DiscordTransportOptions } from './discord-transport.js';
+export { FileTransport } from './file-transport.js';

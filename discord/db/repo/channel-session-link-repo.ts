@@ -132,7 +132,7 @@ export class ChannelSessionLinkRepository {
       }
       return true;
     } catch (err: any) {
-      logger.error(`[LinkRepo] createLink failed: channel=${channelId}, session=${claudeSessionId.slice(0, 8)}, error=${err.message}`);
+      logger.error(`[LinkRepo] createLink failed: channel=${channelId}, session=${claudeSessionId.slice(0, 8)}, error:`, err);
       return false;
     }
   }

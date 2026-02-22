@@ -38,7 +38,7 @@ export function updateAuthorizedGuildId(guildId: string): boolean {
     logger.info(`AUTHORIZED_GUILD_ID bound to: ${guildId}`);
     return true;
   } catch (error: any) {
-    logger.error('Failed to update .env file:', error.message);
+    logger.error('Failed to update .env file:', error);
     return false;
   }
 }
@@ -70,7 +70,7 @@ export function updateGeneralChannelId(channelId: string): boolean {
     logger.info(`GENERAL_CHANNEL_ID set to: ${channelId}`);
     return true;
   } catch (error: any) {
-    logger.error('Failed to update .env file:', error.message);
+    logger.error('Failed to update .env file:', error);
     return false;
   }
 }

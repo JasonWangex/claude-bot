@@ -319,7 +319,7 @@ export class StateManager {
           }
         })();
       } catch (err: any) {
-        logger.error(`[setSessionClaudeId] transaction failed: ${err.message} (cli=${claudeSessionId.slice(0, 8)})`);
+        logger.error(`[setSessionClaudeId] transaction failed (cli=${claudeSessionId.slice(0, 8)}):`, err);
         this.persistSession(guildId, channelId);
       }
     } else {
@@ -510,7 +510,7 @@ export class StateManager {
           this.linkRepo!.createLink(channelId, targetCliSessionId);
         })();
       } catch (err: any) {
-        logger.error(`[attachSession] transaction failed: ${err.message}`);
+        logger.error('[attachSession] transaction failed:', err);
         this.persistSession(guildId, channelId);
       }
     } else if (this.linkRepo) {

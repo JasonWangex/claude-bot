@@ -22,9 +22,15 @@ export class ConsoleTransport implements LoggerTransport {
     const message = `${prefix} ${timestamp} ${entry.message}`;
 
     switch (entry.level) {
-      case 'error':
-        console.error(message, ...entry.args);
+      case 'error': {
+        // 将 Error 对象替换为 err.message，避免 Node.js 自动序列化 Error 导致堆栈重复输出
+        const displayArgs = entry.args.map((a) => (a instanceof Error ? a.message : a));
+        console.error(message, ...displayArgs);
+        if (entry.stack) {
+          console.error(entry.stack);
+        }
         break;
+      }
       case 'warn':
         console.warn(message, ...entry.args);
         break;

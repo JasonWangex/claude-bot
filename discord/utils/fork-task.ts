@@ -82,7 +82,7 @@ export async function forkTaskCore(
     // 回滚 worktree
     logger.warn(`Channel creation failed, rolling back worktree: ${worktreeDir}`);
     await removeWorktree(session.cwd, worktreeDir).catch(e =>
-      logger.error(`Worktree rollback failed: ${e.message}`)
+      logger.error('Worktree rollback failed:', e)
     );
     throw err;
   }

@@ -191,7 +191,7 @@ export class SessionSyncService {
         }
       }
     } catch (e: any) {
-      logger.error(`Failed to sync session ${claudeSessionId}: ${e.message}`);
+      logger.error(`Failed to sync session ${claudeSessionId}:`, e);
     }
   }
 
@@ -205,7 +205,7 @@ export class SessionSyncService {
         logger.warn(`Cannot close session ${claudeSessionId}: not found`);
       }
     } catch (e: any) {
-      logger.error(`Failed to close session ${claudeSessionId}: ${e.message}`);
+      logger.error(`Failed to close session ${claudeSessionId}:`, e);
     }
   }
 
@@ -243,7 +243,7 @@ export class SessionSyncService {
       // 异步补充缺失的 title
       void this.backfillTitles();
     } catch (e: any) {
-      logger.error(`Full sync failed: ${e.message}`);
+      logger.error('Full sync failed:', e);
     }
 
     return stats;
@@ -289,7 +289,7 @@ export class SessionSyncService {
         logger.info(`Incremental scan: ${processedCount} files processed`);
       }
     } catch (e: any) {
-      logger.error(`Scan failed: ${e.message}`);
+      logger.error('Scan failed:', e);
     }
   }
 

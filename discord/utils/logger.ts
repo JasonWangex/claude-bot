@@ -1,8 +1,9 @@
 /**
- * 全局 Logger — 多 Transport 架构（Console + Discord）
+ * 全局 Logger — 多 Transport 架构（Console + Discord + File）
  */
 
 import { ConsoleTransport } from './transports/console-transport.js';
+import { FileTransport } from './transports/file-transport.js';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
@@ -11,6 +12,8 @@ export interface LogEntry {
   message: string;
   timestamp: Date;
   args: any[];
+  /** Error 对象的完整堆栈信息（仅 error 级别时填充） */
+  stack?: string;
 }
 
 /**
@@ -31,11 +34,23 @@ export class Logger {
   }
 
   private log(level: LogLevel, message: string, ...args: any[]): void {
+    // 对 error 级别，自动从 args 中提取 Error 对象的堆栈
+    let stack: string | undefined;
+    if (level === 'error') {
+      for (const arg of args) {
+        if (arg instanceof Error && arg.stack) {
+          stack = arg.stack;
+          break;
+        }
+      }
+    }
+
     const entry: LogEntry = {
       level,
       message,
       timestamp: new Date(),
       args,
+      stack,
     };
 
     for (const transport of this.transports) {
@@ -84,5 +99,11 @@ export function createLogger(options?: CreateLoggerOptions): Logger {
 }
 
 // 全局默认 logger 实例（向后兼容）
-// 默认只包含 Console Transport，Discord Transport 需要在 Bot 初始化后配置
-export const logger = createLogger({ transports: [new ConsoleTransport(!!process.env.DEBUG)] });
+// 默认包含 Console Transport 和 File Transport，Discord Transport 需要在 Bot 初始化后配置
+const logFilePath = process.env.LOG_FILE || 'logs/discord.log';
+export const logger = createLogger({
+  transports: [
+    new ConsoleTransport(!!process.env.DEBUG),
+    new FileTransport(logFilePath, !!process.env.DEBUG),
+  ],
+});

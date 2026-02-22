@@ -138,7 +138,7 @@ async function handleGoal(
         },
       );
     } catch (err: any) {
-      logger.error('goal list mode failed:', err.message);
+      logger.error('goal list mode failed:', err);
       await messageQueue.sendLong(channelId, `goal query failed: ${err.message}`).catch(() => {});
     }
     return;
@@ -149,7 +149,7 @@ async function handleGoal(
     const prompt = text ? `/goal ${text}` : '/goal';
     await interaction.reply(`Goal: ${text}...`);
     messageHandler.handleBackgroundChat(guildId, channelId, prompt).catch((err) => {
-      logger.error('goal failed:', err.message);
+      logger.error('goal failed:', err);
       messageQueue.sendLong(channelId, `goal failed: ${err.message}`).catch(() => {});
     });
     return;
@@ -208,7 +208,7 @@ async function handleGoal(
     // 6. 在新 session 中触发 goal skill
     const goalPrompt = text ? `/goal ${text}` : '/goal';
     messageHandler.handleBackgroundChat(guildId, forkResult.channelId, goalPrompt).catch((err) => {
-      logger.error('goal (new session) background chat failed:', err.message);
+      logger.error('goal (new session) background chat failed:', err);
     });
 
     // 7. 最终结果

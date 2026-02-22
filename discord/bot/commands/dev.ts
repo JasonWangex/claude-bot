@@ -151,7 +151,7 @@ async function handleQdev(
 
     // 7. 触发 Claude 处理（fire-and-forget）
     messageHandler.handleBackgroundChat(guildId, forkResult.channelId, description).catch((err) => {
-      logger.error('qdev background chat failed:', err.message);
+      logger.error('qdev background chat failed:', err);
     });
 
     // 8. 最终结果
@@ -212,7 +212,7 @@ async function handleIdea(
         priority: 'high',
       });
     } catch (err: any) {
-      logger.error('idea record failed:', err.message);
+      logger.error('idea record failed:', err);
       await messageQueue.sendLong(channelId, `idea record failed: ${err.message}`).catch(() => {});
     }
   } else {
@@ -249,7 +249,7 @@ async function handleIdea(
         },
       );
     } catch (err: any) {
-      logger.error('idea list mode failed:', err.message);
+      logger.error('idea list mode failed:', err);
       await messageQueue.sendLong(channelId, `idea query failed: ${err.message}`).catch(() => {});
     }
   }
@@ -283,7 +283,7 @@ async function handleCommit(
   });
 
   messageHandler.handleBackgroundChat(guildId, channelId, prompt).catch((err) => {
-    logger.error('commit failed:', err.message);
+    logger.error('commit failed:', err);
     messageQueue.sendLong(channelId, `commit failed: ${err.message}`).catch(() => {});
   });
 }
@@ -357,7 +357,7 @@ async function handleMerge(
   // Step 3: 在 target session 中用全新 Claude 执行 merge
   // merge skill 最后会通过 MCP bot_tasks(action="delete") 删除 channel 和 session
   messageHandler.handleBackgroundChat(guildId, targetSession.channelId, prompt).catch((err) => {
-    logger.error('merge failed:', err.message);
+    logger.error('merge failed:', err);
     messageQueue.sendLong(targetSession.channelId, `merge failed: ${err.message}`).catch(() => {});
   });
 }

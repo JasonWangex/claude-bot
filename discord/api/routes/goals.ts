@@ -64,7 +64,7 @@ export const startDrive: RouteHandler = async (req, res, params, deps) => {
 
     sendJson(res, 200, { ok: true, data: state });
   } catch (err: any) {
-    logger.error(`[API] startDrive failed:`, err.message);
+    logger.error(`[API] startDrive failed:`, err);
     sendJson(res, 500, { ok: false, error: err.message });
   }
 };
@@ -265,7 +265,7 @@ export const rollback: RouteHandler = async (req, res, params, deps) => {
 
     sendJson(res, 200, { ok: true, data: pending });
   } catch (err: any) {
-    logger.error(`[API] rollback failed:`, err.message);
+    logger.error(`[API] rollback failed:`, err);
     sendJson(res, 500, { ok: false, error: err.message });
   }
 };
@@ -289,7 +289,7 @@ export const confirmRollback: RouteHandler = async (_req, res, params, deps) => 
 
     sendJson(res, 200, { ok: true, data: { status: 'rolled_back' } });
   } catch (err: any) {
-    logger.error(`[API] confirmRollback failed:`, err.message);
+    logger.error(`[API] confirmRollback failed:`, err);
     sendJson(res, 500, { ok: false, error: err.message });
   }
 };

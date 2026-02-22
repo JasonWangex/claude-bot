@@ -584,7 +584,7 @@ export class DiscordBot {
           await interaction.reply({ content: `Unknown goal action: ${action}`, ephemeral: true }).catch(() => {});
       }
     } catch (err: any) {
-      logger.error(`[DiscordBot] handleGoalButton error: ${err.message}`);
+      logger.error('[DiscordBot] handleGoalButton error:', err);
       // 尽量回复用户，避免 Discord 显示 "interaction failed"
       const reply = interaction.replied || interaction.deferred
         ? interaction.followUp.bind(interaction)
@@ -614,11 +614,11 @@ export class DiscordBot {
       // 通过原生 skill 触发 goal
       const prompt = `/goal ${goal.name}`;
       this.messageHandler.handleBackgroundChat(guildId, channelId, prompt).catch((err) => {
-        logger.error('goal drive_prompt failed:', err.message);
+        logger.error('goal drive_prompt failed:', err);
         this.messageQueue.sendLong(channelId, `goal drive_prompt failed: ${err.message}`).catch(() => {});
       });
     } catch (err: any) {
-      logger.error(`[DiscordBot] handleGoalDrivePrompt error: ${err.message}`);
+      logger.error('[DiscordBot] handleGoalDrivePrompt error:', err);
       const reply = interaction.replied || interaction.deferred
         ? interaction.followUp.bind(interaction)
         : interaction.reply.bind(interaction);
@@ -717,7 +717,7 @@ export class DiscordBot {
 
           // 触发 Claude 处理
           this.messageHandler.handleBackgroundChat(guildId, forkResult.channelId, idea.name).catch((err) => {
-            logger.error('idea qdev failed:', err.message);
+            logger.error('idea qdev failed:', err);
             this.messageQueue.sendLong(forkResult.channelId, `idea qdev failed: ${err.message}`).catch(() => {});
           });
 
@@ -746,7 +746,7 @@ export class DiscordBot {
 
           const goalPrompt = `/goal ${idea.name}`;
           this.messageHandler.handleBackgroundChat(guildId, channelId, goalPrompt).catch((err) => {
-            logger.error('idea to goal failed:', err.message);
+            logger.error('idea to goal failed:', err);
             this.messageQueue.sendLong(channelId, `idea to goal failed: ${err.message}`).catch(() => {});
           });
           break;
@@ -756,7 +756,7 @@ export class DiscordBot {
           await interaction.reply({ content: `Unknown idea action: ${action}`, ephemeral: true }).catch(() => {});
       }
     } catch (err: any) {
-      logger.error(`[DiscordBot] handleIdeaButton error: ${err.message}`);
+      logger.error('[DiscordBot] handleIdeaButton error:', err);
       const reply = interaction.replied || interaction.deferred
         ? interaction.followUp.bind(interaction)
         : interaction.reply.bind(interaction);
@@ -818,7 +818,7 @@ export class DiscordBot {
         }).catch(() => {});
       }
     } catch (err: any) {
-      logger.error(`[DiscordBot] handleSessionsButton error: ${err.message}`);
+      logger.error('[DiscordBot] handleSessionsButton error:', err);
       const reply = interaction.replied || interaction.deferred
         ? interaction.followUp.bind(interaction)
         : interaction.reply.bind(interaction);
@@ -896,7 +896,7 @@ export class DiscordBot {
           await interaction.reply({ content: `Unknown goal modal action: ${action}`, ephemeral: true }).catch(() => {});
       }
     } catch (err: any) {
-      logger.error(`[DiscordBot] handleGoalModalSubmit error: ${err.message}`);
+      logger.error('[DiscordBot] handleGoalModalSubmit error:', err);
       const reply = interaction.replied || interaction.deferred
         ? interaction.editReply.bind(interaction)
         : interaction.reply.bind(interaction);
@@ -993,7 +993,7 @@ export class DiscordBot {
       // onRetry：向受影响的 channel 发送 "continue"
       (guildId, channelId) => {
         this.messageHandler.handleBackgroundChat(guildId, channelId, 'continue').catch((err: any) => {
-          logger.error('[AuthErrorInterceptor] Retry "continue" failed:', err.message);
+          logger.error('[AuthErrorInterceptor] Retry "continue" failed:', err);
           // 重试失败（非 AUTH_ERROR，如 session 已消失），主动重置计数避免 Map 泄漏
           authErrorInterceptor.onSuccess(guildId, channelId);
         });
@@ -1008,7 +1008,7 @@ export class DiscordBot {
 
         // 2. 暂停所有运行中的 Goal（fire-and-forget，进程已终止，不依赖 Claude 进程完成）
         this.orchestrator?.pauseAllRunningDrives().catch((err: any) => {
-          logger.error('[AuthErrorInterceptor] Failed to pause all goals:', err.message);
+          logger.error('[AuthErrorInterceptor] Failed to pause all goals:', err);
         });
 
         // 3. 发送告警到 general channel
