@@ -416,7 +416,7 @@ export async function handleReplanByImpact(
   const changeDiff = generateChangeDiff(result, state.tasks);
 
   // 3. 保存快照（所有级别都保存，用于回滚）
-  const checkpointId = `cp-${state.goalId}-${Date.now()}`;
+  const checkpointId = `cp-${Date.now()}`;
   await deps.checkpointRepo.saveCheckpoint({
     id: checkpointId,
     goalId: state.goalId,

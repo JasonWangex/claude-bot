@@ -28,6 +28,7 @@ function rowToChannel(row: ChannelRow): Channel {
     createdAt: row.created_at,
     lastMessage: row.last_message ?? undefined,
     lastMessageAt: row.last_message_at ?? undefined,
+    hidden: row.hidden === 1,
   };
 }
 
@@ -47,6 +48,7 @@ function channelToParams(channel: Channel): Record<string, unknown> {
     created_at: channel.createdAt,
     last_message: channel.lastMessage ?? null,
     last_message_at: channel.lastMessageAt ?? null,
+    hidden: channel.hidden ? 1 : 0,
   };
 }
 
@@ -91,11 +93,11 @@ export class ChannelRepository implements IChannelRepo {
         INSERT INTO channels (
           id, guild_id, name, cwd, worktree_branch,
           parent_channel_id, status, archived_at, archived_by, archive_reason,
-          message_count, created_at, last_message, last_message_at
+          message_count, created_at, last_message, last_message_at, hidden
         ) VALUES (
           @id, @guild_id, @name, @cwd, @worktree_branch,
           @parent_channel_id, @status, @archived_at, @archived_by, @archive_reason,
-          @message_count, @created_at, @last_message, @last_message_at
+          @message_count, @created_at, @last_message, @last_message_at, @hidden
         )
         ON CONFLICT(id) DO UPDATE SET
           name = @name,

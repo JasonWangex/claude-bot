@@ -50,6 +50,7 @@ import migration034 from './migrations/034_simplify_prompts.js';
 import migration035 from './migrations/035_create_goal_events.js';
 import migration036 from './migrations/036_add_task_metadata.js';
 import migration037 from './migrations/037_create_deleted_events_log.js';
+import migration038 from './migrations/038_add_hidden_channel.js';
 
 const allMigrations: Migration[] = [
   migration001,
@@ -89,6 +90,7 @@ const allMigrations: Migration[] = [
   migration035,
   migration036,
   migration037,
+  migration038,
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

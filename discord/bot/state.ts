@@ -69,10 +69,10 @@ export class StateManager {
     }
 
     const channels = this.channelRepo.loadAll();
-    this._rebuildFromNewTables(channels.filter(c => c.status === 'active'));
+    this._rebuildFromNewTables(channels.filter(c => c.status === 'active' && !c.hidden));
 
-    // 从 channels (status='archived') 重建 archivedSessions
-    for (const ch of channels.filter(c => c.status === 'archived')) {
+    // 从 channels (status='archived') 重建 archivedSessions（hidden channel 不需要恢复）
+    for (const ch of channels.filter(c => c.status === 'archived' && !c.hidden)) {
       const archived: ArchivedSession = {
         name: ch.name,
         channelId: ch.id,
@@ -150,8 +150,9 @@ export class StateManager {
     const isHidden = session.hidden ?? false;
 
     if (this.channelRepo && this.claudeSessionRepo) {
-      // hidden session 无对应 Discord channel，跳过 channels 表写入
-      if (!isHidden) {
+      // hidden session 也需要写入 channels 表，以满足 claude_sessions.channel_id 的 FK 约束
+      // hidden=1 标记区分虚拟 channel 与真实 Discord channel，UI 层过滤 hidden=0 即可
+      {
         const channel: Channel = {
           id: session.channelId,
           guildId: session.guildId,
@@ -164,6 +165,7 @@ export class StateManager {
           createdAt: session.createdAt,
           lastMessage: session.lastMessage,
           lastMessageAt: session.lastMessageAt,
+          hidden: isHidden,
         };
         this.channelRepo.save(channel);
       }
@@ -220,20 +222,6 @@ export class StateManager {
       };
       this.sessions.set(key, session);
       this.persistSession(guildId, channelId);
-
-      // hidden session 无对应 Discord channel，跳过 channels 表写入
-      if (this.channelRepo && !session.hidden) {
-        const channel: Channel = {
-          id: channelId,
-          guildId,
-          name: defaults.name,
-          cwd: defaults.cwd,
-          status: 'active',
-          messageCount: 0,
-          createdAt: Date.now(),
-        };
-        this.channelRepo.save(channel);
-      }
     }
     return this.sessions.get(key)!;
   }

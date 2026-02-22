@@ -36,7 +36,7 @@ export const listChannels: RouteHandler = async (req, res, _params, deps) => {
   if (statusFilter === 'all') {
     // 从数据库查所有 channel，合并内存中的活跃状态
     const channelRepo = new ChannelRepository(deps.db);
-    const allChannels = await channelRepo.getByGuild(guildId);
+    const allChannels = (await channelRepo.getByGuild(guildId)).filter(ch => !ch.hidden);
     const activeSessions = deps.stateManager.getAllSessions(guildId);
     const activeIds = new Set(activeSessions.map(s => s.channelId));
 

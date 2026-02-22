@@ -352,13 +352,13 @@ async function handleSessionEnd(
     if (!taskRepo) return;
 
     try {
-      const tasks = await taskRepo.findByChannelId(channelId);
-      if (!tasks) return;
-      for (const task of tasks.filter((t: any) => t.status === 'running')) {
-        logger.warn(`[Hook] Marking task ${task.id} as failed due to session termination`);
+      const result = await taskRepo.findByChannelId(channelId);
+      if (!result || !result.goalId) return;
+      if (result.task.status === 'running') {
+        logger.warn(`[Hook] Marking task ${result.task.id} as failed due to session termination`);
         await deps.orchestrator.onTaskFailed(
-          task.goalId,
-          task.id,
+          result.goalId,
+          result.task.id,
           'Session terminated unexpectedly'
         );
       }
@@ -384,9 +384,9 @@ async function checkGoalTaskCompletion(
   if (!taskRepo) return;
 
   try {
-    const tasks = await taskRepo.findByChannelId(channelId);
-    if (!tasks) return;
-    const runningTask = tasks.find((t: any) => t.status === 'running' && t.goalId);
+    const result = await taskRepo.findByChannelId(channelId);
+    if (!result) return;
+    const runningTask = result.task.status === 'running' && result.goalId ? result.task : null;
 
     if (!runningTask) {
       logger.debug('[Hook] No running goal task found, skip completion check');

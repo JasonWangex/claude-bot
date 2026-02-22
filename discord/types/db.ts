@@ -289,6 +289,7 @@ export interface ChannelRow {
   created_at: number;
   last_message: string | null;
   last_message_at: number | null;
+  hidden: number;                // 0 = 正常 Discord channel，1 = 内部虚拟 channel
 }
 
 // ================================================================

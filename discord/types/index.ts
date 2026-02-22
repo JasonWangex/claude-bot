@@ -432,6 +432,7 @@ export interface Channel {
   createdAt: number;
   lastMessage?: string;
   lastMessageAt?: number;
+  hidden?: boolean;         // true = 内部虚拟 channel（audit session 等），无对应 Discord channel
 }
 
 /** 每个模型的分项 token/cost 统计 */
