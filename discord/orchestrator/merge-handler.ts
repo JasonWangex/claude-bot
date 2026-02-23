@@ -1,0 +1,123 @@
+import type { GoalDriveState, GoalTask } from '../types/index.js';
+import type { GoalOrchestrator } from './index.js';
+import { execGit } from './git-ops.js';
+import {
+  mergeSubtaskBranch,
+  cleanupSubtask,
+  hasUncommittedChanges,
+  autoCommit,
+  abortMerge,
+} from './goal-branch.js';
+import { logger } from '../utils/logger.js';
+
+export async function mergeAndCleanup(ctx: GoalOrchestrator, state: GoalDriveState, task: GoalTask): Promise<void> {
+  if (!task.branchName) return;
+
+  // Per-goal merge lock: queue merges for the same goal, allow different goals concurrently
+  const goalId = state.goalId;
+  const prev = ctx.mergeLocks.get(goalId) || Promise.resolve();
+  const current = prev.then(() => doMergeAndCleanup(ctx, state, task)).catch(() => {});
+  ctx.mergeLocks.set(goalId, current);
+  await current;
+}
+
+export async function doMergeAndCleanup(ctx: GoalOrchestrator, state: GoalDriveState, task: GoalTask): Promise<void> {
+  if (!task.branchName) return;
+  const branchName = task.branchName;
+  // 提到 try 外部，确保 catch 块也能访问，用于提交 merge.conflict 事件
+  let goalWorktreeDir: string | undefined;
+  let subtaskDir: string | undefined;
+
+  try {
+    const stdout = await execGit(
+      ['worktree', 'list', '--porcelain'],
+      state.baseCwd,
+      `mergeAndCleanup(${branchName}): list worktrees`
+    );
+    goalWorktreeDir = ctx.findWorktreeDir(stdout, state.goalBranch) ?? undefined;
+    if (!goalWorktreeDir) {
+      await ctx.notifyGoal(state, `Cannot find goal worktree, skipping merge: ${branchName}`, 'warning');
+      return;
+    }
+
+    subtaskDir = ctx.findWorktreeDir(stdout, branchName) ?? undefined;
+    if (subtaskDir) {
+      const hasChanges = await hasUncommittedChanges(subtaskDir);
+      if (hasChanges) {
+        await autoCommit(subtaskDir, `auto: ${task.description}`);
+      }
+    }
+
+    const result = await mergeSubtaskBranch(goalWorktreeDir, branchName);
+
+    if (result.success) {
+      task.merged = true;
+      ctx.clearReviewerNudgeState(task.id);
+
+      // 关闭 audit session（hidden session，只需归档内存 session，无 Discord channel）
+      const guildIdForAudit = ctx.getGuildId();
+      if (guildIdForAudit && task.auditSessionKey) {
+        ctx.deps.stateManager.archiveSession(guildIdForAudit, task.auditSessionKey, undefined, 'merged');
+        task.auditSessionKey = undefined;
+      }
+
+      await ctx.saveState(state);
+      await ctx.notifyGoal(state, `Merged: \`${branchName}\` → \`${state.goalBranch}\``, 'success');
+
+      if (subtaskDir) {
+        await cleanupSubtask(state.baseCwd, subtaskDir, branchName);
+      }
+
+      // Delete subtask channel
+      if (task.channelId) {
+        const guildId = ctx.getGuildId();
+        if (guildId) {
+          ctx.deps.stateManager.archiveSession(guildId, task.channelId, undefined, 'merged');
+          try {
+            const channel = await ctx.deps.client.channels.fetch(task.channelId);
+            if (channel && 'delete' in channel) {
+              await (channel as any).delete('Task merged and cleaned up').catch(() => {});
+            }
+          } catch { /* ignore */ }
+        }
+      }
+    } else {
+      // 无论是真正的 conflict 还是其他 merge 失败，统一交由 reviewer 处理
+      const reason = result.conflict
+        ? `Merge conflict`
+        : `Merge failed (treated as conflict): ${result.error ?? 'unknown error'}`;
+      await abortMerge(goalWorktreeDir);
+      await ctx.notifyGoal(state,
+        `${reason}: \`${branchName}\` → \`${state.goalBranch}\`. Queued for reviewer...`,
+        'warning'
+      );
+      ctx.deps.taskEventRepo.write(task.id, state.goalId, 'merge.conflict', {
+        branchName,
+        goalWorktreeDir,
+        subtaskDir: subtaskDir ?? null,
+        taskDescription: task.description,
+      }, 'orchestrator');
+      // task 保持 completed 状态（execution done，merge pending）；标记 conflict 阶段供轻推机制识别
+      task.pipelinePhase = 'conflict';
+      await ctx.saveState(state);
+    }
+  } catch (err: any) {
+    logger.error('[Orchestrator] mergeAndCleanup error:', err);
+    // 任何异常都视为 conflict，提交事件交由 reviewer 处理（前提是已知 goalWorktreeDir）
+    if (goalWorktreeDir) {
+      await abortMerge(goalWorktreeDir);
+      await ctx.notifyGoal(state,
+        `Merge exception (treated as conflict): \`${branchName}\` → \`${state.goalBranch}\`. Queued for reviewer...\nError: ${err.message}`,
+        'warning'
+      );
+      ctx.deps.taskEventRepo.write(task.id, state.goalId, 'merge.conflict', {
+        branchName,
+        goalWorktreeDir,
+        subtaskDir: subtaskDir ?? null,
+        taskDescription: task.description,
+      }, 'orchestrator');
+      task.pipelinePhase = 'conflict';
+      await ctx.saveState(state);
+    }
+  }
+}
