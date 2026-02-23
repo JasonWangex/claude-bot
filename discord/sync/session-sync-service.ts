@@ -371,6 +371,10 @@ export class SessionSyncService {
           cwd: existingRow.cwd ?? undefined,
           gitBranch: existingRow.git_branch ?? undefined,
           projectPath: existingRow.project_path ?? projectPath,
+          hidden: (existingRow.hidden ?? 0) === 1,
+          purpose: existingRow.purpose ?? undefined,
+          lastUsageJson: existingRow.last_usage_json ?? undefined,
+          lastStopAt: existingRow.last_stop_at ?? undefined,
         };
 
         if (metadata.model && metadata.model !== existing.model) {
@@ -378,7 +382,8 @@ export class SessionSyncService {
           updated = true;
         }
 
-        if (channelId && channelId !== existing.channelId) {
+        // 仅在 channel 未绑定时才用 cwd 匹配结果填充，不覆盖已有的正确绑定
+        if (channelId && !existing.channelId) {
           existing.channelId = channelId;
           updated = true;
         }
