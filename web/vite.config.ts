@@ -16,6 +16,7 @@ export default defineConfig({
     },
   },
   preview: {
+    allowedHosts: ['dev-server'],
     proxy: {
       '/api': 'http://localhost:3456',
     },
