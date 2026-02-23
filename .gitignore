@@ -7,3 +7,7 @@ data/
 *.log
 logs/
 feedback/
+.idea/
+.vscode/
+*.tsbuildinfo
+temp/

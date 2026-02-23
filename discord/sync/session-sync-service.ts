@@ -1,17 +1,17 @@
 import type Database from 'better-sqlite3';
-import { openSync, readSync, closeSync, readdirSync, statSync, createReadStream } from 'fs';
-import { join, basename, dirname } from 'path';
+import { closeSync, createReadStream, openSync, readdirSync, readSync, statSync } from 'fs';
+import { basename, dirname, join } from 'path';
 import { createInterface } from 'readline';
-import { extractSessionMetadata } from './jsonl-metadata.js';
+import { ChannelRepository } from '../db/repo/channel-repo.js';
 import { ClaudeSessionRepository } from '../db/repo/claude-session-repo.js';
 import { SyncCursorRepository } from '../db/repo/sync-cursor-repo.js';
-import { ChannelRepository } from '../db/repo/channel-repo.js';
-import type { ClaudeSession } from '../types/index.js';
 import type { PromptConfigService } from '../services/prompt-config-service.js';
-import type { PricingService } from './pricing-service.js';
+import type { ClaudeSession } from '../types/index.js';
 import { chatCompletion } from '../utils/llm.js';
 import { logger } from '../utils/logger.js';
-import { resolveSessionContext, decodeProjectDirName } from './session-context.js';
+import { extractSessionMetadata } from './jsonl-metadata.js';
+import type { PricingService } from './pricing-service.js';
+import { decodeProjectDirName, resolveSessionContext } from './session-context.js';
 
 const SCAN_INTERVAL_MS = 60_000; // 60 seconds
 const CURSOR_SOURCE = 'claude_session_scan';
@@ -125,7 +125,7 @@ export class SessionSyncService {
     // 序列化同一 session 的并发调用：等待上一次调用完成后再执行
     const prev = this.syncSessionLocks.get(claudeSessionId) ?? Promise.resolve();
     const current = prev.then(() => this._doSyncSession(claudeSessionId, channelId, model));
-    const guard = current.catch(() => {});
+    const guard = current.catch(() => { });
     this.syncSessionLocks.set(claudeSessionId, guard);
     // 完成后清理，避免 Map 无限增长
     guard.then(() => {

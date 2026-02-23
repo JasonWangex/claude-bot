@@ -21,7 +21,9 @@ interface ChatOptions {
 }
 
 /**
- * 单轮聊天补全，失败自动重试一次
+ * 单轮聊天补全，失败自动重试一次，注意，该方法仅仅用于生成各种名称，并非用于与用户的对话交互，如果需要使用高级AI对话功能，请直接调用 ClaudeClient
+ * @param prompt 输入提示文本
+ * @param options 可选项
  * @returns 生成的文本，API key 缺失或调用失败返回 null
  */
 export async function chatCompletion(

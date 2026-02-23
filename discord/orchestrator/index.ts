@@ -10,18 +10,14 @@
  * 实现分散在多个 handler 文件中，本文件为 facade + 核心工具方法。
  */
 
-import { ChannelType, type Client } from 'discord.js';
-import { StateManager } from '../bot/state.js';
-import type { ClaudeClient } from '../claude/client.js';
-import type { MessageHandler } from '../bot/handlers.js';
-import { type MessageQueue, EmbedColors, type EmbedColor } from '../bot/message-queue.js';
+import { ChannelType } from 'discord.js';
+import { EmbedColors, type EmbedColor } from '../bot/message-queue.js';
 import type { GoalDriveState, GoalTask, GoalTaskFeedback, PipelinePhase, PendingRollback, ChatUsageResult } from '../types/index.js';
 import { ClaudeErrorType, ClaudeExecutionError } from '../types/index.js';
 import { getAuthorizedGuildId, getGoalLogChannelId } from '../utils/env.js';
 import { execGit } from './git-ops.js';
 import { translateToBranchName } from './goal-state.js';
 import { isGoalComplete, isGoalStuck, getProgressSummary } from './task-scheduler.js';
-import { formatDetailPlanForPrompt } from './goal-body-parser.js';
 import { logger } from '../utils/logger.js';
 
 // Types re-export (external callers import from here)
