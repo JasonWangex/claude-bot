@@ -15,6 +15,7 @@ import { logger } from '../utils/logger.js';
 import { execGit } from './git-ops.js';
 import { cleanupSubtask } from './goal-branch.js';
 import { getPhaseNumber, isPhaseFullyMerged, getCurrentPhase, getProgressSummary } from './task-scheduler.js';
+import { cleanupTaskChannel } from './merge-handler.js';
 
 export function triggerTaskReview(ctx: GoalOrchestrator, state: GoalDriveState, task: GoalTask, guildId: string): void {
   const taskId = task.id;
@@ -283,16 +284,8 @@ export async function handleConflictResolutionResult(
 
       // 清理 subtask Discord channel
       const guildId = ctx.getGuildId();
-      if (task.channelId) {
-        if (guildId) {
-          ctx.deps.stateManager.archiveSession(guildId, task.channelId, undefined, 'merged');
-          try {
-            const channel = await ctx.deps.client.channels.fetch(task.channelId);
-            if (channel && 'delete' in channel) {
-              await (channel as any).delete('Task merged and cleaned up').catch(() => {});
-            }
-          } catch { /* ignore */ }
-        }
+      if (guildId) {
+        await cleanupTaskChannel(ctx, task, guildId);
       }
 
       // 关闭 audit session（hidden session，无 Discord channel）

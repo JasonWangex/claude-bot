@@ -1,56 +1,13 @@
 /**
  * Goal Drive 工具函数
  *
- * 负责解析子任务结构和生成 git 分支名。
+ * 负责生成 git 分支名和任务 ID 推断。
  * 持久化已迁移到 IGoalRepo (SQLite)。
  */
 
-import type { GoalTask, GoalTaskType, GoalTaskComplexity } from '../types/index.js';
+import type { GoalTask } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 import { chatCompletion } from '../utils/llm.js';
-
-const VALID_GOAL_TASK_TYPES: GoalTaskType[] = ['代码', '手动', '调研', '占位'];
-const VALID_COMPLEXITIES: GoalTaskComplexity[] = ['simple', 'complex'];
-
-/**
- * 从 Goal Skill 传入的结构化子任务列表解析为 GoalTask[]
- *
- * 预期输入格式（由 Claude 实例解析 Goal body 后生成）:
- * ```json
- * [
- *   { "id": "g6t1", "description": "创建数据模型", "type": "代码", "phase": 1 },
- *   { "id": "g6t2", "description": "实现 API", "type": "代码", "phase": 2 }
- * ]
- * ```
- * ID 格式必须为 `g<seq>t<N>`，其中 seq 为 Goal 的自增序号（来自 API `seq` 字段）。
- */
-export function parseTasks(raw: Array<{
-  id: string;
-  description: string;
-  type?: string;
-  phase?: number;
-  complexity?: string;
-}>): GoalTask[] {
-  return raw.map(t => {
-    const rawType = t.type || '代码';
-    const type: GoalTaskType = VALID_GOAL_TASK_TYPES.includes(rawType as GoalTaskType)
-      ? (rawType as GoalTaskType)
-      : '代码';
-    const rawComplexity = t.complexity;
-    const complexity: GoalTaskComplexity | undefined =
-      rawComplexity && VALID_COMPLEXITIES.includes(rawComplexity as GoalTaskComplexity)
-        ? (rawComplexity as GoalTaskComplexity)
-        : undefined;
-    return {
-      id: t.id,
-      description: t.description,
-      type,
-      phase: t.phase,
-      complexity,
-      status: 'pending' as const,
-    };
-  });
-}
 
 /** 用 sanitize 提取 ASCII 部分并清理 */
 function sanitizeToAscii(text: string): string {

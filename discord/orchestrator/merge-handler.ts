@@ -10,6 +10,25 @@ import {
 } from './goal-branch.js';
 import { logger } from '../utils/logger.js';
 
+/**
+ * 删除子任务的 Discord channel（归档 session + 调用 Discord API 删除）。
+ * merge-handler 和 review-handler 的 conflict resolution 路径均需要此操作。
+ */
+export async function cleanupTaskChannel(
+  ctx: GoalOrchestrator,
+  task: GoalTask,
+  guildId: string,
+): Promise<void> {
+  if (!task.channelId) return;
+  ctx.deps.stateManager.archiveSession(guildId, task.channelId, undefined, 'merged');
+  try {
+    const channel = await ctx.deps.client.channels.fetch(task.channelId);
+    if (channel && 'delete' in channel) {
+      await (channel as { delete(reason?: string): Promise<unknown> }).delete('Task merged and cleaned up').catch(() => {});
+    }
+  } catch { /* ignore — channel may already be deleted */ }
+}
+
 export async function mergeAndCleanup(ctx: GoalOrchestrator, state: GoalDriveState, task: GoalTask): Promise<void> {
   if (!task.branchName) return;
 
@@ -69,17 +88,9 @@ export async function doMergeAndCleanup(ctx: GoalOrchestrator, state: GoalDriveS
       }
 
       // Delete subtask channel
-      if (task.channelId) {
-        const guildId = ctx.getGuildId();
-        if (guildId) {
-          ctx.deps.stateManager.archiveSession(guildId, task.channelId, undefined, 'merged');
-          try {
-            const channel = await ctx.deps.client.channels.fetch(task.channelId);
-            if (channel && 'delete' in channel) {
-              await (channel as any).delete('Task merged and cleaned up').catch(() => {});
-            }
-          } catch { /* ignore */ }
-        }
+      const guildIdForChannel = ctx.getGuildId();
+      if (guildIdForChannel) {
+        await cleanupTaskChannel(ctx, task, guildIdForChannel);
       }
     } else {
       // 无论是真正的 conflict 还是其他 merge 失败，统一交由 reviewer 处理

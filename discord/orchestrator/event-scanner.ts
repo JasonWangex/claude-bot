@@ -129,21 +129,33 @@ export async function processPendingEvents(ctx: GoalOrchestrator): Promise<void>
           await ctx.onTaskCompleted(ev.goalId, ev.taskId);
           break;
 
-        case 'review.task_result':
+        case 'review.task_result': {
           // Per-task 审核结果 — 处理 completed 但未 merged 的任务
           if (task.status !== 'completed' || task.merged) {
             ctx.deps.taskEventRepo.markProcessed(ev.id);
             continue;
           }
           logger.info(`[Scanner] Processing review.task_result for task ${ev.taskId}`);
-          await ctx.handleTaskReviewResult(ev.goalId, ev.taskId, ev.payload as any);
+          const rp = (ev.payload ?? {}) as Record<string, unknown>;
+          await ctx.handleTaskReviewResult(ev.goalId, ev.taskId, {
+            verdict: typeof rp.verdict === 'string' ? rp.verdict : undefined,
+            summary: typeof rp.summary === 'string' ? rp.summary : undefined,
+            issues: Array.isArray(rp.issues) ? rp.issues as string[] : undefined,
+          });
           break;
+        }
 
-        case 'review.phase_result':
+        case 'review.phase_result': {
           // Phase 评估结果
           logger.info(`[Scanner] Processing review.phase_result for task ${ev.taskId}`);
-          await ctx.handlePhaseResult(ev.goalId, ev.taskId, ev.payload as any);
+          const pp = (ev.payload ?? {}) as Record<string, unknown>;
+          await ctx.handlePhaseResult(ev.goalId, ev.taskId, {
+            decision: typeof pp.decision === 'string' ? pp.decision : undefined,
+            summary: typeof pp.summary === 'string' ? pp.summary : undefined,
+            issues: Array.isArray(pp.issues) ? pp.issues as string[] : undefined,
+          });
           break;
+        }
 
         case 'merge.conflict': {
           // Merge 冲突等待 reviewer 处理 — reviewer 忙时跳过，下轮再试
@@ -170,7 +182,11 @@ export async function processPendingEvents(ctx: GoalOrchestrator): Promise<void>
             continue;
           }
           logger.info(`[Scanner] Processing review.conflict_result for task ${ev.taskId}`);
-          await ctx.handleConflictResolutionResult(ev.goalId, ev.taskId, ev.payload as any);
+          const cp = (ev.payload ?? {}) as Record<string, unknown>;
+          await ctx.handleConflictResolutionResult(ev.goalId, ev.taskId, {
+            resolved: cp.resolved === true,
+            summary: typeof cp.summary === 'string' ? cp.summary : undefined,
+          });
           break;
         }
 
@@ -201,7 +217,16 @@ export async function processPendingEvents(ctx: GoalOrchestrator): Promise<void>
       }
       ctx.deps.taskEventRepo.markProcessed(ev.id);
     } catch (err: any) {
-      logger.error(`[Scanner] Failed to process event ${ev.id}:`, err);
+      const MAX_RETRIES = 5;
+      const retries = (ctx.taskEventRetryCounts.get(ev.id) ?? 0) + 1;
+      ctx.taskEventRetryCounts.set(ev.id, retries);
+      if (retries >= MAX_RETRIES) {
+        logger.error(`[Scanner] Event ${ev.id} (${ev.eventType}) failed ${retries} times, giving up:`, err);
+        ctx.deps.taskEventRepo.markProcessed(ev.id);
+        ctx.taskEventRetryCounts.delete(ev.id);
+      } else {
+        logger.warn(`[Scanner] Failed to process event ${ev.id} (attempt ${retries}/${MAX_RETRIES}): ${err.message}`);
+      }
     }
   }
 }

@@ -112,6 +112,9 @@ export class GoalOrchestrator {
   // goal event 重试计数（eventId → 失败次数），超过上限后放弃并标记已处理
   goalEventRetryCounts = new Map<string, number>();
 
+  // task event 重试计数（eventId → 失败次数），超过上限后放弃并标记已处理
+  taskEventRetryCounts = new Map<string, number>();
+
   constructor(deps: OrchestratorDeps) {
     this.deps = deps;
   }

@@ -116,7 +116,12 @@ export async function startDrive(ctx: GoalOrchestrator, params: StartDriveParams
 
   await ctx.saveState(state);
   ctx.activeDrives.set(goalId, state);
-  await ctx.syncGoalMetaStatus(goalId, 'Processing');
+  try {
+    await ctx.syncGoalMetaStatus(goalId, 'Processing');
+  } catch (err: any) {
+    // 非致命错误：drive 已启动，meta status 会在首次 dispatchNext 时由 syncGoalMeta 修正
+    logger.warn(`[Orchestrator] Failed to sync goal meta status to Processing: ${err.message}`);
+  }
 
   // 为审核员 channel 创建 Opus 会话并发送初始化 prompt
   if (guildId) {

@@ -120,11 +120,6 @@ export function isPhaseFullyMerged(state: GoalDriveState, phase: number): boolea
   return phaseTasks.length > 0 && phaseTasks.every(t => isTerminal(t));
 }
 
-/** 获取 phase 内所有已完成的任务（不要求 merged） */
-export function getPhaseCompletedTasks(state: GoalDriveState, phase: number): GoalTask[] {
-  return state.tasks.filter(t => getPhaseNumber(t) === phase && t.status === 'completed');
-}
-
 /** 获取当前正在执行的 phase 编号（最低的尚有 non-terminal 任务的 phase） */
 export function getCurrentPhase(state: GoalDriveState): number {
   const phases = [...new Set(state.tasks.map(t => getPhaseNumber(t)))].sort((a, b) => a - b);

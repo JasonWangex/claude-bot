@@ -192,12 +192,25 @@ export async function confirmRollback(
     // 1. 恢复检查点的任务快照
     const snapshotTasks = await ctx.deps.checkpointRepo.restoreCheckpoint(pending.checkpointId);
     if (!snapshotTasks) {
-      await ctx.notifyGoal(state,
-        `回滚失败：检查点 \`${pending.checkpointId}\` 快照数据不可用`,
-        'error',
-      );
+      // 检查点不可用 → 恢复第一阶段被暂停的任务，避免任务永远卡在 paused
+      for (const taskId of pending.pausedTaskIds) {
+        const task = state.tasks.find(t => t.id === taskId);
+        if (task && task.status === 'paused') {
+          task.status = 'pending';
+          task.branchName = undefined;
+          task.channelId = undefined;
+          task.dispatchedAt = undefined;
+        }
+      }
       delete state.pendingRollback;
       await ctx.saveState(state);
+      const pausedList = pending.pausedTaskIds.length > 0
+        ? `\n已恢复暂停任务：${pending.pausedTaskIds.join(', ')}`
+        : '';
+      await ctx.notifyGoal(state,
+        `回滚失败：检查点 \`${pending.checkpointId}\` 快照数据不可用${pausedList}`,
+        'error',
+      );
       return false;
     }
 
