@@ -257,3 +257,26 @@ export interface UpdateGoalRequest {
   blocked_by?: string;
   body?: string;
 }
+
+// ========== Projects ==========
+
+export interface ProjectResponse {
+  name: string;
+  /** 完整磁盘路径（projectsRoot + '/' + name） */
+  full_path: string;
+  guild_id: string | null;
+  category_id: string | null;
+  channel_id: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+export interface ProjectSyncResult {
+  name: string;
+  /** true = 本次新建了 Discord category/channel；false = 已存在或创建失败 */
+  created: boolean;
+  category_id: string | null;
+  channel_id: string | null;
+  /** Discord 创建失败时的错误信息 */
+  error?: string;
+}

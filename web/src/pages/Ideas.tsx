@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import {
   Typography, Card, Tag, Spin, Empty, Space, Row, Col, Alert,
-  Button, Modal, Form, Input, Select, Popconfirm, message,
+  Button, Modal, Form, Input, Select, AutoComplete, Popconfirm, message,
 } from 'antd';
 import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useIdeas, createIdea, updateIdea, deleteIdea } from '@/lib/hooks/use-ideas';
+import { useProjects } from '@/lib/hooks/use-projects';
 import type { Idea, IdeaStatus } from '@/lib/types';
 
 const { Title, Text } = Typography;
@@ -37,6 +38,7 @@ interface IdeaFormValues {
 
 export default function Ideas() {
   const { data: ideas, isLoading, error, mutate } = useIdeas();
+  const { data: projectList } = useProjects();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingIdea, setEditingIdea] = useState<Idea | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -175,7 +177,11 @@ export default function Ideas() {
             <Input placeholder="想法名称" />
           </Form.Item>
           <Form.Item name="project" label="项目" rules={[{ required: true, message: '请输入项目名' }]}>
-            <Input placeholder="所属项目" />
+            <AutoComplete
+              options={(projectList ?? []).map(p => ({ value: p.name }))}
+              placeholder="所属项目"
+              filterOption={(input, option) => (option?.value ?? '').toLowerCase().includes(input.toLowerCase())}
+            />
           </Form.Item>
           <Form.Item name="status" label="状态">
             <Select options={statusOptions} />

@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react';
 import {
-  Typography, Timeline, Tag, Card, Spin, Empty, Space, Alert, Select,
+  Typography, Timeline, Tag, Card, Spin, Empty, Space, Alert, Select, AutoComplete,
   Button, Modal, Form, Input, InputNumber, message,
 } from 'antd';
 import { BranchesOutlined, CodeOutlined, PlusOutlined } from '@ant-design/icons';
 import { Link } from 'react-router';
 import { useDevLogs, createDevLog } from '@/lib/hooks/use-devlogs';
+import { useProjects } from '@/lib/hooks/use-projects';
 import { formatDateTime } from '@/lib/format';
 
 const { Title, Text } = Typography;
@@ -25,19 +26,21 @@ interface DevLogFormValues {
 
 export default function DevLogs() {
   const { data: devlogs, isLoading, error, mutate } = useDevLogs();
+  const { data: projectList } = useProjects();
   const [projectFilter, setProjectFilter] = useState<string>('all');
   const [modalOpen, setModalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [form] = Form.useForm<DevLogFormValues>();
 
   const projectOptions = useMemo(() => {
-    if (!devlogs) return [{ value: 'all', label: '全部项目' }];
-    const projects = [...new Set(devlogs.map(l => l.project).filter(Boolean))].sort();
+    const fromData = devlogs ? devlogs.map(l => l.project).filter(Boolean) : [];
+    const fromFs = (projectList ?? []).map(p => p.name);
+    const all = [...new Set([...fromData, ...fromFs])].sort();
     return [
       { value: 'all', label: '全部项目' },
-      ...projects.map(p => ({ value: p, label: p })),
+      ...all.map(p => ({ value: p, label: p })),
     ];
-  }, [devlogs]);
+  }, [devlogs, projectList]);
 
   const filtered = useMemo(() => {
     if (!devlogs || projectFilter === 'all') return devlogs;
@@ -167,7 +170,11 @@ export default function DevLogs() {
             <Input placeholder="yyyy-MM-dd" />
           </Form.Item>
           <Form.Item name="project" label="项目" rules={[{ required: true, message: '请输入项目名' }]}>
-            <Input placeholder="所属项目" />
+            <AutoComplete
+              options={(projectList ?? []).map(p => ({ value: p.name }))}
+              placeholder="所属项目"
+              filterOption={(input, option) => (option?.value ?? '').toLowerCase().includes(input.toLowerCase())}
+            />
           </Form.Item>
           <Form.Item name="branch" label="分支">
             <Input placeholder="Git 分支名" />

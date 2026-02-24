@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Layout, Menu, Button } from 'antd';
 import {
   DashboardOutlined,
+  FolderOutlined,
   AimOutlined,
   UnorderedListOutlined,
   HistoryOutlined,
@@ -21,6 +22,7 @@ const { Sider, Content } = Layout;
 
 const menuItems = [
   { key: '/', icon: <DashboardOutlined />, label: 'Dashboard' },
+  { key: '/projects', icon: <FolderOutlined />, label: 'Projects' },
   { key: '/goals', icon: <AimOutlined />, label: 'Goals' },
   { key: '/channels', icon: <UnorderedListOutlined />, label: 'Channels' },
   { key: '/sessions', icon: <HistoryOutlined />, label: 'Sessions' },

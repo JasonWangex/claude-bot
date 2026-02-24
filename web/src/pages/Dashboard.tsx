@@ -1,19 +1,23 @@
-import { Card, Typography, Tag, Progress, Space, Empty, Row, Col, Table } from 'antd';
+import { Card, Typography, Space, Empty, Row, Col, Table, Button, Tooltip } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import {
   AimOutlined,
   UnorderedListOutlined,
   FileTextOutlined,
   BulbOutlined,
+  FolderOutlined,
+  LinkOutlined,
 } from '@ant-design/icons';
-import { Link } from 'react-router';
 import { StatsCard } from '@/components/StatsCard';
 import { useGoals } from '@/lib/hooks/use-goals';
 import { useChannels } from '@/lib/hooks/use-channels';
 import { useDevLogs } from '@/lib/hooks/use-devlogs';
 import { useIdeas } from '@/lib/hooks/use-ideas';
+import { useProjects } from '@/lib/hooks/use-projects';
 import { useUsageDaily, type DailyUsage } from '@/lib/hooks/use-usage-daily';
 import { formatDateTime } from '@/lib/format';
+
+const VSCODE_SERVER = 'https://dev-server.taile0035e.ts.net';
 
 function formatK(n: number): string {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
@@ -28,6 +32,7 @@ export default function Dashboard() {
   const { data: channels } = useChannels();
   const { data: devlogs } = useDevLogs();
   const { data: ideas } = useIdeas();
+  const { data: projects } = useProjects();
   const { data: usageDaily, isLoading: usageLoading } = useUsageDaily();
 
   const activeGoals = goals?.filter(g => g.status === 'Processing' || g.status === 'Collecting' || g.status === 'Planned' || g.status === 'Blocking') ?? [];
@@ -56,28 +61,32 @@ export default function Dashboard() {
 
       <Row gutter={[16, 16]}>
         <Col xs={24} md={12}>
-          <Card title="Active Goals" size="small">
-            {activeGoals.length === 0 ? (
-              <Empty description="暂无活跃 Goal" image={Empty.PRESENTED_IMAGE_SIMPLE} />
+          <Card title="Projects" size="small">
+            {!projects || projects.length === 0 ? (
+              <Empty description="暂无项目" image={Empty.PRESENTED_IMAGE_SIMPLE} />
             ) : (
               <Space direction="vertical" style={{ width: '100%' }} size="small">
-                {activeGoals.slice(0, 5).map(goal => {
-                  const prog = goal.progress;
-                  const pct = prog && prog.total > 0 ? Math.round((prog.completed / prog.total) * 100) : undefined;
-                  return (
-                    <Link key={goal.id} to={`/goals/${goal.id}`} style={{ display: 'block' }}>
-                      <Card size="small" hoverable style={{ marginBottom: 0 }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                          <Text strong>{goal.name}</Text>
-                          <Tag>{goal.type ?? '未分类'}</Tag>
-                        </div>
-                        {pct !== undefined && (
-                          <Progress percent={pct} size="small" style={{ marginTop: 4, marginBottom: 0 }} />
-                        )}
-                      </Card>
-                    </Link>
-                  );
-                })}
+                {projects.map(p => (
+                  <Card size="small" key={p.name} style={{ marginBottom: 0 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                      <Space size={6}>
+                        <FolderOutlined style={{ color: '#faad14' }} />
+                        <Text strong>{p.name}</Text>
+                      </Space>
+                      <Tooltip title="在 VS Code Server 中打开">
+                        <Button
+                          type="link"
+                          size="small"
+                          icon={<LinkOutlined />}
+                          href={`${VSCODE_SERVER}/?folder=${encodeURIComponent(p.full_path)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{ padding: 0 }}
+                        />
+                      </Tooltip>
+                    </div>
+                  </Card>
+                ))}
               </Space>
             )}
           </Card>

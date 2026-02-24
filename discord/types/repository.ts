@@ -327,6 +327,38 @@ export interface ISyncCursorRepo {
   delete(source: string): Promise<boolean>;
 }
 
+// ==================== Projects ====================
+
+/** 项目实体（对应 projects 表） */
+export interface Project {
+  /** 项目文件夹名（主键，与业务表 project TEXT 字段一致） */
+  name: string;
+  /** Discord Guild ID（nullable，Bot 未授权时为 null） */
+  guildId: string | null;
+  /** Discord Category Channel ID（nullable，未创建时为 null） */
+  categoryId: string | null;
+  /** Discord 默认 Text Channel ID（nullable，未创建时为 null） */
+  channelId: string | null;
+  /** 创建时间 (Unix ms) */
+  createdAt: number;
+  /** 更新时间 (Unix ms) */
+  updatedAt: number;
+}
+
+/**
+ * Project 仓库
+ *
+ * 管理项目记录（文件系统目录 + Discord 频道绑定）。
+ * 主键: name（项目文件夹名）
+ */
+export interface IProjectRepo {
+  get(name: string): Promise<Project | null>;
+  getAll(): Promise<Project[]>;
+  /** upsert：新建或更新，category_id/channel_id 遵循 COALESCE 不覆盖已有值 */
+  upsert(project: Project): Promise<void>;
+  delete(name: string): Promise<boolean>;
+}
+
 // ==================== Prompt 配置 ====================
 
 /** Prompt 配置（运行时类型） */
