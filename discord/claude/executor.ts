@@ -128,8 +128,14 @@ export class ClaudeExecutor {
       onProgress({ type: 'system', subtype: 'lock_acquired' } as any);
     }
 
+    // 排队等待后重新解析 session ID：前一个任务已完成并更新了 claudeSessionId，
+    // 此时用最新值覆盖，避免排队消息用旧的（可能是 undefined）session ID 创建新会话。
+    const execOptions = (waited && options.resolveSessionId)
+      ? { ...options, resume: options.resolveSessionId() ?? options.resume }
+      : options;
+
     try {
-      const args = this.buildArgs(options);
+      const args = this.buildArgs(execOptions);
 
       logger.debug('Spawning Claude CLI (stream):', {
         command: this.claudeCliPath,
@@ -489,9 +495,13 @@ export class ClaudeExecutor {
               logger.warn(`Session close callback failed: ${e.message}`);
             }
           }
+          // 把 sessionId 附在错误上，供上层在 abort 后保留 session 以便下次 resume。
+          // 若进程极早退出（未输出 session_id 事件），回退到 active 中保存的 claudeSessionId。
+          const abortedSessionId = lastSessionId || active?.claudeSessionId;
           reject(new ClaudeExecutionError(
             '任务已被用户停止',
-            ClaudeErrorType.ABORTED
+            ClaudeErrorType.ABORTED,
+            abortedSessionId || undefined,
           ));
         } else if (flags.killed) {
           // 进程超时被杀，调用 onSessionClose 回调

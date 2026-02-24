@@ -147,10 +147,13 @@ export enum ClaudeErrorType {
 
 export class ClaudeExecutionError extends Error {
   errorType: ClaudeErrorType;
-  constructor(message: string, errorType: ClaudeErrorType) {
+  /** ABORTED 时携带的 session ID，供上层在 abort 后保留会话以便下次 resume */
+  sessionId?: string;
+  constructor(message: string, errorType: ClaudeErrorType, sessionId?: string) {
     super(message);
     this.name = 'ClaudeExecutionError';
     this.errorType = errorType;
+    this.sessionId = sessionId;
   }
 }
 
@@ -241,6 +244,12 @@ export interface ClaudeOptions {
   allowedTools?: string[];
   maxTurns?: number;
   resume?: string;
+  /**
+   * 延迟解析 session ID 的回调：在 lock 获取后（即前一个任务结束后）调用，
+   * 返回值覆盖 resume，解决排队消息创建新 session 的问题。
+   * 仅在请求等待了队列（waited=true）时才调用。
+   */
+  resolveSessionId?: () => string | undefined;
   lockKey?: string;
   permissionMode?: string;
   forkSession?: boolean;

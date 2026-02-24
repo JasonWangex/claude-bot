@@ -564,6 +564,9 @@ export class MessageHandler {
       const effectiveModel = session.model ?? this.stateManager.getGuildDefaultModel(guildId);
       const response = await this.claudeClient.chat(text, {
         sessionId: session.claudeSessionId,
+        // 排队等待后延迟解析：前一个任务完成并更新 claudeSessionId 后，用最新值 resume，
+        // 避免排队消息用发送时的旧 session ID（可能是 undefined）创建新 session。
+        resolveSessionId: () => this.stateManager.getSession(guildId, channelId)?.claudeSessionId,
         cwd: session.cwd,
         lockKey,
         permissionMode: mode === 'plan' ? 'plan' : undefined,
@@ -761,6 +764,14 @@ export class MessageHandler {
 
       if (error instanceof ClaudeExecutionError && error.errorType === ClaudeErrorType.ABORTED) {
         logger.info(`[${session.name}] Task aborted by user`);
+        // 保存 abort 时已知的 session ID，让下次发消息能 resume 而不是创建新 session
+        if (error.sessionId) {
+          try {
+            this.stateManager.setSessionClaudeId(guildId, channelId, error.sessionId);
+          } catch (persistErr) {
+            logger.warn(`[${session.name}] Failed to persist session after abort:`, persistErr);
+          }
+        }
         if (!isHidden && progressMsgId) {
           const stoppedText = lastProgressText && lastProgressText !== `Thinking${modeLabel}...`
             ? `Stopped (after ${lastProgressText})`

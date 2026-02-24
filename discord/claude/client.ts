@@ -45,6 +45,8 @@ export class ClaudeClient {
     message: string,
     options: {
       sessionId?: string;
+      /** 排队等待后延迟解析的 session ID 回调，在 lock 获取后调用，覆盖 sessionId */
+      resolveSessionId?: () => string | undefined;
       cwd?: string;
       allowedTools?: string[];
       lockKey?: string;
@@ -79,9 +81,9 @@ export class ClaudeClient {
           try { onProgress({ type: 'system', subtype: 'session_reset' } as any); } catch {}
           try { onProgress({ type: 'system', subtype: 'reset_state' } as any); } catch {}
         }
-        // 清除 session，新建会话重试
+        // 清除 session，新建会话重试（同时清除 resolveSessionId，确保不 resume 旧 session）
         try {
-          return await this.executeChat(message, { ...options, sessionId: undefined }, onProgress);
+          return await this.executeChat(message, { ...options, sessionId: undefined, resolveSessionId: undefined }, onProgress);
         } catch (retryError: any) {
           logger.error('Retry after session reset also failed:', retryError);
           throw error; // 抛出原始错误
@@ -107,6 +109,7 @@ export class ClaudeClient {
     message: string,
     options: {
       sessionId?: string;
+      resolveSessionId?: () => string | undefined;
       cwd?: string;
       allowedTools?: string[];
       lockKey?: string;
@@ -134,6 +137,7 @@ export class ClaudeClient {
     const claudeOptions: ClaudeOptions = {
       cwd: options.cwd,
       resume: options.sessionId,
+      resolveSessionId: options.resolveSessionId,
       allowedTools: options.allowedTools || this.defaultAllowedTools,
       maxTurns: this.maxTurns,
       lockKey: options.lockKey,
