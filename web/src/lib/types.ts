@@ -183,6 +183,38 @@ export interface TaskEventPage {
   total: number;
 }
 
+// Session Changes（文件变更记录）
+export interface StructuredPatch {
+  oldStart: number;
+  oldLines: number;
+  newStart: number;
+  newLines: number;
+  lines: string[];
+}
+
+export interface FileChange {
+  filePath: string;
+  type: 'update' | 'create';
+  patches?: StructuredPatch[];
+  content?: string;
+}
+
+export interface SessionChangesSummary {
+  id: number;
+  channelId: string;
+  fileCount: number;
+  createdAt: number;
+}
+
+export interface SessionChangesDetail extends SessionChangesSummary {
+  fileChanges: FileChange[];
+}
+
+export interface SessionChangesPage {
+  items: SessionChangesSummary[];
+  total: number;
+}
+
 // System status
 export interface SystemStatus {
   default_cwd: string;

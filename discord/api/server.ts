@@ -38,6 +38,7 @@ import { listPrompts, getPrompt, updatePrompt, refreshPrompts } from './routes/p
 import { getRunningTasks, getActiveProcesses, killZombieTasks } from './routes/debug.js';
 import { handleSessionEvent } from './routes/hooks.js';
 import { createTaskEvent, listTaskEvents } from './routes/task-events.js';
+import { listSessionChanges, getSessionChanges } from './routes/session-changes.js';
 
 function defineRoutes(): Route[] {
   const r = (method: string, path: string, handler: Route['handler']): Route => {
@@ -157,6 +158,10 @@ function defineRoutes(): Route[] {
     // Task Events（AI → Orchestrator 事件通信）
     r('GET',  '/api/events', listTaskEvents),
     r('POST', '/api/tasks/:taskId/events', createTaskEvent),
+
+    // Session Changes（文件变更记录）
+    r('GET', '/api/channels/:channelId/changes', listSessionChanges),
+    r('GET', '/api/changes/:id', getSessionChanges),
 
     // Internal hooks (localhost only, no auth required)
     r('POST', '/api/internal/hooks/session-event', handleSessionEvent),
