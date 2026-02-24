@@ -139,13 +139,13 @@ export default function Dashboard() {
             return (
               <Table.Summary.Row style={{ fontWeight: 600 }}>
                 <Table.Summary.Cell index={0}>Total</Table.Summary.Cell>
-                <Table.Summary.Cell index={1}>{totals.session_count}</Table.Summary.Cell>
-                <Table.Summary.Cell index={2}>{formatK(totals.tokens_in)}</Table.Summary.Cell>
-                <Table.Summary.Cell index={3}>{formatK(totals.tokens_out)}</Table.Summary.Cell>
-                <Table.Summary.Cell index={4}>{formatK(totals.cache_read_in)}</Table.Summary.Cell>
-                <Table.Summary.Cell index={5}>{formatK(totals.cache_write_in)}</Table.Summary.Cell>
-                <Table.Summary.Cell index={6}>${totals.cost_usd.toFixed(2)}</Table.Summary.Cell>
-                <Table.Summary.Cell index={7}>{totals.turn_count}</Table.Summary.Cell>
+                <Table.Summary.Cell index={1}><div style={{ textAlign: 'right' }}>{totals.session_count}</div></Table.Summary.Cell>
+                <Table.Summary.Cell index={2}><div style={{ textAlign: 'right' }}>{formatK(totals.tokens_in)}</div></Table.Summary.Cell>
+                <Table.Summary.Cell index={3}><div style={{ textAlign: 'right' }}>{formatK(totals.tokens_out)}</div></Table.Summary.Cell>
+                <Table.Summary.Cell index={4}><div style={{ textAlign: 'right' }}>{formatK(totals.cache_read_in)}</div></Table.Summary.Cell>
+                <Table.Summary.Cell index={5}><div style={{ textAlign: 'right' }}>{formatK(totals.cache_write_in)}</div></Table.Summary.Cell>
+                <Table.Summary.Cell index={6}><div style={{ textAlign: 'right' }}>${totals.cost_usd.toFixed(2)}</div></Table.Summary.Cell>
+                <Table.Summary.Cell index={7}><div style={{ textAlign: 'right' }}>{totals.turn_count}</div></Table.Summary.Cell>
               </Table.Summary.Row>
             );
           }}
@@ -186,13 +186,13 @@ export default function Dashboard() {
             return (
               <Table.Summary.Row style={{ fontWeight: 600 }}>
                 <Table.Summary.Cell index={0}>Total</Table.Summary.Cell>
-                <Table.Summary.Cell index={1}>{totals.session_count}</Table.Summary.Cell>
-                <Table.Summary.Cell index={2}>{formatK(totals.tokens_in)}</Table.Summary.Cell>
-                <Table.Summary.Cell index={3}>{formatK(totals.tokens_out)}</Table.Summary.Cell>
-                <Table.Summary.Cell index={4}>{formatK(totals.cache_read_in)}</Table.Summary.Cell>
-                <Table.Summary.Cell index={5}>{formatK(totals.cache_write_in)}</Table.Summary.Cell>
-                <Table.Summary.Cell index={6}>${totals.cost_usd.toFixed(2)}</Table.Summary.Cell>
-                <Table.Summary.Cell index={7}>{totals.turn_count}</Table.Summary.Cell>
+                <Table.Summary.Cell index={1}><div style={{ textAlign: 'right' }}>{totals.session_count}</div></Table.Summary.Cell>
+                <Table.Summary.Cell index={2}><div style={{ textAlign: 'right' }}>{formatK(totals.tokens_in)}</div></Table.Summary.Cell>
+                <Table.Summary.Cell index={3}><div style={{ textAlign: 'right' }}>{formatK(totals.tokens_out)}</div></Table.Summary.Cell>
+                <Table.Summary.Cell index={4}><div style={{ textAlign: 'right' }}>{formatK(totals.cache_read_in)}</div></Table.Summary.Cell>
+                <Table.Summary.Cell index={5}><div style={{ textAlign: 'right' }}>{formatK(totals.cache_write_in)}</div></Table.Summary.Cell>
+                <Table.Summary.Cell index={6}><div style={{ textAlign: 'right' }}>${totals.cost_usd.toFixed(2)}</div></Table.Summary.Cell>
+                <Table.Summary.Cell index={7}><div style={{ textAlign: 'right' }}>{totals.turn_count}</div></Table.Summary.Cell>
               </Table.Summary.Row>
             );
           }}
