@@ -20,8 +20,10 @@ export async function getRepoName(cwd: string): Promise<string> {
   return topLevel.split('/').pop() || 'repo';
 }
 
-export async function createWorktree(cwd: string, targetDir: string, branchName: string): Promise<void> {
-  await execGit(['worktree', 'add', targetDir, '-b', branchName], cwd, 'createWorktree');
+export async function createWorktree(cwd: string, targetDir: string, branchName: string, baseBranch?: string): Promise<void> {
+  const args = ['worktree', 'add', targetDir, '-b', branchName];
+  if (baseBranch) args.push(baseBranch);
+  await execGit(args, cwd, 'createWorktree');
 }
 
 export async function removeWorktree(cwd: string, worktreePath: string): Promise<void> {

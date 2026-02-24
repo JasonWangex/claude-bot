@@ -36,6 +36,7 @@ export async function forkTaskCore(
   categoryId: string,
   deps: ForkTaskDeps,
   threadTitle?: string,
+  baseBranch?: string,
 ): Promise<ForkTaskResult> {
   const { stateManager, client, worktreesDir } = deps;
 
@@ -49,19 +50,19 @@ export async function forkTaskCore(
     throw new Error(`${session.cwd} is not a git repository`);
   }
 
-  const repoName = await getRepoName(session.cwd);
-  const dirSafeBranch = branchName.replaceAll('/', '-');
-  const worktreeDir = resolve(worktreesDir, `${repoName}-${dirSafeBranch}`);
-  await mkdir(worktreesDir, { recursive: true });
-  await createWorktree(session.cwd, worktreeDir, branchName);
-
-  const newChannelName = threadTitle || `${session.name}/${branchName}`;
-
-  // 验证 Category 存在
+  // 先验证 Category 存在，再创建 worktree，避免 category 不存在时 worktree 泄漏
   const category = await client.channels.fetch(categoryId);
   if (!category || category.type !== ChannelType.GuildCategory) {
     throw new Error(`Category ${categoryId} not found or not a category`);
   }
+
+  const repoName = await getRepoName(session.cwd);
+  const dirSafeBranch = branchName.replaceAll('/', '-');
+  const worktreeDir = resolve(worktreesDir, `${repoName}-${dirSafeBranch}`);
+  await mkdir(worktreesDir, { recursive: true });
+  await createWorktree(session.cwd, worktreeDir, branchName, baseBranch);
+
+  const newChannelName = threadTitle || `${session.name}/${branchName}`;
 
   let textChannel;
   try {

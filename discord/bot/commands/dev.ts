@@ -8,12 +8,9 @@ import { basename } from 'path';
 import {
   SlashCommandBuilder,
   ChannelType,
-  EmbedBuilder,
   type ChatInputCommandInteraction,
 } from 'discord.js';
-import { generateBranchName } from '../../utils/git-utils.js';
-import { generateTopicTitle } from '../../utils/llm.js';
-import { forkTaskCore } from '../../utils/fork-task.js';
+import { qdevCore } from '../../utils/qdev-core.js';
 import { logger } from '../../utils/logger.js';
 import { EmbedColors } from '../message-queue.js';
 import { StateManager } from '../state.js';
@@ -98,21 +95,10 @@ async function handleQdev(
   }
 
   await interaction.deferReply();
+  await interaction.editReply('Creating task...');
 
   try {
-    // 1. 并行生成分支名和 thread 标题
-    await interaction.editReply('Generating branch name...');
-    const [branchName, threadTitle] = await Promise.all([
-      generateBranchName(description),
-      generateTopicTitle(description),
-    ]);
-
-    // 2. 获取 root session
-    await interaction.editReply(`Branch: \`${branchName}\`\nCreating worktree and thread...`);
-    const rootSession = stateManager.getRootSession(guildId, channelId);
-    const parentChannelId = rootSession?.channelId ?? channelId;
-
-    // 3. 从当前 channel 的 parentId 获取 Category
+    // 从当前 channel 的 parentId 获取 Category
     const channel = interaction.channel;
     let categoryId: string | undefined;
     if (channel && 'parentId' in channel && channel.parentId) {
@@ -126,40 +112,29 @@ async function handleQdev(
       return;
     }
 
-    // 4. Fork: 创建 worktree + Text Channel + session
-    const forkResult = await forkTaskCore(guildId, parentChannelId, branchName, categoryId, {
+    const result = await qdevCore({
+      guildId,
+      channelId,
+      description,
+      model,
+      categoryId,
+    }, {
       stateManager,
       client,
       worktreesDir: config.worktreesDir,
       channelService: deps.channelService,
-    }, threadTitle);
+    });
 
-    // 5. 设置自定义 model（如果指定）
-    if (model) {
-      stateManager.setSessionModel(guildId, forkResult.channelId, model);
-    }
-
-    // 6. 发送任务描述到新 thread
-    await interaction.editReply(`Branch: \`${branchName}\`\nSending task to new thread...`);
-    const newChannel = await client.channels.fetch(forkResult.channelId);
-    if (newChannel && newChannel.isTextBased() && 'send' in newChannel) {
-      const descEmbed = new EmbedBuilder()
-        .setColor(EmbedColors.PURPLE)
-        .setDescription(`[qdev] ${description}`.slice(0, 4096));
-      await (newChannel as any).send({ embeds: [descEmbed] });
-    }
-
-    // 7. 触发 Claude 处理（fire-and-forget）
-    messageHandler.handleBackgroundChat(guildId, forkResult.channelId, description).catch((err) => {
+    // 触发 Claude 处理（fire-and-forget）
+    messageHandler.handleBackgroundChat(guildId, result.channelId, description).catch((err) => {
       logger.error('qdev background chat failed:', err);
     });
 
-    // 8. 最终结果
     await interaction.editReply(
       `**Task created**\n\n` +
-      `Branch: \`${forkResult.branchName}\`\n` +
-      `Thread: <#${forkResult.channelId}>\n` +
-      `Working directory: \`${forkResult.cwd}\`\n\n` +
+      `Branch: \`${result.branchName}\`\n` +
+      `Thread: <#${result.channelId}>\n` +
+      `Working directory: \`${result.cwd}\`\n\n` +
       `Claude is processing the task in the new thread...`
     );
   } catch (error: any) {
