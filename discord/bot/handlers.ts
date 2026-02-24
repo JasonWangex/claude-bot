@@ -1,7 +1,7 @@
 /**
  * Discord Bot 消息处理器
  * 流式输出：工具调用 → 编辑进度消息；文本输出 → 发新消息
- * 文件变更收集：Write/Edit 结果中提取 structuredPatch，任务结束后发送 HTML diff
+ * 文件变更收集：Write/Edit 结果中提取 structuredPatch，任务结束后存入 session_changes 表
  */
 
 import { readFileSync } from 'fs';
@@ -16,7 +16,8 @@ import { InteractionRegistry } from './interaction-registry.js';
 import { ClaudeClient } from '../claude/client.js';
 import { AuthErrorInterceptor } from '../claude/auth-error-interceptor.js';
 import { MessageQueue, EmbedColors } from './message-queue.js';
-import { escapeMarkdown, buildChangesHtml } from './message-utils.js';
+import { escapeMarkdown } from './message-utils.js';
+import { getDb, SessionChangesRepo } from '../db/index.js';
 import {
   StreamEvent,
   AskUserQuestionInput,
@@ -701,13 +702,15 @@ export class MessageHandler {
         }
         const summary = parts.length > 0 ? ` (${parts.join(', ')})` : '';
 
-        // 文件变更 HTML 报告
-        const skipChangesHtml = mode === 'plan'
+        // 文件变更存入数据库（取代原先生成 HTML 上传 OSS/Discord）
+        const skipChanges = mode === 'plan'
           && fileChanges.every(fc => fc.filePath.includes('.claude/plans/') && fc.filePath.endsWith('.md'));
-        if (fileChanges.length > 0 && !skipChangesHtml) {
-          const html = buildChangesHtml(fileChanges);
-          await mq.sendDocument(channelId, html, 'changes.html',
-            `${fileChanges.length} file(s) changed`, { silent: true });
+        if (fileChanges.length > 0 && !skipChanges) {
+          try {
+            new SessionChangesRepo(getDb()).save(channelId, fileChanges);
+          } catch (err) {
+            logger.warn('Failed to save session changes to DB:', err);
+          }
         }
 
         // 多 link 时消息标头（让用户知道是哪个 session 发的）
@@ -750,10 +753,10 @@ export class MessageHandler {
 
       if (!isHidden && fileChanges.length > 0) {
         try {
-          const html = buildChangesHtml(fileChanges);
-          await mq.sendDocument(channelId, html, 'changes.html',
-            `${fileChanges.length} file(s) changed`, { silent: true });
-        } catch {}
+          new SessionChangesRepo(getDb()).save(channelId, fileChanges);
+        } catch (saveErr) {
+          logger.warn('Failed to save session changes to DB (error path):', saveErr);
+        }
       }
 
       if (error instanceof ClaudeExecutionError && error.errorType === ClaudeErrorType.ABORTED) {

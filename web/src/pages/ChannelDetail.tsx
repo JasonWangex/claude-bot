@@ -1,13 +1,16 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useParams, Navigate } from 'react-router';
-import { Typography, Breadcrumb, Card, Descriptions, Spin, Space, Alert, Tabs, Tag, Table } from 'antd';
+import { Typography, Breadcrumb, Card, Descriptions, Spin, Space, Alert, Tabs, Tag, Table, Empty } from 'antd';
 import { BranchesOutlined, FolderOutlined, ClockCircleOutlined, RobotOutlined } from '@ant-design/icons';
 import { Link } from 'react-router';
 import { ChannelTree } from '@/components/channels/ChannelTree';
 import ConversationViewer from '@/components/sessions/ConversationViewer';
+import ChangesViewer from '@/components/ChangesViewer';
 import { useChannel } from '@/lib/hooks/use-channels';
 import { useChannelSessions, fetchSessionConversation } from '@/lib/hooks/use-sessions';
+import { useChannelChanges, useChangesDetail } from '@/lib/hooks/use-changes';
 import type { SessionSummary, SessionEvent } from '@/lib/hooks/use-sessions';
+import type { SessionChangesSummary } from '@/lib/types';
 import { formatDistanceToNow, formatDateTime } from '@/lib/format';
 import { formatK } from '@/pages/Sessions';
 
@@ -235,6 +238,87 @@ function ConversationTab({ channelId }: { channelId: string }) {
   );
 }
 
+/** Changes Tab：展示每次 session 的文件变更 diff */
+function ChangesTab({ channelId }: { channelId: string }) {
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const { data: changesPage, isLoading, error } = useChannelChanges(channelId);
+  const { data: detail, isLoading: detailLoading } = useChangesDetail(selectedId);
+
+  const items = changesPage?.items ?? [];
+
+  // 默认选中第一条
+  useEffect(() => {
+    if (items.length > 0 && selectedId == null) {
+      setSelectedId(items[0].id);
+    }
+  }, [items, selectedId]);
+
+  if (isLoading) {
+    return (
+      <div style={{ textAlign: 'center', padding: 48 }}>
+        <Spin size="large" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return <Alert message="加载失败" description={error.message} type="error" showIcon />;
+  }
+
+  if (items.length === 0) {
+    return <Empty description="暂无文件变更记录" />;
+  }
+
+  const columns = [
+    {
+      title: '变更',
+      key: 'fileCount',
+      render: (_: unknown, record: SessionChangesSummary) => (
+        <a onClick={() => setSelectedId(record.id)} style={{ cursor: 'pointer' }}>
+          {record.fileCount} file{record.fileCount !== 1 ? 's' : ''}
+        </a>
+      ),
+    },
+    {
+      title: '时间',
+      dataIndex: 'createdAt',
+      key: 'createdAt',
+      width: 160,
+      render: (ts: number) => formatDateTime(ts),
+    },
+  ];
+
+  return (
+    <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start' }}>
+      {/* 左侧列表 */}
+      <div style={{ width: 220, flexShrink: 0 }}>
+        <Table
+          dataSource={items}
+          columns={columns}
+          rowKey="id"
+          pagination={false}
+          size="small"
+          rowClassName={(record) => record.id === selectedId ? 'ant-table-row-selected' : ''}
+          onRow={(record) => ({ onClick: () => setSelectedId(record.id) })}
+        />
+      </div>
+
+      {/* 右侧 diff 视图 */}
+      <div style={{ flex: 1, minWidth: 0 }}>
+        {detailLoading ? (
+          <div style={{ textAlign: 'center', padding: 48 }}>
+            <Spin />
+          </div>
+        ) : detail ? (
+          <ChangesViewer fileChanges={detail.fileChanges} />
+        ) : (
+          <Empty description="选择左侧记录查看 diff" />
+        )}
+      </div>
+    </div>
+  );
+}
+
 export default function ChannelDetail() {
   const { channelId } = useParams<{ channelId: string }>();
   const { data: channel, error } = useChannel(channelId ?? null);
@@ -273,6 +357,12 @@ export default function ChannelDetail() {
     key: 'conversations',
     label: '会话内容',
     children: <ConversationTab channelId={channelId} />,
+  });
+
+  tabItems.push({
+    key: 'changes',
+    label: '文件变更',
+    children: <ChangesTab channelId={channelId} />,
   });
 
   return (
