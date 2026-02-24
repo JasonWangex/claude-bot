@@ -52,6 +52,7 @@ import migration036 from './migrations/036_add_task_metadata.js';
 import migration037 from './migrations/037_create_deleted_events_log.js';
 import migration038 from './migrations/038_add_hidden_channel.js';
 import migration039 from './migrations/039_create_session_changes.js';
+import migration040 from './migrations/040_create_projects.js';
 
 const allMigrations: Migration[] = [
   migration001,
@@ -93,6 +94,7 @@ const allMigrations: Migration[] = [
   migration037,
   migration038,
   migration039,
+  migration040,
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -198,3 +200,4 @@ export { GoalEventRepo, GOAL_EVENT_TYPES } from './repo/goal-event-repo.js';
 export type { GoalEventType, PendingGoalEvent } from './repo/goal-event-repo.js';
 export { SessionChangesRepo } from './repo/session-changes-repo.js';
 export type { SessionChangesRecord } from './repo/session-changes-repo.js';
+export { ProjectRepository } from './project-repo.js';

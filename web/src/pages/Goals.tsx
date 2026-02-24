@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react';
 import {
-  Typography, Select, Space, Empty, Spin, Row, Col, Alert,
+  Typography, Select, AutoComplete, Space, Empty, Spin, Row, Col, Alert,
   Button, Modal, Form, Input, message,
 } from 'antd';
 import { PlusOutlined } from '@ant-design/icons';
 import { GoalCard } from '@/components/goals/GoalCard';
 import { useGoals, createGoal } from '@/lib/hooks/use-goals';
+import { useProjects } from '@/lib/hooks/use-projects';
 import type { Goal, GoalStatus, GoalType } from '@/lib/types';
 
 const { Title, Text } = Typography;
@@ -73,6 +74,7 @@ export default function Goals() {
   const { data: goals, isLoading, error, mutate } = useGoals(
     statusFilter !== 'all' ? statusFilter : undefined
   );
+  const { data: projectList } = useProjects();
   const [modalOpen, setModalOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [form] = Form.useForm<GoalFormValues>();
@@ -185,7 +187,11 @@ export default function Goals() {
             </Col>
             <Col span={8}>
               <Form.Item name="project" label="项目">
-                <Input placeholder="所属项目" />
+                <AutoComplete
+                  options={(projectList ?? []).map(p => ({ value: p.name }))}
+                  placeholder="所属项目"
+                  filterOption={(input, option) => (option?.value ?? '').toLowerCase().includes(input.toLowerCase())}
+                />
               </Form.Item>
             </Col>
           </Row>

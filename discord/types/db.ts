@@ -271,6 +271,25 @@ export interface KnowledgeBaseRow {
 }
 
 // ================================================================
+// projects 表
+// ================================================================
+
+export interface ProjectRow {
+  /** 项目文件夹名 (PRIMARY KEY，与业务表 project TEXT 字段对应) */
+  name: string;
+  /** Discord Guild ID */
+  guild_id: string | null;
+  /** Discord Category Channel ID */
+  category_id: string | null;
+  /** Discord 默认 Text Channel ID */
+  channel_id: string | null;
+  /** 创建时间 (Unix ms) */
+  created_at: number;
+  /** 更新时间 (Unix ms) */
+  updated_at: number;
+}
+
+// ================================================================
 // channels 表
 // ================================================================
 

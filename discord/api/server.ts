@@ -40,6 +40,7 @@ import { getRunningTasks, getActiveProcesses, killZombieTasks } from './routes/d
 import { handleSessionEvent } from './routes/hooks.js';
 import { createTaskEvent, listTaskEvents } from './routes/task-events.js';
 import { listSessionChanges, getSessionChanges } from './routes/session-changes.js';
+import { listProjects, getProject, syncProjects } from './routes/projects.js';
 
 function defineRoutes(): Route[] {
   const r = (method: string, path: string, handler: Route['handler']): Route => {
@@ -55,6 +56,9 @@ function defineRoutes(): Route[] {
     // 系统
     r('GET',  '/api/health', getHealth),
     r('GET',  '/api/status', getStatus),
+    r('GET',  '/api/projects', listProjects),
+    r('POST', '/api/projects/sync', syncProjects),
+    r('GET',  '/api/projects/:name', getProject),
 
     // 命令
     r('GET',  '/api/commands', getCommands),

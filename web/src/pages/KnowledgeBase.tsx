@@ -1,13 +1,14 @@
 import { useMemo, useState } from 'react';
 import {
   Typography, Card, Tag, Spin, Empty, Space, Row, Col, Alert,
-  Button, Modal, Form, Input, Select, Popconfirm, message,
+  Button, Modal, Form, Input, Select, AutoComplete, Popconfirm, message,
 } from 'antd';
 import {
   PlusOutlined, EditOutlined, DeleteOutlined, SearchOutlined,
 } from '@ant-design/icons';
 import { Link } from 'react-router';
 import { useKnowledgeBase, createKB, updateKB, deleteKB } from '@/lib/hooks/use-kb';
+import { useProjects } from '@/lib/hooks/use-projects';
 import { formatDateTime } from '@/lib/format';
 import type { KnowledgeBaseEntry } from '@/lib/types';
 
@@ -25,6 +26,7 @@ interface KBFormValues {
 
 export default function KnowledgeBase() {
   const { data: entries, isLoading, error, mutate } = useKnowledgeBase();
+  const { data: projectList } = useProjects();
   const [modalOpen, setModalOpen] = useState(false);
   const [editingEntry, setEditingEntry] = useState<KnowledgeBaseEntry | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -33,15 +35,16 @@ export default function KnowledgeBase() {
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Derive filter options from data
+  // Derive filter options from data + filesystem
   const projectOptions = useMemo(() => {
-    if (!entries) return [{ value: 'all', label: '全部项目' }];
-    const projects = [...new Set(entries.map(e => e.project).filter(Boolean))].sort();
+    const fromData = entries ? entries.map(e => e.project).filter(Boolean) : [];
+    const fromFs = (projectList ?? []).map(p => p.name);
+    const all = [...new Set([...fromData, ...fromFs])].sort();
     return [
       { value: 'all', label: '全部项目' },
-      ...projects.map(p => ({ value: p, label: p })),
+      ...all.map(p => ({ value: p, label: p })),
     ];
-  }, [entries]);
+  }, [entries, projectList]);
 
   const categoryOptions = useMemo(() => {
     if (!entries) return [{ value: 'all', label: '全部分类' }];
@@ -250,7 +253,11 @@ export default function KnowledgeBase() {
           <Row gutter={16}>
             <Col span={8}>
               <Form.Item name="project" label="项目" rules={[{ required: true, message: '请输入项目名' }]}>
-                <Input placeholder="所属项目" />
+                <AutoComplete
+                  options={(projectList ?? []).map(p => ({ value: p.name }))}
+                  placeholder="所属项目"
+                  filterOption={(input, option) => (option?.value ?? '').toLowerCase().includes(input.toLowerCase())}
+                />
               </Form.Item>
             </Col>
             <Col span={8}>
