@@ -8,11 +8,15 @@ export function useIdeas() {
   });
 }
 
+export function useIdea(id: string | null) {
+  return useSWR<Idea>(id ? `/api/ideas/${id}` : null, apiFetch);
+}
+
 export async function createIdea(data: { name: string; project: string; status?: IdeaStatus }) {
   return apiPost<Idea>('/api/ideas', data);
 }
 
-export async function updateIdea(id: string, data: { name?: string; status?: IdeaStatus; project?: string }) {
+export async function updateIdea(id: string, data: { name?: string; status?: IdeaStatus; project?: string; body?: string | null }) {
   return apiPatch<Idea>(`/api/ideas/${id}`, data);
 }
 

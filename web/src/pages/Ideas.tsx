@@ -1,9 +1,10 @@
 import { useState } from 'react';
 import {
-  Typography, Card, Tag, Spin, Empty, Space, Row, Col, Alert,
-  Button, Modal, Form, Input, Select, AutoComplete, Popconfirm, message,
+  Typography, Tag, Spin, Empty, Space, Alert,
+  Button, Modal, Form, Input, Select, AutoComplete, Popconfirm, message, List,
 } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
+import { PlusOutlined, EditOutlined, DeleteOutlined, RightOutlined } from '@ant-design/icons';
+import { Link } from 'react-router';
 import { useIdeas, createIdea, updateIdea, deleteIdea } from '@/lib/hooks/use-ideas';
 import { useProjects } from '@/lib/hooks/use-projects';
 import type { Idea, IdeaStatus } from '@/lib/types';
@@ -50,7 +51,9 @@ export default function Ideas() {
     setModalOpen(true);
   };
 
-  const openEdit = (idea: Idea) => {
+  const openEdit = (idea: Idea, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
     setEditingIdea(idea);
     form.setFieldsValue({ name: idea.name, project: idea.project, status: idea.status });
     setModalOpen(true);
@@ -70,14 +73,16 @@ export default function Ideas() {
       setModalOpen(false);
       mutate();
     } catch (err: any) {
-      if (err?.errorFields) return; // form validation error
+      if (err?.errorFields) return;
       message.error(err?.message || '操作失败');
     } finally {
       setSubmitting(false);
     }
   };
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = async (id: string, e?: React.MouseEvent) => {
+    e?.preventDefault();
+    e?.stopPropagation();
     try {
       await deleteIdea(id);
       message.success('删除成功');
@@ -117,45 +122,56 @@ export default function Ideas() {
       ) : !ideas || ideas.length === 0 ? (
         <Empty description="暂无想法记录" />
       ) : (
-        <Space direction="vertical" size="large" style={{ width: '100%' }}>
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
           {statusOrder.map(status => {
             const items = grouped.get(status);
             if (!items || items.length === 0) return null;
             return (
               <div key={status}>
-                <Space size={8} style={{ marginBottom: 12 }}>
+                <Space size={8} style={{ marginBottom: 8 }}>
                   <Tag color={statusColors[status]}>{status}</Tag>
                   <Text type="secondary" style={{ fontSize: 12 }}>({items.length})</Text>
                 </Space>
-                <Row gutter={[12, 12]}>
-                  {items.map(idea => (
-                    <Col key={idea.id} xs={24} md={12} lg={8}>
-                      <Card
-                        size="small"
-                        hoverable
-                        actions={[
-                          <EditOutlined key="edit" onClick={() => openEdit(idea)} />,
-                          <Popconfirm
-                            key="delete"
-                            title="确定删除？"
-                            onConfirm={() => handleDelete(idea.id)}
-                            okText="删除"
-                            cancelText="取消"
-                            okButtonProps={{ danger: true }}
-                          >
-                            <DeleteOutlined />
-                          </Popconfirm>,
-                        ]}
-                      >
-                        <Text strong>{idea.name}</Text>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#999', marginTop: 8 }}>
-                          <span>{idea.project}</span>
-                          <span>{idea.date}</span>
-                        </div>
-                      </Card>
-                    </Col>
-                  ))}
-                </Row>
+                <List
+                  size="small"
+                  bordered
+                  dataSource={items}
+                  renderItem={idea => (
+                    <List.Item
+                      style={{ padding: '8px 12px', cursor: 'pointer' }}
+                      actions={[
+                        <EditOutlined
+                          key="edit"
+                          onClick={e => openEdit(idea, e)}
+                          style={{ color: '#1677ff' }}
+                        />,
+                        <Popconfirm
+                          key="delete"
+                          title="确定删除？"
+                          onConfirm={e => handleDelete(idea.id, e as any)}
+                          onCancel={e => { e?.preventDefault(); e?.stopPropagation(); }}
+                          okText="删除"
+                          cancelText="取消"
+                          okButtonProps={{ danger: true }}
+                        >
+                          <DeleteOutlined
+                            onClick={e => { e.preventDefault(); e.stopPropagation(); }}
+                            style={{ color: '#ff4d4f' }}
+                          />
+                        </Popconfirm>,
+                        <Link key="detail" to={`/ideas/${idea.id}`}>
+                          <RightOutlined style={{ color: '#999' }} />
+                        </Link>,
+                      ]}
+                    >
+                      <Link to={`/ideas/${idea.id}`} style={{ flex: 1, color: 'inherit', display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
+                        <Text strong style={{ flex: 1, minWidth: 0 }} ellipsis>{idea.name}</Text>
+                        <Text type="secondary" style={{ fontSize: 12, flexShrink: 0 }}>{idea.project}</Text>
+                        <Text type="secondary" style={{ fontSize: 12, flexShrink: 0 }}>{idea.date}</Text>
+                      </Link>
+                    </List.Item>
+                  )}
+                />
               </div>
             );
           })}

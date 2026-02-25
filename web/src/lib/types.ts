@@ -120,13 +120,16 @@ export interface DevLog {
 
 // Idea
 export type IdeaStatus = 'Idea' | 'Processing' | 'Active' | 'Paused' | 'Done' | 'Dropped';
+export type IdeaType = 'manual' | 'todo';
 
 export interface Idea {
   id: string;
   name: string;
   status: IdeaStatus;
+  type: IdeaType;
   project: string;
   date: string;
+  body: string | null;
   created_at: number;
   updated_at: number;
 }

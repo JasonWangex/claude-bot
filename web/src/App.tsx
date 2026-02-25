@@ -10,6 +10,7 @@ import ChannelDetail from '@/pages/ChannelDetail';
 import DevLogs from '@/pages/DevLogs';
 import DevLogDetail from '@/pages/DevLogDetail';
 import Ideas from '@/pages/Ideas';
+import IdeaDetail from '@/pages/IdeaDetail';
 import KnowledgeBase from '@/pages/KnowledgeBase';
 import KBDetail from '@/pages/KBDetail';
 import Sessions from '@/pages/Sessions';
@@ -42,6 +43,7 @@ export default function App() {
             <Route path="devlogs" element={<DevLogs />} />
             <Route path="devlogs/:devlogId" element={<DevLogDetail />} />
             <Route path="ideas" element={<Ideas />} />
+            <Route path="ideas/:ideaId" element={<IdeaDetail />} />
             <Route path="kb" element={<KnowledgeBase />} />
             <Route path="kb/:kbId" element={<KBDetail />} />
             <Route path="events" element={<Events />} />
