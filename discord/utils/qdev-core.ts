@@ -3,8 +3,8 @@
  *
  * 职责：
  *  1. 生成/接受分支名和频道名
- *  2. 找到 root session
- *  3. 调用 forkTaskCore 创建 worktree + Discord channel + session
+ *  2. 以当前 channel 为父节点（从当前分支 fork，而非 root/main）
+ *  3. 调用 forkTaskCore 创建 worktree（可选）+ Discord channel + session
  *  4. 持久化到 TaskRepo
  *  5. 设置 model
  *  6. 发送描述 embed 到新频道
@@ -39,8 +39,14 @@ export interface QdevOptions {
   branchName?: string;
   /** 自定义 Discord 频道名；不传则由 LLM 根据描述生成 */
   channelName?: string;
-  /** 从哪个分支 fork worktree；不传则基于当前 HEAD */
+  /** 从哪个分支 fork worktree；不传则基于当前 channel 的分支 */
   baseBranch?: string;
+  /**
+   * 是否创建新的 worktree（默认 true）。
+   * - true（默认）：从当前 channel 的分支 fork 出新 branch + worktree + Discord channel
+   * - false：仅创建新 Discord channel + session，复用当前 channel 的 worktree
+   */
+  worktree?: boolean;
 }
 
 export interface QdevResult extends ForkTaskResult {
@@ -49,8 +55,9 @@ export interface QdevResult extends ForkTaskResult {
 
 export async function qdevCore(options: QdevOptions, deps: ForkTaskDeps): Promise<QdevResult> {
   const { guildId, channelId, description, model, categoryId, baseBranch } = options;
+  const shouldCreateWorktree = options.worktree !== false;  // 默认 true
 
-  // 0. 入参校验（先于解构，统一用 options.*）
+  // 0. 入参校验
   if (options.baseBranch?.startsWith('-')) {
     throw new Error(`Invalid base_branch: "${options.baseBranch}" (must not start with '-')`);
   }
@@ -58,17 +65,29 @@ export async function qdevCore(options: QdevOptions, deps: ForkTaskDeps): Promis
     throw new Error(`Invalid branch_name: "${options.branchName}" (must not start with '-')`);
   }
 
-  // 1. 并行生成分支名和频道名（如果调用方未提供）
-  const [resolvedBranchName, resolvedChannelName] = await Promise.all([
-    options.branchName ? Promise.resolve(options.branchName) : generateBranchName(description),
-    options.channelName ? Promise.resolve(options.channelName) : generateTopicTitle(description),
-  ]);
+  // 1. 生成频道名；仅在创建新 worktree 时才需要生成分支名
+  let resolvedBranchName: string;
+  let resolvedChannelName: string;
 
-  // 2. 找到 root session（新频道挂在 root 下，而非当前子频道）
-  const rootSession = deps.stateManager.getRootSession(guildId, channelId);
-  const parentChannelId = rootSession?.channelId ?? channelId;
+  if (shouldCreateWorktree) {
+    // 并行生成分支名和频道名
+    [resolvedBranchName, resolvedChannelName] = await Promise.all([
+      options.branchName ? Promise.resolve(options.branchName) : generateBranchName(description),
+      options.channelName ? Promise.resolve(options.channelName) : generateTopicTitle(description),
+    ]);
+  } else {
+    // 不创建 worktree：只需要频道名，分支名复用当前 channel 的分支
+    resolvedChannelName = options.channelName
+      ? options.channelName
+      : await generateTopicTitle(description);
+    const currentSession = deps.stateManager.getSession(guildId, channelId);
+    resolvedBranchName = currentSession?.worktreeBranch ?? '';
+  }
 
-  // 3. Fork: 创建 worktree + Discord Text Channel + session
+  // 2. 使用当前 channel 作为父节点（从当前 channel 的分支 fork，而非 root/main）
+  const parentChannelId = channelId;
+
+  // 3. Fork: 创建 Discord Text Channel + session（可选创建 worktree）
   const forkResult = await forkTaskCore(
     guildId,
     parentChannelId,
@@ -77,10 +96,11 @@ export async function qdevCore(options: QdevOptions, deps: ForkTaskDeps): Promis
     deps,
     resolvedChannelName,
     baseBranch,
+    shouldCreateWorktree,
   );
 
   // 4. 持久化到 TaskRepo（goalId=null 表示独立任务）
-  // 非致命：worktree/channel 已建，DB 记录缺失不阻断 Claude 运行
+  // 非致命：channel 已建，DB 记录缺失不阻断 Claude 运行
   try {
     const repo = getTaskRepo();
     await repo.save({
@@ -88,7 +108,7 @@ export async function qdevCore(options: QdevOptions, deps: ForkTaskDeps): Promis
       description,
       type: '代码',
       status: 'dispatched',
-      branchName: forkResult.branchName,
+      branchName: forkResult.branchName || undefined,
       channelId: forkResult.channelId,
       dispatchedAt: Date.now(),
     }, null);

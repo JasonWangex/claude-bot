@@ -33,6 +33,7 @@ export const qdev: RouteHandler = async (req, res, params, deps) => {
     branch_name?: string;
     channel_name?: string;
     base_branch?: string;
+    worktree?: boolean;
   }>(req);
 
   if (!body?.description || typeof body.description !== 'string') {
@@ -70,6 +71,7 @@ export const qdev: RouteHandler = async (req, res, params, deps) => {
       branchName: body.branch_name?.trim() || undefined,
       channelName: body.channel_name?.trim() || undefined,
       baseBranch: body.base_branch?.trim() || undefined,
+      worktree: body.worktree !== false,  // 默认 true
     }, {
       stateManager: deps.stateManager,
       client: deps.client,
@@ -83,7 +85,7 @@ export const qdev: RouteHandler = async (req, res, params, deps) => {
       data: {
         channel_id: result.channelId,
         name: result.channelName,
-        branch: result.branchName,
+        branch: result.branchName || null,
         cwd: result.cwd,
         parent_channel_id: result.parentChannelId,
         status: 'accepted',

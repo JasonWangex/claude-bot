@@ -665,11 +665,13 @@ export class StateManager {
     return paths;
   }
 
-  setSessionForkInfo(guildId: string, channelId: string, parentChannelId: string, worktreeBranch: string): void {
+  setSessionForkInfo(guildId: string, channelId: string, parentChannelId: string, worktreeBranch: string | undefined): void {
     const session = this.getSession(guildId, channelId);
     if (!session) return;
     session.parentChannelId = parentChannelId;
-    session.worktreeBranch = worktreeBranch;
+    if (worktreeBranch !== undefined) {
+      session.worktreeBranch = worktreeBranch;
+    }
     this.persistSession(guildId, channelId);
   }
 
