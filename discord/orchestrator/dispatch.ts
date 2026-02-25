@@ -23,6 +23,7 @@ import {
   getPhaseNumber,
   isPhaseFullyMerged,
 } from './task-scheduler.js';
+import { triggerGoalAudit } from './goal-audit-handler.js';
 
 /**
  * Review completed task results and decide what to dispatch next.
@@ -187,6 +188,13 @@ export async function dispatchNext(
       todoWarning,
       'success'
     );
+
+    // 自动触发代码审查报告（fire-and-forget）
+    const guildIdForAudit = ctx.getGuildId();
+    if (guildIdForAudit) {
+      triggerGoalAudit(ctx, state, guildIdForAudit);
+    }
+
     return;
   }
 
@@ -385,10 +393,13 @@ export function executeTaskPipeline(
       // 事件扫描器会处理，这里作为 fallback 直接调用
       await ctx.onTaskCompleted(goalId, taskId, usage);
     } catch (err: any) {
-      // AUTH_ERROR：拦截器已调度自动重试，task 保持 running 等待 Claude 完成后上报 bot_task_event
+      // AUTH_ERROR / API_ERROR：拦截器已调度自动重试，task 保持 running 等待 Claude 完成后上报 bot_task_event
       // checkOrphanedTasks 会在 session idle 后轻推兜底
-      if (err instanceof ClaudeExecutionError && err.errorType === ClaudeErrorType.AUTH_ERROR) {
-        logger.warn(`[Orchestrator] Pipeline ${taskId} got AUTH_ERROR, keeping task running for interceptor retry`);
+      if (err instanceof ClaudeExecutionError && (
+        err.errorType === ClaudeErrorType.AUTH_ERROR ||
+        err.errorType === ClaudeErrorType.API_ERROR
+      )) {
+        logger.warn(`[Orchestrator] Pipeline ${taskId} got ${err.errorType}, keeping task running for interceptor retry`);
         return;
       }
       logger.error(`[Orchestrator] Pipeline ${taskId} failed:`, err);
