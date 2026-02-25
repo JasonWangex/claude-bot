@@ -7,6 +7,7 @@ import {
 import { EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useKBEntry, updateKB, deleteKB } from '@/lib/hooks/use-kb';
 import { formatDateTime } from '@/lib/format';
+import { getProjectColor } from '@/lib/project-colors';
 import MarkdownRenderer from '@/components/MarkdownRenderer';
 
 const { Title, Text } = Typography;
@@ -115,7 +116,7 @@ export default function KBDetail() {
       </div>
 
       <Space size={4} wrap>
-        <Tag color="blue">{entry.project}</Tag>
+        <Tag color={getProjectColor(entry.project)}>{entry.project}</Tag>
         {entry.category && <Tag color="green">{entry.category}</Tag>}
         {entry.source && <Tag color="orange">来源: {entry.source}</Tag>}
         {entry.tags.map(tag => (

@@ -14,6 +14,7 @@ import { TodoPanel } from '@/components/goals/TodoPanel';
 import { GoalTimeline } from '@/components/goals/GoalTimeline';
 import { useGoal, useGoalDrive, updateGoal } from '@/lib/hooks/use-goals';
 import type { GoalStatus, GoalType, GoalTaskStatus } from '@/lib/types';
+import { getProjectColor } from '@/lib/project-colors';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -190,7 +191,7 @@ export default function GoalDetail() {
 
       <Space size="small">
         {goal.type && <Tag>{goal.type}</Tag>}
-        {goal.project && <Tag>{goal.project}</Tag>}
+        {goal.project && <Tag color={getProjectColor(goal.project)}>{goal.project}</Tag>}
         {goal.progress && (() => {
           const p = goal.progress;
           const isDone = goal.status === 'Completed' || goal.status === 'Merged';

@@ -10,6 +10,7 @@ import { Link } from 'react-router';
 import { useKnowledgeBase, createKB, updateKB, deleteKB } from '@/lib/hooks/use-kb';
 import { useProjects } from '@/lib/hooks/use-projects';
 import { formatDateTime } from '@/lib/format';
+import { getProjectColor } from '@/lib/project-colors';
 import type { KnowledgeBaseEntry } from '@/lib/types';
 
 const { Title, Text, Paragraph } = Typography;
@@ -215,7 +216,7 @@ export default function KnowledgeBase() {
                   {entry.content}
                 </Paragraph>
                 <Space size={4} wrap>
-                  <Tag color="blue">{entry.project}</Tag>
+                  <Tag color={getProjectColor(entry.project)}>{entry.project}</Tag>
                   {entry.category && <Tag>{entry.category}</Tag>}
                   {entry.tags.map(tag => (
                     <Tag key={tag} style={{ fontSize: 11 }}>{tag}</Tag>

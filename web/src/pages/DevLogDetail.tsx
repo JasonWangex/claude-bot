@@ -6,6 +6,7 @@ import { BranchesOutlined, CodeOutlined } from '@ant-design/icons';
 import { useDevLog } from '@/lib/hooks/use-devlogs';
 import { formatDateTime } from '@/lib/format';
 import MarkdownRenderer from '@/components/MarkdownRenderer';
+import { getProjectColor } from '@/lib/project-colors';
 
 const { Title } = Typography;
 
@@ -39,7 +40,7 @@ export default function DevLogDetail() {
       <Card size="small">
         <Descriptions column={{ xs: 1, sm: 2, md: 3 }} size="small">
           <Descriptions.Item label="日期">{log.date}</Descriptions.Item>
-          <Descriptions.Item label="项目"><Tag color="blue">{log.project}</Tag></Descriptions.Item>
+          <Descriptions.Item label="项目"><Tag color={getProjectColor(log.project)}>{log.project}</Tag></Descriptions.Item>
           <Descriptions.Item label="分支"><BranchesOutlined /> {log.branch}</Descriptions.Item>
           <Descriptions.Item label="Commits">{log.commits}</Descriptions.Item>
           <Descriptions.Item label="代码变更"><CodeOutlined /> {log.lines_changed}</Descriptions.Item>
