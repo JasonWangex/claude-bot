@@ -182,8 +182,10 @@ async function handleIdea(
         id: randomUUID(),
         name: args,
         status: 'Idea',
+        type: 'manual',
         project,
         date: today,
+        body: null,
         createdAt: now,
         updatedAt: now,
       };

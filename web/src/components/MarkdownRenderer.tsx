@@ -1,5 +1,6 @@
-import ReactMarkdown from 'react-markdown';
+import { MarkdownHooks } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import styles from './MarkdownRenderer.module.css';
 
 interface MarkdownRendererProps {
   content: string;
@@ -7,86 +8,8 @@ interface MarkdownRendererProps {
 
 export default function MarkdownRenderer({ content }: MarkdownRendererProps) {
   return (
-    <div className="markdown-body">
-      <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
-      <style>{`
-        .markdown-body {
-          font-size: 14px;
-          line-height: 1.8;
-          color: rgba(0, 0, 0, 0.88);
-          word-wrap: break-word;
-        }
-        .markdown-body h1, .markdown-body h2, .markdown-body h3,
-        .markdown-body h4, .markdown-body h5, .markdown-body h6 {
-          margin-top: 24px;
-          margin-bottom: 16px;
-          font-weight: 600;
-          line-height: 1.25;
-        }
-        .markdown-body h1 { font-size: 1.6em; }
-        .markdown-body h2 { font-size: 1.4em; }
-        .markdown-body h3 { font-size: 1.2em; }
-        .markdown-body p { margin-bottom: 12px; }
-        .markdown-body ul, .markdown-body ol {
-          padding-left: 2em;
-          margin-bottom: 12px;
-        }
-        .markdown-body li { margin-bottom: 4px; }
-        .markdown-body code {
-          padding: 2px 6px;
-          font-size: 0.9em;
-          background: rgba(0, 0, 0, 0.04);
-          border-radius: 4px;
-          font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
-        }
-        .markdown-body pre {
-          padding: 16px;
-          overflow: auto;
-          font-size: 0.9em;
-          line-height: 1.45;
-          background: rgba(0, 0, 0, 0.04);
-          border-radius: 6px;
-          margin-bottom: 12px;
-        }
-        .markdown-body pre code {
-          padding: 0;
-          background: none;
-          border-radius: 0;
-        }
-        .markdown-body blockquote {
-          padding: 0 1em;
-          color: rgba(0, 0, 0, 0.45);
-          border-left: 3px solid rgba(0, 0, 0, 0.12);
-          margin: 0 0 12px 0;
-        }
-        .markdown-body table {
-          border-collapse: collapse;
-          width: 100%;
-          margin-bottom: 12px;
-        }
-        .markdown-body th, .markdown-body td {
-          padding: 8px 12px;
-          border: 1px solid rgba(0, 0, 0, 0.08);
-        }
-        .markdown-body th {
-          background: rgba(0, 0, 0, 0.02);
-          font-weight: 600;
-        }
-        .markdown-body a {
-          color: #1677ff;
-          text-decoration: none;
-        }
-        .markdown-body a:hover { text-decoration: underline; }
-        .markdown-body hr {
-          border: none;
-          border-top: 1px solid rgba(0, 0, 0, 0.08);
-          margin: 16px 0;
-        }
-        .markdown-body img { max-width: 100%; }
-        .markdown-body input[type="checkbox"] {
-          margin-right: 6px;
-        }
-      `}</style>
+    <div className={styles.markdown}>
+      <MarkdownHooks remarkPlugins={[remarkGfm]}>{content}</MarkdownHooks>
     </div>
   );
 }
