@@ -9,6 +9,7 @@ import type { SessionSummary, SessionEvent } from '@/lib/hooks/use-sessions';
 import { apiFetch } from '@/lib/api';
 import { formatDateTime } from '@/lib/format';
 import { formatK } from '@/pages/Sessions';
+import { getProjectColor } from '@/lib/project-colors';
 
 const { Title, Text } = Typography;
 
@@ -137,7 +138,7 @@ export default function SessionDetail() {
             )}
             {session.goal_name && (
               <Descriptions.Item label="Goal">
-                {session.goal_project && <Tag>{session.goal_project}</Tag>}
+                {session.goal_project && <Tag color={getProjectColor(session.goal_project)}>{session.goal_project}</Tag>}
                 {session.goal_name}
               </Descriptions.Item>
             )}

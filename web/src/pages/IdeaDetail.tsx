@@ -8,6 +8,7 @@ import { EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import { useIdea, updateIdea, deleteIdea } from '@/lib/hooks/use-ideas';
 import { useProjects } from '@/lib/hooks/use-projects';
 import { formatDateTime } from '@/lib/format';
+import { getProjectColor } from '@/lib/project-colors';
 import MarkdownRenderer from '@/components/MarkdownRenderer';
 import type { IdeaStatus } from '@/lib/types';
 
@@ -128,7 +129,7 @@ export default function IdeaDetail() {
 
       <Space size={8} wrap>
         <Tag color={statusColors[idea.status]}>{idea.status}</Tag>
-        <Tag color="blue">{idea.project}</Tag>
+        <Tag color={getProjectColor(idea.project)}>{idea.project}</Tag>
         <Tag>{idea.date}</Tag>
         {idea.type === 'todo' && <Tag color="orange">todo</Tag>}
       </Space>

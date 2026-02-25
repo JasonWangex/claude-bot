@@ -8,6 +8,7 @@ import { Link } from 'react-router';
 import { useDevLogs, createDevLog } from '@/lib/hooks/use-devlogs';
 import { useProjects } from '@/lib/hooks/use-projects';
 import { formatDateTime } from '@/lib/format';
+import { getProjectColor } from '@/lib/project-colors';
 
 const { Title, Text } = Typography;
 const { TextArea } = Input;
@@ -128,7 +129,7 @@ export default function DevLogs() {
                     <Text type="secondary" style={{ fontSize: 12 }}>{formatDateTime(log.created_at)}</Text>
                   </div>
                   <Space size={4} style={{ marginBottom: 4 }}>
-                    <Tag color="blue">{log.project}</Tag>
+                    <Tag color={getProjectColor(log.project)}>{log.project}</Tag>
                     {log.goal && <Tag>{log.goal}</Tag>}
                   </Space>
                   <div style={{ fontSize: 14, color: '#595959', marginBottom: 4 }}>{log.summary}</div>
