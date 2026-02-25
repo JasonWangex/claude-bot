@@ -524,7 +524,23 @@ export class MessageHandler {
           } else if (tur.structuredPatch?.length) {
             change = { filePath: tur.filePath, type: 'update', patches: tur.structuredPatch };
           }
-          if (change) fileChanges.push(change);
+          if (change) {
+            const existing = fileChanges.find(c => c.filePath === change!.filePath);
+            if (existing) {
+              // 合并同一文件的多次修改
+              if (change.type === 'create') {
+                // 新的 create 覆盖旧记录（文件被重建）
+                existing.type = 'create';
+                existing.content = change.content;
+                existing.patches = [...(existing.patches ?? []), ...(change.patches ?? [])];
+              } else {
+                // update：追加 patches
+                existing.patches = [...(existing.patches ?? []), ...(change.patches ?? [])];
+              }
+            } else {
+              fileChanges.push(change);
+            }
+          }
         }
       }
 
