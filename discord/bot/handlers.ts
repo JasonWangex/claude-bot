@@ -708,9 +708,14 @@ export class MessageHandler {
         // 文件变更存入数据库（取代原先生成 HTML 上传 OSS/Discord）
         const skipChanges = mode === 'plan'
           && fileChanges.every(fc => fc.filePath.includes('.claude/plans/') && fc.filePath.endsWith('.md'));
+        let changesLink = '';
         if (fileChanges.length > 0 && !skipChanges) {
           try {
             new SessionChangesRepo(getDb()).save(channelId, fileChanges);
+            const webUrl = process.env.WEB_URL?.replace(/\/$/, '');
+            if (webUrl) {
+              changesLink = `\n[查看变更](${webUrl}/channels/${channelId}?tab=changes)`;
+            }
           } catch (err) {
             logger.warn('Failed to save session changes to DB:', err);
           }
@@ -733,7 +738,7 @@ export class MessageHandler {
             { priority: 'high', embedColor: EmbedColors.GREEN }
           );
         } else {
-          doneMsgId = await mq.send(channelId, `${sessionPrefix}@everyone Done${summary}`, { priority: 'high', embedColor: EmbedColors.GREEN });
+          doneMsgId = await mq.send(channelId, `${sessionPrefix}@everyone Done${summary}${changesLink}`, { priority: 'high', embedColor: EmbedColors.GREEN });
         }
         this.stateManager.setDoneSentAt(channelId);
 

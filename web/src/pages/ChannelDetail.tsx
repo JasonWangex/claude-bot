@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
-import { useParams, Navigate } from 'react-router';
+import { useParams, Navigate, useSearchParams } from 'react-router';
 import { Typography, Breadcrumb, Card, Descriptions, Spin, Space, Alert, Tabs, Tag, Table, Empty } from 'antd';
 import { BranchesOutlined, FolderOutlined, ClockCircleOutlined, RobotOutlined } from '@ant-design/icons';
 import { Link } from 'react-router';
@@ -321,6 +321,7 @@ function ChangesTab({ channelId }: { channelId: string }) {
 
 export default function ChannelDetail() {
   const { channelId } = useParams<{ channelId: string }>();
+  const [searchParams] = useSearchParams();
   const { data: channel, error } = useChannel(channelId ?? null);
 
   if (!channelId) return <Navigate to="/channels" replace />;
@@ -395,7 +396,10 @@ export default function ChannelDetail() {
         </Descriptions>
       </Card>
 
-      <Tabs defaultActiveKey={channel.children?.length ? 'children' : 'session-list'} items={tabItems} />
+      <Tabs
+        defaultActiveKey={searchParams.get('tab') ?? (channel.children?.length ? 'children' : 'session-list')}
+        items={tabItems}
+      />
     </Space>
   );
 }
