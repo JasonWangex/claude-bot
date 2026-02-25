@@ -11,12 +11,15 @@ interface SyncResult {
   updated?: number;
   sessionsScanned?: number;
   sessionsUpdated?: number;
+  synced?: number;
+  categories?: number;
 }
 
 export default function Settings() {
   const { message } = App.useApp();
   const [syncingSession, setSyncingSession] = useState(false);
   const [syncingUsage, setSyncingUsage] = useState(false);
+  const [syncingDiscord, setSyncingDiscord] = useState(false);
 
   const handleSyncSessions = async () => {
     setSyncingSession(true);
@@ -39,6 +42,18 @@ export default function Settings() {
       message.error(`同步失败: ${e.message}`);
     } finally {
       setSyncingUsage(false);
+    }
+  };
+
+  const handleSyncDiscord = async () => {
+    setSyncingDiscord(true);
+    try {
+      const result = await apiPost<SyncResult>('/api/sync/discord');
+      message.success(`Discord 同步完成：同步 ${result.synced} 个频道，${result.categories} 个分类`);
+    } catch (e: any) {
+      message.error(`同步失败: ${e.message}`);
+    } finally {
+      setSyncingDiscord(false);
     }
   };
 
@@ -70,6 +85,18 @@ export default function Settings() {
             </Button>
             <Text type="secondary" style={{ marginLeft: 12 }}>
               重算所有会话的 Token / Cost（历史数据补全）
+            </Text>
+          </div>
+          <div>
+            <Button
+              icon={<SyncOutlined spin={syncingDiscord} />}
+              loading={syncingDiscord}
+              onClick={handleSyncDiscord}
+            >
+              同步 Discord 状态
+            </Button>
+            <Text type="secondary" style={{ marginLeft: 12 }}>
+              从 Discord 服务器同步频道和分类信息到数据库
             </Text>
           </div>
         </Space>

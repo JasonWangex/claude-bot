@@ -28,7 +28,7 @@ import { qdev } from './routes/qdev.js';
 import { listDevLogs, getDevLog, createDevLog } from './routes/devlogs.js';
 import { listIdeas, createIdea, getIdea, updateIdea, deleteIdea } from './routes/ideas.js';
 import { listKnowledgeBase, createKnowledgeBase, getKnowledgeBaseEntry, updateKnowledgeBase, deleteKnowledgeBase } from './routes/knowledge-base.js';
-import { syncSessions, syncUsage } from './routes/sync.js';
+import { syncSessions, syncUsage, syncDiscord } from './routes/sync.js';
 import { getCommands } from './routes/commands.js';
 import { getSessionConversation } from './routes/sessions.js';
 import { listSessions, getSessionMeta } from './routes/session-list.js';
@@ -142,6 +142,7 @@ function defineRoutes(): Route[] {
     // Sync
     r('POST', '/api/sync/sessions', syncSessions),
     r('POST', '/api/sync/usage', syncUsage),
+    r('POST', '/api/sync/discord', syncDiscord),
 
     // Sessions
     r('GET', '/api/sessions', listSessions),
