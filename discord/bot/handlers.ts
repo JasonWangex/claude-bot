@@ -78,6 +78,36 @@ export class MessageHandler {
   // Plan mode 确认关键词
   private static PLAN_CONFIRM_WORDS = /^(ok|确认|执行|approve|go|yes|是|开始|实现|implement)$/i;
 
+  // 文本文件下载大小上限（500KB）
+  private static MAX_TEXT_FILE_BYTES = 500 * 1024;
+
+  /**
+   * 下载文本文件内容，返回字符串；失败或超限返回 null
+   */
+  static async downloadTextFile(url: string): Promise<string | null> {
+    try {
+      const response = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+      if (!response.ok) {
+        logger.warn(`Text file download failed: HTTP ${response.status} ${url}`);
+        return null;
+      }
+      const contentLength = response.headers.get('content-length');
+      if (contentLength && parseInt(contentLength, 10) > MessageHandler.MAX_TEXT_FILE_BYTES) {
+        logger.warn(`Text file too large: ${contentLength} bytes`);
+        return null;
+      }
+      const text = await response.text();
+      if (Buffer.byteLength(text, 'utf-8') > MessageHandler.MAX_TEXT_FILE_BYTES) {
+        logger.warn(`Text file too large after read: ${Buffer.byteLength(text, 'utf-8')} bytes`);
+        return null;
+      }
+      return text;
+    } catch (err) {
+      logger.error('Failed to download text file attachment:', err);
+      return null;
+    }
+  }
+
   /**
    * 处理 Forum Post Thread 中的文字消息
    */
@@ -87,6 +117,22 @@ export class MessageHandler {
     if (!guildId) return;
 
     let text = message.content;
+
+    // 处理 Discord 自动将超长消息转为文本文件的情况
+    const textFileAttachment = message.attachments.find(
+      a => a.contentType?.startsWith('text/plain') || a.name?.endsWith('.txt'),
+    );
+    if (textFileAttachment) {
+      const fileText = await MessageHandler.downloadTextFile(textFileAttachment.url);
+      if (fileText === null) {
+        // 下载失败，通知用户
+        await this.mq.send(channelId, '⚠️ 无法读取你发送的文本文件，请重试。', { silent: true, priority: 'high' });
+        return;
+      }
+      // 文件附件存在时以文件内容为准；若用户同时附带了说明文字则前置
+      text = text ? `${text}\n${fileText}` : fileText;
+    }
+
     if (!text) return;
 
     // 用户交互时取消待发的等待消息

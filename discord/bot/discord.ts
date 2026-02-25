@@ -214,7 +214,19 @@ export class DiscordBot {
       // 检查是否在等待自定义文本输入（Modal 替代方案：直接文本消息）
       const waitingEntry = this.interactionRegistry.findWaitingCustomText(message.guildId, channelId);
       if (waitingEntry) {
-        this.interactionRegistry.resolve(waitingEntry.toolUseId, message.content);
+        let resolveText = message.content;
+        // 兼容 Discord 将长文本自动转为文件的情况
+        const textFile = message.attachments.find(
+          a => a.contentType?.startsWith('text/plain') || a.name?.endsWith('.txt'),
+        );
+        if (textFile) {
+          const fileContent = await MessageHandler.downloadTextFile(textFile.url);
+          if (fileContent !== null) {
+            resolveText = resolveText ? `${resolveText}\n${fileContent}` : fileContent;
+          }
+        }
+        if (!resolveText) return;
+        this.interactionRegistry.resolve(waitingEntry.toolUseId, resolveText);
         await message.react('✅').catch(() => {});
         return;
       }
