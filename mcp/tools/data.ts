@@ -61,6 +61,7 @@ export function registerDataTools(server: McpServer) {
       name: z.string().optional().describe('Idea description (create/update)'),
       project: z.string().optional().describe('Project name'),
       status: z.string().optional().describe('Idea/Processing/Active/Paused/Done/Dropped'),
+      body: z.string().optional().describe('Markdown body content (create/update)'),
     },
   }, async ({ action, idea_id, ...fields }) => {
     switch (action) {
@@ -74,7 +75,9 @@ export function registerDataTools(server: McpServer) {
       }
       case 'create': {
         const r = await apiPost('/api/ideas', {
-          name: fields.name, project: fields.project, status: 'Idea',
+          name: fields.name, project: fields.project,
+          status: fields.status ?? 'Idea',
+          body: fields.body,
         });
         return { content: [{ type: 'text', text: JSON.stringify(r.data ?? r, null, 2) }] };
       }

@@ -1,15 +1,17 @@
 import { useState } from 'react';
 import {
   Typography, Tag, Spin, Empty, Space, Alert,
-  Button, Modal, Form, Input, Select, AutoComplete, Popconfirm, message, List,
+  Button, Modal, Form, Input, Select, AutoComplete, Popconfirm, message,
 } from 'antd';
-import { PlusOutlined, EditOutlined, DeleteOutlined, RightOutlined } from '@ant-design/icons';
+import { PlusOutlined, EditOutlined, DeleteOutlined } from '@ant-design/icons';
 import { Link } from 'react-router';
 import { useIdeas, createIdea, updateIdea, deleteIdea } from '@/lib/hooks/use-ideas';
 import { useProjects } from '@/lib/hooks/use-projects';
+import { getProjectColor } from '@/lib/project-colors';
 import type { Idea, IdeaStatus } from '@/lib/types';
 
 const { Title, Text } = Typography;
+const { TextArea } = Input;
 
 const statusColors: Record<IdeaStatus, string> = {
   'Idea': 'default',
@@ -35,6 +37,7 @@ interface IdeaFormValues {
   name: string;
   project: string;
   status: IdeaStatus;
+  body?: string;
 }
 
 export default function Ideas() {
@@ -47,7 +50,7 @@ export default function Ideas() {
 
   const openCreate = () => {
     setEditingIdea(null);
-    form.setFieldsValue({ name: '', project: '', status: 'Idea' });
+    form.setFieldsValue({ name: '', project: '', status: 'Idea', body: '' });
     setModalOpen(true);
   };
 
@@ -55,7 +58,7 @@ export default function Ideas() {
     e.preventDefault();
     e.stopPropagation();
     setEditingIdea(idea);
-    form.setFieldsValue({ name: idea.name, project: idea.project, status: idea.status });
+    form.setFieldsValue({ name: idea.name, project: idea.project, status: idea.status, body: idea.body ?? '' });
     setModalOpen(true);
   };
 
@@ -64,10 +67,10 @@ export default function Ideas() {
       const values = await form.validateFields();
       setSubmitting(true);
       if (editingIdea) {
-        await updateIdea(editingIdea.id, values);
+        await updateIdea(editingIdea.id, { ...values, body: values.body || null });
         message.success('更新成功');
       } else {
-        await createIdea(values);
+        await createIdea({ ...values, body: values.body || undefined });
         message.success('创建成功');
       }
       setModalOpen(false);
@@ -122,31 +125,56 @@ export default function Ideas() {
       ) : !ideas || ideas.length === 0 ? (
         <Empty description="暂无想法记录" />
       ) : (
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
           {statusOrder.map(status => {
             const items = grouped.get(status);
             if (!items || items.length === 0) return null;
             return (
-              <div key={status}>
-                <Space size={8} style={{ marginBottom: 8 }}>
-                  <Tag color={statusColors[status]}>{status}</Tag>
-                  <Text type="secondary" style={{ fontSize: 12 }}>({items.length})</Text>
-                </Space>
-                <List
-                  size="small"
-                  bordered
-                  dataSource={items}
-                  renderItem={idea => (
-                    <List.Item
-                      style={{ padding: '8px 12px', cursor: 'pointer' }}
-                      actions={[
+              <div key={status} style={{ background: '#fff', borderRadius: 8, border: '1px solid #f0f0f0', padding: '12px 16px' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, paddingBottom: 8, borderBottom: '1px solid #f0f0f0' }}>
+                  <Tag color={statusColors[status]} style={{ margin: 0 }}>{status}</Tag>
+                  <Text type="secondary" style={{ fontSize: 12 }}>{items.length} 条</Text>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                  {items.map((idea, idx) => (
+                    <div
+                      key={idea.id}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'flex-start',
+                        gap: 12,
+                        padding: '10px 8px',
+                        borderBottom: idx < items.length - 1 ? '1px solid #f5f5f5' : 'none',
+                        borderRadius: 6,
+                        transition: 'background 0.15s',
+                        cursor: 'pointer',
+                      }}
+                      onMouseEnter={e => (e.currentTarget.style.background = '#fafafa')}
+                      onMouseLeave={e => (e.currentTarget.style.background = 'transparent')}
+                    >
+                      <Link
+                        to={`/ideas/${idea.id}`}
+                        style={{ flex: 1, minWidth: 0, color: 'inherit' }}
+                      >
+                        <div style={{ fontWeight: 500, color: 'rgba(0,0,0,0.88)', marginBottom: idea.body ? 4 : 0 }}>
+                          {idea.name}
+                        </div>
+                        {idea.body && (
+                          <div style={{ fontSize: 12, color: 'rgba(0,0,0,0.45)', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+                            {idea.body.replace(/^#+\s*/gm, '').replace(/[*`_]/g, '')}
+                          </div>
+                        )}
+                        <div style={{ marginTop: 6, display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+                          <Tag color={getProjectColor(idea.project)} style={{ margin: 0, fontSize: 11 }}>{idea.project}</Tag>
+                          <Text type="secondary" style={{ fontSize: 11 }}>{idea.date}</Text>
+                        </div>
+                      </Link>
+                      <Space size={4} style={{ flexShrink: 0, paddingTop: 2 }}>
                         <EditOutlined
-                          key="edit"
                           onClick={e => openEdit(idea, e)}
-                          style={{ color: '#1677ff' }}
-                        />,
+                          style={{ color: '#1677ff', fontSize: 13, padding: 4 }}
+                        />
                         <Popconfirm
-                          key="delete"
                           title="确定删除？"
                           onConfirm={e => handleDelete(idea.id, e as any)}
                           onCancel={e => { e?.preventDefault(); e?.stopPropagation(); }}
@@ -156,26 +184,17 @@ export default function Ideas() {
                         >
                           <DeleteOutlined
                             onClick={e => { e.preventDefault(); e.stopPropagation(); }}
-                            style={{ color: '#ff4d4f' }}
+                            style={{ color: '#ff4d4f', fontSize: 13, padding: 4 }}
                           />
-                        </Popconfirm>,
-                        <Link key="detail" to={`/ideas/${idea.id}`}>
-                          <RightOutlined style={{ color: '#999' }} />
-                        </Link>,
-                      ]}
-                    >
-                      <Link to={`/ideas/${idea.id}`} style={{ flex: 1, color: 'inherit', display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
-                        <Text strong style={{ flex: 1, minWidth: 0 }} ellipsis>{idea.name}</Text>
-                        <Text type="secondary" style={{ fontSize: 12, flexShrink: 0 }}>{idea.project}</Text>
-                        <Text type="secondary" style={{ fontSize: 12, flexShrink: 0 }}>{idea.date}</Text>
-                      </Link>
-                    </List.Item>
-                  )}
-                />
+                        </Popconfirm>
+                      </Space>
+                    </div>
+                  ))}
+                </div>
               </div>
             );
           })}
-        </Space>
+        </div>
       )}
 
       <Modal
@@ -187,10 +206,11 @@ export default function Ideas() {
         okText={editingIdea ? '保存' : '创建'}
         cancelText="取消"
         destroyOnClose
+        width={600}
       >
         <Form form={form} layout="vertical" style={{ marginTop: 16 }}>
           <Form.Item name="name" label="名称" rules={[{ required: true, message: '请输入名称' }]}>
-            <Input placeholder="想法名称" />
+            <Input placeholder="想法名称（简短标题）" />
           </Form.Item>
           <Form.Item name="project" label="项目" rules={[{ required: true, message: '请输入项目名' }]}>
             <AutoComplete
@@ -201,6 +221,9 @@ export default function Ideas() {
           </Form.Item>
           <Form.Item name="status" label="状态">
             <Select options={statusOptions} />
+          </Form.Item>
+          <Form.Item name="body" label="内容">
+            <TextArea rows={6} placeholder="Markdown 格式内容（可选）" />
           </Form.Item>
         </Form>
       </Modal>

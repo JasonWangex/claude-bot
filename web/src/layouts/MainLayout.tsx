@@ -20,19 +20,52 @@ import { clearToken } from '@/lib/auth';
 
 const { Sider, Content } = Layout;
 
-const menuItems = [
+const leafItems = [
   { key: '/', icon: <DashboardOutlined />, label: 'Dashboard' },
-  { key: '/projects', icon: <FolderOutlined />, label: 'Projects' },
   { key: '/goals', icon: <AimOutlined />, label: 'Goals' },
+  { key: '/ideas', icon: <BulbOutlined />, label: 'Ideas' },
+  { key: '/devlogs', icon: <FileTextOutlined />, label: 'DevLogs' },
+  { key: '/kb', icon: <BookOutlined />, label: 'Knowledge Base' },
+  { key: '/projects', icon: <FolderOutlined />, label: 'Projects' },
   { key: '/channels', icon: <UnorderedListOutlined />, label: 'Channels' },
   { key: '/sessions', icon: <HistoryOutlined />, label: 'Sessions' },
-  { key: '/devlogs', icon: <FileTextOutlined />, label: 'DevLogs' },
-  { key: '/ideas', icon: <BulbOutlined />, label: 'Ideas' },
-  { key: '/kb', icon: <BookOutlined />, label: 'KB' },
   { key: '/events', icon: <ThunderboltOutlined />, label: 'Events' },
   { key: '/commands', icon: <CodeOutlined />, label: 'Commands' },
   { key: '/prompts', icon: <MessageOutlined />, label: 'Prompts' },
   { key: '/settings', icon: <SettingOutlined />, label: 'Settings' },
+];
+
+const menuItems = [
+  { key: '/', icon: <DashboardOutlined />, label: 'Dashboard' },
+  {
+    type: 'group' as const,
+    label: '工作流',
+    children: [
+      { key: '/goals', icon: <AimOutlined />, label: 'Goals' },
+      { key: '/ideas', icon: <BulbOutlined />, label: 'Ideas' },
+      { key: '/devlogs', icon: <FileTextOutlined />, label: 'DevLogs' },
+      { key: '/kb', icon: <BookOutlined />, label: 'Knowledge Base' },
+    ],
+  },
+  {
+    type: 'group' as const,
+    label: 'Bot 运行时',
+    children: [
+      { key: '/projects', icon: <FolderOutlined />, label: 'Projects' },
+      { key: '/channels', icon: <UnorderedListOutlined />, label: 'Channels' },
+      { key: '/sessions', icon: <HistoryOutlined />, label: 'Sessions' },
+      { key: '/events', icon: <ThunderboltOutlined />, label: 'Events' },
+    ],
+  },
+  {
+    type: 'group' as const,
+    label: '系统',
+    children: [
+      { key: '/commands', icon: <CodeOutlined />, label: 'Commands' },
+      { key: '/prompts', icon: <MessageOutlined />, label: 'Prompts' },
+      { key: '/settings', icon: <SettingOutlined />, label: 'Settings' },
+    ],
+  },
 ];
 
 export default function MainLayout() {
@@ -41,7 +74,7 @@ export default function MainLayout() {
   const navigate = useNavigate();
 
   // Match current path to menu key
-  const selectedKey = menuItems.find(
+  const selectedKey = leafItems.find(
     item => item.key !== '/' && location.pathname.startsWith(item.key)
   )?.key ?? '/';
 

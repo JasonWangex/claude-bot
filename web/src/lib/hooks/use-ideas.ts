@@ -12,7 +12,7 @@ export function useIdea(id: string | null) {
   return useSWR<Idea>(id ? `/api/ideas/${id}` : null, apiFetch);
 }
 
-export async function createIdea(data: { name: string; project: string; status?: IdeaStatus }) {
+export async function createIdea(data: { name: string; project: string; status?: IdeaStatus; body?: string }) {
   return apiPost<Idea>('/api/ideas', data);
 }
 
