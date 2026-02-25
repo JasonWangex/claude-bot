@@ -31,6 +31,7 @@ import {
 } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 import { downloadAndProcessImage } from '../utils/image-processor.js';
+import { getNotifyMention } from '../utils/env.js';
 
 // 工具名称映射
 const TOOL_NAMES: Record<string, string> = {
@@ -732,13 +733,13 @@ export class MessageHandler {
         if (mode === 'plan') {
           this.stateManager.setSessionPlanMode(guildId, channelId, true);
           doneMsgId = await mq.send(channelId,
-            `${sessionPrefix}@everyone Plan generated${summary}\n\n` +
+            `✅ ${sessionPrefix}${getNotifyMention()} Plan generated${summary}\n\n` +
             `Reply "ok" to compact context and execute.\n` +
             `Reply with anything else to continue discussing.`,
-            { priority: 'high', embedColor: EmbedColors.GREEN }
+            { priority: 'high' }
           );
         } else {
-          doneMsgId = await mq.send(channelId, `${sessionPrefix}@everyone Done${summary}${changesLink}`, { priority: 'high', embedColor: EmbedColors.GREEN });
+          doneMsgId = await mq.send(channelId, `✅ ${sessionPrefix}${getNotifyMention()} Done${summary}${changesLink}`, { priority: 'high' });
         }
         this.stateManager.setDoneSentAt(channelId);
 
@@ -890,7 +891,7 @@ export class MessageHandler {
     if (!q) return 'No question';
 
     if (!q.options?.length) {
-      await this.mq.send(channelId, `@everyone **${q.header || 'Question'}**\n\n${q.question}\n\nPlease type your reply directly.`, { priority: 'high' });
+      await this.mq.send(channelId, `${getNotifyMention()} **${q.header || 'Question'}**\n\n${q.question}\n\nPlease type your reply directly.`, { priority: 'high' });
       const { promise } = this.interactionRegistry.register(toolUseId, guildId, channelId);
       this.interactionRegistry.setWaitingCustomText(toolUseId, true);
       return promise;
@@ -928,7 +929,7 @@ export class MessageHandler {
       rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(buttons.slice(i, i + 5)));
     }
 
-    await this.mq.send(channelId, `@everyone\n${questionText}`, { components: rows as any, priority: 'high' });
+    await this.mq.send(channelId, `${getNotifyMention()}\n${questionText}`, { components: rows as any, priority: 'high' });
 
     return promise;
   }
@@ -946,7 +947,7 @@ export class MessageHandler {
       toolUseId, guildId, channelId, undefined, { noTimeout: true }
     );
 
-    let text = '@everyone **Plan ready, waiting for confirmation**\n';
+    let text = `${getNotifyMention()} **Plan ready, waiting for confirmation**\n`;
     if (input.allowedPrompts?.length) {
       text += '\nPermissions needed:\n';
       for (const p of input.allowedPrompts) {

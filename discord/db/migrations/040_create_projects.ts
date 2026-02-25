@@ -7,7 +7,7 @@ import type { Migration } from '../migrate.js';
  * 所有业务数据（goals/ideas/devlogs/kb）的 project 字段逻辑上引用此表的 name。
  */
 const migration: Migration = {
-  version: 39,
+  version: 40,
   name: 'create_projects',
 
   up(db) {

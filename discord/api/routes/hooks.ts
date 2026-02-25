@@ -13,6 +13,7 @@ import type { ApiDeps } from '../types.js';
 import { sendJson, readJsonBody } from '../middleware.js';
 import { logger } from '../../utils/logger.js';
 import { EmbedColors } from '../../bot/message-queue.js';
+import { getNotifyMention } from '../../utils/env.js';
 
 // Session 级别的并发锁（防止并发 Hook 事件导致状态覆盖）
 const sessionLocks = new Map<string, Promise<void>>();
@@ -202,7 +203,7 @@ async function handleNotification(
 
         const msgId = await deps.mq.send(
           channelId,
-          `@everyone 等待输入 ${usageText}`,
+          `${getNotifyMention()} 等待输入 ${usageText}`,
           { priority: 'high', embedColor: EmbedColors.BLUE }
         );
 
@@ -297,7 +298,7 @@ async function handleStop(
   }
 
   // 延迟 5 秒发送 Done（作为 handler 的 fallback）
-  const parts = ['@everyone Done'];
+  const parts = [`${getNotifyMention()} Done`];
   if (durationText) parts.push(durationText);
   if (tokenText) parts.push(tokenText);
   if (costText) parts.push(costText);

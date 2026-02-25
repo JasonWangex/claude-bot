@@ -36,7 +36,7 @@ export const devCommands = [
     )
     .addBooleanOption(opt =>
       opt.setName('worktree')
-        .setDescription('Create new worktree (default: true). Set false to reuse current worktree, only create new channel+session.')
+        .setDescription('Create new worktree (default: true). False to reuse current worktree.')
         .setRequired(false)
     ),
 
