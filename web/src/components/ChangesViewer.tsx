@@ -11,6 +11,26 @@ interface FileStat {
   del: number;
 }
 
+/** 与 handlers.ts 保持一致的客户端合并逻辑，处理历史数据中同一文件出现多次的情况 */
+function mergeFileChanges(changes: FileChange[]): FileChange[] {
+  const merged: FileChange[] = [];
+  for (const change of changes) {
+    const existing = merged.find(c => c.filePath === change.filePath);
+    if (existing) {
+      if (change.type === 'create') {
+        existing.type = 'create';
+        existing.content = change.content;
+        existing.patches = [...(existing.patches ?? []), ...(change.patches ?? [])];
+      } else {
+        existing.patches = [...(existing.patches ?? []), ...(change.patches ?? [])];
+      }
+    } else {
+      merged.push({ ...change });
+    }
+  }
+  return merged;
+}
+
 function computeStats(changes: FileChange[]): FileStat[] {
   return changes.map((c) => {
     const shortPath = c.filePath.replace(/^\/home\/[^/]+\//, '~/');
@@ -180,7 +200,8 @@ function FileSection({ change, stat, index }: { change: FileChange; stat: FileSt
 }
 
 export default function ChangesViewer({ fileChanges }: ChangesViewerProps) {
-  const stats = computeStats(fileChanges);
+  const merged = mergeFileChanges(fileChanges);
+  const stats = computeStats(merged);
   const totalAdd = stats.reduce((s, f) => s + f.add, 0);
   const totalDel = stats.reduce((s, f) => s + f.del, 0);
 
@@ -195,7 +216,7 @@ export default function ChangesViewer({ fileChanges }: ChangesViewerProps) {
         background: '#161b22',
       }}>
         <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 6 }}>
-          {fileChanges.length} file{fileChanges.length !== 1 ? 's' : ''} changed
+          {merged.length} file{merged.length !== 1 ? 's' : ''} changed
         </div>
         <div style={{ color: '#484f58', fontSize: 13 }}>
           <span style={{ color: '#3fb950' }}>+{totalAdd}</span>
@@ -206,7 +227,7 @@ export default function ChangesViewer({ fileChanges }: ChangesViewerProps) {
       </div>
 
       {/* 文件导航 */}
-      {fileChanges.length > 1 && (
+      {merged.length > 1 && (
         <div style={{
           padding: '12px 16px',
           border: '1px solid #30363d',
@@ -215,7 +236,7 @@ export default function ChangesViewer({ fileChanges }: ChangesViewerProps) {
           background: '#161b22',
         }}>
           {stats.map((st, i) => {
-            const icon = fileChanges[i].type === 'create' ? '🟢' : '🟡';
+            const icon = merged[i].type === 'create' ? '🟢' : '🟡';
             return (
               <a
                 key={i}
@@ -238,7 +259,7 @@ export default function ChangesViewer({ fileChanges }: ChangesViewerProps) {
       )}
 
       {/* 各文件 diff */}
-      {fileChanges.map((c, i) => (
+      {merged.map((c, i) => (
         <FileSection key={i} change={c} stat={stats[i]} index={i} />
       ))}
     </div>
