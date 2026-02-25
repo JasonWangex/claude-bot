@@ -1073,13 +1073,33 @@ export class DiscordBot {
     const generalChannelId = getGeneralChannelId();
     if (!targetGuildId || !generalChannelId) return;
 
-    const channelInfo = channelId ? `Channel <#${channelId}>` : 'General';
     const errMsg = (error?.message || String(error)).slice(0, 500);
-    const text = `**Error** [${escapeMarkdown(source)}]\n` +
-      `Source: ${channelInfo}\n` +
-      `\`\`\`\n${errMsg}\n\`\`\``;
+    const channelInfo = channelId ? `Channel <#${channelId}>` : 'General';
 
-    this.messageQueue.send(generalChannelId, text, { embedColor: EmbedColors.RED }).catch((e: any) => {
+    const doSend = async () => {
+      let isUnknown = false;
+      if (channelId) {
+        try {
+          await this.client.channels.fetch(channelId);
+        } catch {
+          isUnknown = true;
+        }
+      }
+
+      if (isUnknown) {
+        const text = `**Warning** [${escapeMarkdown(source)}]\n` +
+          `Source: ${channelInfo}\n` +
+          `\`\`\`\n${errMsg}\n\`\`\``;
+        await this.messageQueue.send(generalChannelId, text, { embedColor: EmbedColors.YELLOW });
+      } else {
+        const text = `**Error** [${escapeMarkdown(source)}]\n` +
+          `Source: ${channelInfo}\n` +
+          `\`\`\`\n${errMsg}\n\`\`\``;
+        await this.messageQueue.send(generalChannelId, text, { embedColor: EmbedColors.RED });
+      }
+    };
+
+    doSend().catch((e: any) => {
       logger.debug('sendErrorToGeneral send failed:', e.message);
     });
   }
