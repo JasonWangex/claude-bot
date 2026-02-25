@@ -61,13 +61,18 @@ export interface DevLog {
 /** Idea 状态 */
 export type IdeaStatus = 'Idea' | 'Processing' | 'Active' | 'Paused' | 'Done' | 'Dropped';
 
+/** Idea 类型 */
+export type IdeaType = 'manual' | 'todo';
+
 /** 想法记录 */
 export interface Idea {
   id: string;
   name: string;
   status: IdeaStatus;
+  type: IdeaType;            // 类型：手动输入或待处理事项
   project: string;
   date: string;              // ISO-8601 日期 (yyyy-MM-dd)
+  body: string | null;       // Markdown 正文内容
   createdAt: number;
   updatedAt: number;
 }

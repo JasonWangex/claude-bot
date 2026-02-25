@@ -187,10 +187,14 @@ export interface IdeaRow {
   name: string;
   /** 状态 */
   status: string;
+  /** 类型：'manual'（手动输入）| 'todo'（待处理事项） */
+  type: string;
   /** 项目名 */
   project: string;
   /** 日期 (ISO-8601 date) */
   date: string;
+  /** Markdown 正文内容 */
+  body: string | null;
   /** 创建时间 (Unix ms) */
   created_at: number;
   /** 更新时间 (Unix ms) */

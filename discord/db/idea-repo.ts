@@ -5,7 +5,7 @@
  */
 
 import type Database from 'better-sqlite3';
-import type { IIdeaRepo, Idea, IdeaStatus } from '../types/repository.js';
+import type { IIdeaRepo, Idea, IdeaStatus, IdeaType } from '../types/repository.js';
 import type { IdeaRow } from '../types/db.js';
 
 /** IdeaRow → Idea */
@@ -14,8 +14,10 @@ function rowToIdea(row: IdeaRow): Idea {
     id: row.id,
     name: row.name,
     status: row.status as IdeaStatus,
+    type: (row.type ?? 'manual') as IdeaType,
     project: row.project,
     date: row.date,
+    body: row.body ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -37,13 +39,15 @@ export class IdeaRepository implements IIdeaRepo {
       get: db.prepare('SELECT * FROM ideas WHERE id = ?'),
       getAll: db.prepare('SELECT * FROM ideas ORDER BY updated_at DESC'),
       upsert: db.prepare(`
-        INSERT INTO ideas (id, name, status, project, date, created_at, updated_at)
-        VALUES (@id, @name, @status, @project, @date, @created_at, @updated_at)
+        INSERT INTO ideas (id, name, status, type, project, date, body, created_at, updated_at)
+        VALUES (@id, @name, @status, @type, @project, @date, @body, @created_at, @updated_at)
         ON CONFLICT(id) DO UPDATE SET
           name = excluded.name,
           status = excluded.status,
+          type = excluded.type,
           project = excluded.project,
           date = excluded.date,
+          body = excluded.body,
           updated_at = excluded.updated_at
       `),
       delete: db.prepare('DELETE FROM ideas WHERE id = ?'),
@@ -68,8 +72,10 @@ export class IdeaRepository implements IIdeaRepo {
       id: idea.id,
       name: idea.name,
       status: idea.status,
+      type: idea.type,
       project: idea.project,
       date: idea.date,
+      body: idea.body ?? null,
       created_at: idea.createdAt,
       updated_at: idea.updatedAt,
     });
