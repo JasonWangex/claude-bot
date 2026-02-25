@@ -15,6 +15,7 @@ import { StateManager } from './state.js';
 import { InteractionRegistry } from './interaction-registry.js';
 import { ClaudeClient } from '../claude/client.js';
 import { AuthErrorInterceptor } from '../claude/auth-error-interceptor.js';
+import { ApiErrorInterceptor } from '../claude/api-error-interceptor.js';
 import { MessageQueue, EmbedColors } from './message-queue.js';
 import { escapeMarkdown } from './message-utils.js';
 import { getDb, SessionChangesRepo } from '../db/index.js';
@@ -54,6 +55,7 @@ export class MessageHandler {
   private mq: MessageQueue;
   private errorReporter?: (guildId: string | undefined, channelId: string | undefined, source: string, error: any) => void;
   private authErrorInterceptor?: AuthErrorInterceptor;
+  private apiErrorInterceptor?: ApiErrorInterceptor;
 
   constructor(
     stateManager: StateManager,
@@ -73,6 +75,10 @@ export class MessageHandler {
 
   setAuthErrorInterceptor(interceptor: AuthErrorInterceptor): void {
     this.authErrorInterceptor = interceptor;
+  }
+
+  setApiErrorInterceptor(interceptor: ApiErrorInterceptor): void {
+    this.apiErrorInterceptor = interceptor;
   }
 
   // Plan mode 确认关键词
@@ -644,8 +650,9 @@ export class MessageHandler {
 
       this.stateManager.setSessionClaudeId(guildId, channelId, response.sessionId);
 
-      // 成功响应：重置该 channel 的 auth error 连续计数
+      // 成功响应：重置该 channel 的连续错误计数
       this.authErrorInterceptor?.onSuccess(guildId, channelId);
+      this.apiErrorInterceptor?.onSuccess(guildId, channelId);
 
       this.stateManager.updateSessionMessage(guildId, channelId, response.result, 'assistant');
       logger.info(`[${session.name}] Response length:`, response.result.length);
@@ -861,6 +868,20 @@ export class MessageHandler {
         // re-throw 让调用方（如 executeTaskPipeline）感知到 AUTH_ERROR，
         // 避免 orchestrator 把未完成的任务错误标记为 completed
         throw error;
+      }
+
+      if (error instanceof ClaudeExecutionError && error.errorType === ClaudeErrorType.API_ERROR) {
+        logger.warn(`[${session.name}] API error (500), triggering interceptor`);
+        this.stateManager.closeActiveSessionForChannel(channelId);
+        const willRetry = this.apiErrorInterceptor?.handleApiError(guildId, channelId) ?? false;
+        if (willRetry) {
+          if (!isHidden && progressMsgId) {
+            mq.edit(channelId, progressMsgId, 'API Error (500)\nAuto-recovering...', { embedColor: EmbedColors.YELLOW });
+          }
+          // re-throw 让调用方保持任务为 running 状态，等待拦截器重试
+          throw error;
+        }
+        // 超出最大重试次数：落入下方正常错误处理，任务将被标记为失败
       }
 
       if (!isHidden) await mq.drain(5000);

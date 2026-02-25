@@ -492,8 +492,11 @@ export class GoalOrchestrator {
         logger.info(`[Orchestrator] Task ${taskId} completed`);
         await this.onTaskCompleted(goalId, taskId, usage);
       } catch (err: any) {
-        if (err instanceof ClaudeExecutionError && err.errorType === ClaudeErrorType.AUTH_ERROR) {
-          logger.warn(`[Orchestrator] Task ${taskId} got AUTH_ERROR in background, keeping task running for interceptor retry`);
+        if (err instanceof ClaudeExecutionError && (
+          err.errorType === ClaudeErrorType.AUTH_ERROR ||
+          err.errorType === ClaudeErrorType.API_ERROR
+        )) {
+          logger.warn(`[Orchestrator] Task ${taskId} got ${err.errorType} in background, keeping task running for interceptor retry`);
           return;
         }
         logger.error(`[Orchestrator] Task ${taskId} failed:`, err);

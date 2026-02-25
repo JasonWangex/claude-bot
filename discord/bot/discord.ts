@@ -41,6 +41,7 @@ import { SyncCursorRepository } from '../db/repo/sync-cursor-repo.js';
 import { ChannelService } from '../services/channel-service.js';
 import { getAuthorizedGuildId, getGeneralChannelId } from '../utils/env.js';
 import { AuthErrorInterceptor } from '../claude/auth-error-interceptor.js';
+import { ApiErrorInterceptor } from '../claude/api-error-interceptor.js';
 import { escapeMarkdown } from './message-utils.js';
 import { registerSlashCommands, routeCommand } from './commands/index.js';
 import { SessionSyncService } from '../sync/session-sync-service.js';
@@ -1039,6 +1040,20 @@ export class DiscordBot {
       },
     );
     this.messageHandler.setAuthErrorInterceptor(authErrorInterceptor);
+
+    // 初始化 API Error 拦截器（500 服务端错误，退避重试最多 5 次）
+    const apiErrorInterceptor = new ApiErrorInterceptor(
+      // onRetry：向受影响的 channel 发送 "continue"
+      (guildId, channelId) => {
+        this.messageHandler.handleBackgroundChat(guildId, channelId, 'continue').catch((err: any) => {
+          logger.error('[ApiErrorInterceptor] Retry "continue" failed:', err);
+          if (err instanceof ClaudeExecutionError && err.errorType === ClaudeErrorType.API_ERROR) return;
+          // 其他错误（如 session 已消失）：重置计数避免 Map 泄漏
+          apiErrorInterceptor.onSuccess(guildId, channelId);
+        });
+      },
+    );
+    this.messageHandler.setApiErrorInterceptor(apiErrorInterceptor);
 
     // 启动 API 服务器
     if (this.config.apiPort > 0) {

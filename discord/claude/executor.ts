@@ -828,6 +828,15 @@ export class ClaudeExecutor {
       return ClaudeErrorType.AUTH_ERROR;
     }
 
+    // 500 服务端错误 → 由上层拦截器处理退避重试
+    if (
+      lower.includes('"api_error"') ||
+      lower.includes('internal server error') ||
+      (lower.includes('api error') && lower.includes('500'))
+    ) {
+      return ClaudeErrorType.API_ERROR;
+    }
+
     // CLI 不可用 → 不重试
     if (lower.includes('enoent') || lower.includes('not authenticated') || lower.includes('spawn')) {
       return ClaudeErrorType.FATAL;
