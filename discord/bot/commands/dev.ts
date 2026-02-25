@@ -33,6 +33,11 @@ export const devCommands = [
       opt.setName('model').setDescription('Claude model to use')
         .addChoices(...MODEL_OPTIONS.map(m => ({ name: m.label, value: m.id })))
         .setRequired(false)
+    )
+    .addBooleanOption(opt =>
+      opt.setName('worktree')
+        .setDescription('Create new worktree (default: true). Set false to reuse current worktree, only create new channel+session.')
+        .setRequired(false)
     ),
 
   new SlashCommandBuilder()
@@ -86,6 +91,7 @@ async function handleQdev(
   const channelId = interaction.channelId;
   const description = interaction.options.getString('description', true);
   const model = interaction.options.getString('model') || undefined;
+  const worktree = interaction.options.getBoolean('worktree') ?? true;
   const { stateManager, client, config, messageHandler } = deps;
 
   const session = stateManager.getSession(guildId, channelId);
@@ -118,6 +124,7 @@ async function handleQdev(
       description,
       model,
       categoryId,
+      worktree,
     }, {
       stateManager,
       client,
@@ -130,13 +137,14 @@ async function handleQdev(
       logger.error('qdev background chat failed:', err);
     });
 
-    await interaction.editReply(
-      `**Task created**\n\n` +
-      `Branch: \`${result.branchName}\`\n` +
-      `Thread: <#${result.channelId}>\n` +
-      `Working directory: \`${result.cwd}\`\n\n` +
-      `Claude is processing the task in the new thread...`
-    );
+    const replyLines = ['**Task created**\n'];
+    if (worktree && result.branchName) {
+      replyLines.push(`Branch: \`${result.branchName}\``);
+    }
+    replyLines.push(`Thread: <#${result.channelId}>`);
+    replyLines.push(`Working directory: \`${result.cwd}\``);
+    replyLines.push('\nClaude is processing the task in the new thread...');
+    await interaction.editReply(replyLines.join('\n'));
   } catch (error: any) {
     logger.error('qdev failed:', error);
     await interaction.editReply(`qdev failed: ${error.message}`);

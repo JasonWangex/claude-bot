@@ -27,7 +27,9 @@ export interface ForkTaskResult {
 }
 
 /**
- * 从指定 channel 创建 fork：创建 worktree → 创建 Text Channel → 创建 session → 设置 fork 关系
+ * 从指定 channel 创建 fork：
+ * - createNewWorktree=true（默认）：创建 worktree → 创建 Text Channel → 创建 session → 设置 fork 关系
+ * - createNewWorktree=false：仅创建 Text Channel + session，复用父 channel 的 cwd（不创建 git worktree）
  */
 export async function forkTaskCore(
   guildId: string,
@@ -37,6 +39,7 @@ export async function forkTaskCore(
   deps: ForkTaskDeps,
   threadTitle?: string,
   baseBranch?: string,
+  createNewWorktree: boolean = true,
 ): Promise<ForkTaskResult> {
   const { stateManager, client, worktreesDir } = deps;
 
@@ -45,22 +48,27 @@ export async function forkTaskCore(
     throw new Error('Parent thread not found');
   }
 
-  const gitRepo = await isGitRepo(session.cwd);
-  if (!gitRepo) {
-    throw new Error(`${session.cwd} is not a git repository`);
-  }
-
-  // 先验证 Category 存在，再创建 worktree，避免 category 不存在时 worktree 泄漏
+  // 先验证 Category 存在，避免后续操作泄漏
   const category = await client.channels.fetch(categoryId);
   if (!category || category.type !== ChannelType.GuildCategory) {
     throw new Error(`Category ${categoryId} not found or not a category`);
   }
 
-  const repoName = await getRepoName(session.cwd);
-  const dirSafeBranch = branchName.replaceAll('/', '-');
-  const worktreeDir = resolve(worktreesDir, `${repoName}-${dirSafeBranch}`);
-  await mkdir(worktreesDir, { recursive: true });
-  await createWorktree(session.cwd, worktreeDir, branchName, baseBranch);
+  let worktreeDir: string;
+  if (createNewWorktree) {
+    const gitRepo = await isGitRepo(session.cwd);
+    if (!gitRepo) {
+      throw new Error(`${session.cwd} is not a git repository`);
+    }
+    const repoName = await getRepoName(session.cwd);
+    const dirSafeBranch = branchName.replaceAll('/', '-');
+    worktreeDir = resolve(worktreesDir, `${repoName}-${dirSafeBranch}`);
+    await mkdir(worktreesDir, { recursive: true });
+    await createWorktree(session.cwd, worktreeDir, branchName, baseBranch);
+  } else {
+    // 不创建新 worktree，复用父 channel 的工作目录
+    worktreeDir = session.cwd;
+  }
 
   const newChannelName = threadTitle || `${session.name}/${branchName}`;
 
@@ -75,16 +83,21 @@ export async function forkTaskCore(
     });
 
     // 发送初始消息
+    const embedDesc = createNewWorktree
+      ? `[fork] Task created: \`${branchName}\`\nWorking directory: \`${worktreeDir}\``
+      : `[fork] Session created (shared worktree)\nWorking directory: \`${worktreeDir}\``;
     const embed = new EmbedBuilder()
       .setColor(EmbedColors.PURPLE)
-      .setDescription(`[fork] Task created: \`${branchName}\`\nWorking directory: \`${worktreeDir}\``.slice(0, 4096));
+      .setDescription(embedDesc.slice(0, 4096));
     await textChannel.send({ embeds: [embed] });
   } catch (err) {
-    // 回滚 worktree
-    logger.warn(`Channel creation failed, rolling back worktree: ${worktreeDir}`);
-    await removeWorktree(session.cwd, worktreeDir).catch(e =>
-      logger.error('Worktree rollback failed:', e)
-    );
+    if (createNewWorktree) {
+      // 回滚 worktree
+      logger.warn(`Channel creation failed, rolling back worktree: ${worktreeDir}`);
+      await removeWorktree(session.cwd, worktreeDir).catch(e =>
+        logger.error('Worktree rollback failed:', e)
+      );
+    }
     throw err;
   }
 
@@ -93,13 +106,16 @@ export async function forkTaskCore(
     name: newChannelName,
     cwd: worktreeDir,
   });
-  stateManager.setSessionForkInfo(guildId, newChannelId, parentChannelId, branchName);
+  stateManager.setSessionForkInfo(
+    guildId, newChannelId, parentChannelId,
+    createNewWorktree ? branchName : undefined,
+  );
 
   // 同步到 channels 表
   if (deps.channelService) {
     await deps.channelService.ensureChannel(newChannelId, guildId, newChannelName, worktreeDir, {
       parentChannelId: parentChannelId,
-      worktreeBranch: branchName,
+      worktreeBranch: createNewWorktree ? branchName : undefined,
     });
   }
 
