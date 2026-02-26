@@ -299,13 +299,15 @@ Responsibilities:
     name: 'Per-task 审核',
     description: '任务完成后在独立 audit sub-session 中执行的审核请求（已在 goal worktree 中）',
     template: `## Review: {{TASK_LABEL}}
-Description: {{TASK_DESCRIPTION}}
-Branch: \`{{BRANCH_NAME}}\`
+**Description:** {{TASK_DESCRIPTION}}
+**Branch:** \`{{BRANCH_NAME}}\`
 \`\`\`
 {{DIFF_STATS}}
 \`\`\`
 
-Run \`/code-audit\` on the branch changes, then report via \`bot_task_event\`:
+If there are code changes, run \`/code-audit\`. If this is a research/exploration task (no diff), review the logical completeness and quality of the findings instead.
+
+Report result via \`bot_task_event\`:
 - \`task_id\`: "{{TASK_ID}}"
 - \`event_type\`: "review.task_result"
 - \`payload\`: \`{ "verdict": "pass"|"fail", "summary": "...", "issues": [] }\``,
