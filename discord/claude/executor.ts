@@ -529,10 +529,16 @@ export class ClaudeExecutor {
           ));
         } else if (resultEvent) {
           // 检查 result 内容是否本身是错误（如 403 认证失败会以 result 事件返回）
-          const resultText = resultEvent.result || '';
+          // is_error=true 时优先从 errors[] 取错误文本（result 字段可能为空）
+          const resultText = resultEvent.is_error
+            ? (resultEvent.errors?.[0] || resultEvent.result || 'Unknown error')
+            : (resultEvent.result || '');
           const resultErrorType = this.classifyError(resultText);
           if (resultErrorType !== ClaudeErrorType.RECOVERABLE) {
             reject(new ClaudeExecutionError(resultText, resultErrorType));
+          } else if (resultEvent.is_error) {
+            // is_error=true 但无法识别错误类型 → 清 session 重试，避免存入无效 session ID
+            reject(new ClaudeExecutionError(resultText, ClaudeErrorType.SESSION_RECOVERABLE));
           } else {
             // 从 modelUsage 中提取 contextWindow
             let contextWindow: number | undefined;
@@ -815,8 +821,12 @@ export class ClaudeExecutor {
   private classifyError(message: string): ClaudeErrorType {
     const lower = message.toLowerCase();
 
-    // 上下文溢出 → 清除 session 重试
-    if (lower.includes('prompt is too long') || lower.includes('context_length_exceeded')) {
+    // 上下文溢出 / resume 目标 session 不存在 → 清除 session 重试
+    if (
+      lower.includes('prompt is too long') ||
+      lower.includes('context_length_exceeded') ||
+      lower.includes('no conversation found')
+    ) {
       return ClaudeErrorType.SESSION_RECOVERABLE;
     }
 

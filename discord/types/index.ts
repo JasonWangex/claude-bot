@@ -115,6 +115,7 @@ export interface StreamEvent {
   // result event
   result?: string;
   is_error?: boolean;
+  errors?: string[];
   duration_ms?: number;
   num_turns?: number;
   total_cost_usd?: number;
