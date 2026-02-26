@@ -105,7 +105,7 @@ export class DiscordBot {
     // 初始化 PricingService + SessionSyncService + UsageReconciler
     this.pricingService = new PricingService();
     const claudeProjectsDir = join(process.env.HOME || '/tmp', '.claude', 'projects');
-    this.sessionSyncService = new SessionSyncService(db, claudeProjectsDir, this.pricingService);
+    this.sessionSyncService = new SessionSyncService(db, claudeProjectsDir, this.pricingService, linkRepo);
     this.sessionSyncService.setPromptService(promptService);
     this.usageReconciler = new UsageReconciler(db, claudeProjectsDir, this.pricingService);
 

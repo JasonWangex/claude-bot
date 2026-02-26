@@ -101,19 +101,52 @@ async function handleSessionEventLocked(
     return;
   }
 
-  const session = await claudeSessionRepo.get(session_id);
+  // 通过 linkRepo 验证 session 是否由 Discord bot 管理。
+  // channel_session_links 中的 link 仅由 bot executor 创建（syncSession + setSessionClaudeId），
+  // 外部/手动 Claude 会话可能因 sessionSyncService 的 CWD 扫描而出现在 claude_sessions 中，
+  // 但不会有 link，因此在此过滤掉，防止向无关 channel 乱发消息。
+  const linkRepo = deps.stateManager['linkRepo'];
+  let channelId: string | undefined;
+
+  if (linkRepo) {
+    const link = linkRepo.getActiveBySession(session_id);
+    if (link) {
+      channelId = link.channelId;
+    } else {
+      // 没有 link：可能是 hidden session（by design 不建 link）或外部会话
+      const session = claudeSessionRepo.get(session_id);
+      if (!session) {
+        logger.debug(`[Hook] Session ${session_id.slice(0, 8)} not found, skipping`);
+        return;
+      }
+      if (session.hidden) {
+        // hidden session 是 bot 管理的后台任务，有 channelId 但无 link
+        channelId = session.channelId;
+      } else {
+        // 非 hidden、无 link = 外部会话，不处理
+        logger.debug(`[Hook] Session ${session_id.slice(0, 8)} has no active link, skipping (external session)`);
+        return;
+      }
+    }
+  }
+
+  const session = claudeSessionRepo.get(session_id);
   if (!session) {
     logger.warn(`[Hook] Session not found for claude_session_id: ${session_id}`);
     return;
   }
 
-  const channelId = session.channelId;
+  // linkRepo 不可用时 fallback 到 session.channelId（向下兼容）
+  if (!channelId) {
+    channelId = session.channelId;
+  }
+
   if (!channelId) {
     logger.warn(`[Hook] Session ${session.claudeSessionId} has no channelId, skipping`);
     return;
   }
 
-    // 2. 根据 hook_event_name 处理
+  // 2. 根据 hook_event_name 处理
   switch (hook_event_name) {
     case 'SessionStart':
       await handleSessionStart(session, deps);

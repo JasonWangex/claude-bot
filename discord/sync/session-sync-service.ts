@@ -2,8 +2,8 @@ import type Database from 'better-sqlite3';
 import { closeSync, createReadStream, openSync, readdirSync, readSync, statSync } from 'fs';
 import { basename, dirname, join } from 'path';
 import { createInterface } from 'readline';
-import { ChannelRepository } from '../db/repo/channel-repo.js';
 import { ClaudeSessionRepository } from '../db/repo/claude-session-repo.js';
+import type { ChannelSessionLinkRepository } from '../db/repo/channel-session-link-repo.js';
 import { SyncCursorRepository } from '../db/repo/sync-cursor-repo.js';
 import type { PromptConfigService } from '../services/prompt-config-service.js';
 import type { ClaudeSession } from '../types/index.js';
@@ -52,9 +52,9 @@ export class SessionSyncService {
   private scanTimer: NodeJS.Timeout | null = null;
   private claudeSessionRepo: ClaudeSessionRepository;
   private syncCursorRepo: SyncCursorRepository;
-  private channelRepo: ChannelRepository;
   private promptService: PromptConfigService | null = null;
   private pricingService: PricingService | null = null;
+  private linkRepo: ChannelSessionLinkRepository | null = null;
   /** 序列化同一 claudeSessionId 的并发 syncSession 调用，避免重复 INSERT */
   private syncSessionLocks: Map<string, Promise<void>> = new Map();
   /** 全量覆盖写 usage 的预编译 SQL */
@@ -64,11 +64,12 @@ export class SessionSyncService {
     private db: Database.Database,
     private claudeProjectsDir: string,  // 默认 ~/.claude/projects
     pricingService?: PricingService,
+    linkRepo?: ChannelSessionLinkRepository,
   ) {
     this.claudeSessionRepo = new ClaudeSessionRepository(db);
     this.syncCursorRepo = new SyncCursorRepository(db);
-    this.channelRepo = new ChannelRepository(db);
     this.pricingService = pricingService ?? null;
+    this.linkRepo = linkRepo ?? null;
 
     this.usageOverwriteStmt = db.prepare(`
       UPDATE claude_sessions SET
@@ -159,6 +160,13 @@ export class SessionSyncService {
         };
         await this.claudeSessionRepo.save(newSession);
         logger.info(`Claude session created: ${claudeSessionId.slice(0, 8)}... (channel: ${channelId || 'none'})`);
+
+        // 由 executor 回调创建的 session（有 channelId）立即建立 link，
+        // 确保 Stop hook 到达时能通过 linkRepo 找到对应 channel。
+        // scan 路径（processJsonlFileSync）不传 channelId 到此函数，不会创建 link。
+        if (channelId && this.linkRepo) {
+          this.linkRepo.createLink(channelId, claudeSessionId);
+        }
       } else {
         // 更新现有记录（仅在有新信息时）
         let updated = false;
@@ -171,6 +179,10 @@ export class SessionSyncService {
         if (channelId && channelId !== existing.channelId) {
           existing.channelId = channelId;
           updated = true;
+          // channelId 更新时也补建 link
+          if (this.linkRepo) {
+            this.linkRepo.createLink(channelId, claudeSessionId);
+          }
         }
 
         // 补充缺失的 context
@@ -188,6 +200,11 @@ export class SessionSyncService {
         if (updated) {
           await this.claudeSessionRepo.save(existing);
           logger.info(`Claude session updated: ${claudeSessionId.slice(0, 8)}...`);
+        }
+
+        // 已存在的 session 由 executor 确认 channelId 时补建 link（channelId 相同时也确保 link 存在）
+        if (channelId && channelId === existing.channelId && this.linkRepo) {
+          this.linkRepo.createLink(channelId, claudeSessionId);
         }
       }
     } catch (e: any) {
@@ -313,14 +330,6 @@ export class SessionSyncService {
       const stmt = this.db.prepare('SELECT * FROM claude_sessions WHERE claude_session_id = ?');
       const existingRow = stmt.get(claudeSessionId) as any;
 
-      // 查找对应的 channel（通过 cwd 匹配）
-      let channelId: string | undefined;
-      if (metadata.cwd) {
-        const channels = this.channelRepo.loadAll();
-        const matchedChannel = channels.find(ch => ch.cwd === metadata.cwd);
-        channelId = matchedChannel?.id;
-      }
-
       // created_at: 优先用事件时间戳，fallback 用文件 birthtime
       const createdAt = metadata.timestamp
         ? new Date(metadata.timestamp).getTime()
@@ -329,21 +338,17 @@ export class SessionSyncService {
       const projectPath = projectPathFromJsonl(jsonlPath);
 
       if (!existingRow) {
-        // 创建新记录
-        const ctx = resolveSessionContext(this.db, channelId);
+        // 创建新记录（scan 路径不通过 CWD 匹配推断 channelId，
+        // channelId 只由 executor 回调的 syncSession 设置）
         const newSession: ClaudeSession = {
           claudeSessionId,
-          channelId,
           model: metadata.model,
           planMode: false,
           status: 'active',
           createdAt,
           lastActivityAt: fileMtimeMs,
-          purpose: channelId ? 'channel' : 'temp',
-          taskId: ctx.taskId ?? undefined,
-          goalId: ctx.goalId ?? undefined,
-          cwd: metadata.cwd ?? ctx.cwd ?? undefined,
-          gitBranch: ctx.gitBranch ?? undefined,
+          purpose: 'temp',
+          cwd: metadata.cwd ?? undefined,
           projectPath,
         };
         this.claudeSessionRepo.save(newSession);
@@ -382,12 +387,6 @@ export class SessionSyncService {
           updated = true;
         }
 
-        // 仅在 channel 未绑定时才用 cwd 匹配结果填充，不覆盖已有的正确绑定
-        if (channelId && !existing.channelId) {
-          existing.channelId = channelId;
-          updated = true;
-        }
-
         // 更新 lastActivityAt（文件 mtime 可能比 DB 记录更新）
         if (!existing.lastActivityAt || fileMtimeMs > existing.lastActivityAt) {
           existing.lastActivityAt = fileMtimeMs;
@@ -400,9 +399,9 @@ export class SessionSyncService {
           updated = true;
         }
 
-        // 补充缺失的 context
-        if (!existing.taskId && (channelId || existing.channelId)) {
-          const ctx = resolveSessionContext(this.db, channelId || existing.channelId);
+        // 补充缺失的 context（仅当 channelId 已由 executor 设置时才查）
+        if (!existing.taskId && existing.channelId) {
+          const ctx = resolveSessionContext(this.db, existing.channelId);
           if (ctx.taskId) {
             existing.taskId = ctx.taskId;
             existing.goalId = ctx.goalId ?? undefined;
