@@ -7,6 +7,7 @@ import {
 import { Link } from 'react-router';
 import { EditOutlined } from '@ant-design/icons';
 import { GoalDAG } from '@/components/goals/GoalDAG';
+import MarkdownRenderer from '@/components/MarkdownRenderer';
 import { TaskPanel } from '@/components/goals/TaskPanel';
 import { DriveControls } from '@/components/goals/DriveControls';
 import { GoalStatusBadge, taskStatusLabels } from '@/components/goals/StatusBadge';
@@ -167,7 +168,7 @@ export default function GoalDetail() {
       label: '详情',
       children: (
         <Card>
-          <pre style={{ whiteSpace: 'pre-wrap', fontSize: 14, margin: 0 }}>{goal.body}</pre>
+          <MarkdownRenderer content={goal.body} />
         </Card>
       ),
     }] : []),
