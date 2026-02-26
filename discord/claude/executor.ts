@@ -536,8 +536,11 @@ export class ClaudeExecutor {
           const resultErrorType = this.classifyError(resultText);
           if (resultErrorType !== ClaudeErrorType.RECOVERABLE) {
             reject(new ClaudeExecutionError(resultText, resultErrorType));
-          } else if (resultEvent.is_error) {
-            // is_error=true 但无法识别错误类型 → 清 session 重试，避免存入无效 session ID
+          } else if (resultEvent.is_error && (resultEvent.errors?.length || !resultEvent.result?.trim())) {
+            // is_error=true 且 errors[] 有内容（CLI 明确报错），或 result 为空（无有效响应）
+            // → 清 session 重试，避免存入无效 session ID
+            // 注意：若 errors[] 为空且 result 有内容，说明 is_error 可能是 CLI 误标记，
+            // 此时应 resolve 而非 reject，否则实际响应内容会以错误格式发送，导致重复消息。
             reject(new ClaudeExecutionError(resultText, ClaudeErrorType.SESSION_RECOVERABLE));
           } else {
             // 从 modelUsage 中提取 contextWindow
