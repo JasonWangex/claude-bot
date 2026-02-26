@@ -195,6 +195,20 @@ export class MessageHandler {
       }
     }
 
+    // Claude 正在处理时，直接注入 stdin，无需排队
+    const lockKey = StateManager.channelLockKey(guildId, channelId);
+    if (this.claudeClient.isRunning(lockKey)) {
+      const injected = this.claudeClient.injectMessage(lockKey, text);
+      if (injected) {
+        logger.info(`[${session.name}] Message injected to running Claude process`);
+        await this.mq.send(channelId,
+          '↪ Claude is working — your message will be processed next',
+          { silent: true, priority: 'high' });
+        return;
+      }
+      // 注入失败（进程刚退出）→ 继续正常流程
+    }
+
     // Plan mode 确认
     if (session.planMode) {
       if (MessageHandler.PLAN_CONFIRM_WORDS.test(text.trim())) {
@@ -235,6 +249,20 @@ export class MessageHandler {
       this.mq.delete(channelId, processingMsgId);
 
       const caption = message.content?.trim() || 'Please look at this image';
+
+      // Claude 正在处理时，直接注入 stdin
+      const lockKey = StateManager.channelLockKey(guildId, channelId);
+      if (this.claudeClient.isRunning(lockKey)) {
+        const injected = this.claudeClient.injectMessage(lockKey, caption, [image]);
+        if (injected) {
+          logger.info(`[${session.name}] Image injected to running Claude process`);
+          await this.mq.send(channelId,
+            '↪ Claude is working — your image will be processed next',
+            { silent: true, priority: 'high' });
+          return;
+        }
+      }
+
       await this.sendChatInternal(guildId, session, caption, undefined, [image]);
     } catch (error: any) {
       logger.error(`[${session.name}] Photo processing error:`, error);

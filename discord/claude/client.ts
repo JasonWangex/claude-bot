@@ -195,6 +195,23 @@ export class ClaudeClient {
     return this.executor.cancelQueued(lockKey);
   }
 
+  /**
+   * 向正在运行的进程注入消息（直接写入 stdin，无需排队）
+   */
+  injectMessage(lockKey: string, text: string, images?: import('../types/index.js').ImageAttachment[]): boolean {
+    let content: string | Array<Record<string, unknown>> = text;
+    if (images?.length) {
+      content = [
+        ...images.map(img => ({
+          type: 'image',
+          source: { type: 'base64', media_type: img.mediaType, data: img.data },
+        })),
+        { type: 'text', text },
+      ];
+    }
+    return this.executor.injectMessage(lockKey, content);
+  }
+
   updateProgressInfo(lockKey: string, text: string, toolUseCount: number): void {
     this.executor.updateProgressInfo(lockKey, text, toolUseCount);
   }

@@ -30,6 +30,8 @@ interface ActiveProcess {
   cwd?: string;
   lastProgressText?: string;
   toolUseCount?: number;
+  stdin?: import('stream').Writable;  // kept open for multi-turn injection
+  pendingTurns?: number;              // msgs written to stdin - results received
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -172,6 +174,8 @@ export class ClaudeExecutor {
         outputFile, stderrFile,
         guildId: options.guildId, channelId: options.channelId,
         cwd: options.cwd,
+        stdin: child.stdin ?? undefined,
+        pendingTurns: 1,
       });
 
       // 通过 stdin 写入 stream-json 格式的用户消息
@@ -195,7 +199,8 @@ export class ClaudeExecutor {
       if (!child.stdin) {
         throw new ClaudeExecutionError('CLI stdin 不可用', ClaudeErrorType.FATAL);
       }
-      child.stdin.write(input + '\n', 'utf8', () => child.stdin!.end());
+      // stdin 保持开放，等所有 pendingTurns 都收到 result 后再关闭
+      child.stdin.write(input + '\n', 'utf8');
       child.stdin.on('error', () => {}); // 进程提前退出时忽略 pipe 错误
 
       return await this.tailOutputFile(outputFile, stderrFile, child, lockKey, flags, onProgress);
@@ -394,6 +399,22 @@ export class ClaudeExecutor {
               const postTokens = event.usage ? event.usage.input_tokens + (event.usage.cache_read_input_tokens || 0) + (event.usage.cache_creation_input_tokens || 0) : '?';
               const compactInfo = compactPreTokens ? `, compact: ${compactPreTokens} → ${postTokens}` : '';
               logger.debug(`Result: ${event.num_turns} turns, ${event.duration_ms}ms${compactInfo}`);
+
+              // 每收到一个 result，对应一条用户消息处理完毕
+              // pendingTurns 归零时关闭 stdin → Claude 收到 EOF → 进程退出
+              if (active?.stdin && !flags.killed && !flags.aborted) {
+                const remaining = (active.pendingTurns ?? 1) - 1;
+                active.pendingTurns = remaining;
+                logger.debug(`pendingTurns → ${remaining}`);
+                if (remaining <= 0) {
+                  // setImmediate：让同一 tick 内可能到来的 injectMessage() 先执行
+                  setImmediate(() => {
+                    if ((active.pendingTurns ?? 0) <= 0) {
+                      try { active.stdin?.end(); } catch {}
+                    }
+                  });
+                }
+              }
             }
           }
         } catch (e) {
@@ -448,6 +469,8 @@ export class ClaudeExecutor {
         if (stallTimer) clearInterval(stallTimer);
         if (active?.timeoutHandle) clearTimeout(active.timeoutHandle);
         if (active?.killTimer) clearTimeout(active.killTimer);
+        // 进程已退出，确保 stdin 资源释放
+        if (active?.stdin) { try { active.stdin.destroy(); } catch {} }
 
         // 读取最终数据
         readNewData();
@@ -669,7 +692,9 @@ export class ClaudeExecutor {
       const active = this.activeProcesses.get(lockKey);
       if (active) {
         active.flags.aborted = true;
+        active.pendingTurns = 0;
         if (active.timeoutHandle) clearTimeout(active.timeoutHandle);
+        if (active.stdin) { try { active.stdin.destroy(); } catch {} }
         active.child.kill('SIGTERM');
         active.killTimer = setTimeout(() => {
           if (active.child.exitCode === null) active.child.kill('SIGKILL');
@@ -707,7 +732,9 @@ export class ClaudeExecutor {
         }
 
         active.flags.aborted = true;
+        active.pendingTurns = 0;
         if (active.timeoutHandle) clearTimeout(active.timeoutHandle);
+        if (active.stdin) { try { active.stdin.destroy(); } catch {} }
         active.child.kill('SIGTERM');
         active.killTimer = setTimeout(() => {
           if (active.child.exitCode === null) active.child.kill('SIGKILL');
@@ -717,6 +744,35 @@ export class ClaudeExecutor {
     }
 
     return { aborted, queueLength };
+  }
+
+  /**
+   * 向正在运行的 Claude 进程注入新消息（写入 stdin）
+   * 无需排队，Claude 处理完当前消息后立即读取下一条
+   * pendingTurns++ 确保收到对应 result 后才关闭 stdin
+   */
+  injectMessage(lockKey: string, content: string | Array<Record<string, unknown>>): boolean {
+    const active = this.activeProcesses.get(lockKey);
+    if (!active?.stdin || active.flags.killed || active.flags.aborted) return false;
+
+    const input = JSON.stringify({
+      type: 'user',
+      message: { role: 'user', content },
+      session_id: 'default',
+      parent_tool_use_id: null,
+    });
+
+    try {
+      active.pendingTurns = (active.pendingTurns ?? 0) + 1;
+      active.stdin.write(input + '\n', 'utf8');
+      logger.debug(`[${lockKey}] Message injected, pendingTurns=${active.pendingTurns}`);
+      return true;
+    } catch (e: any) {
+      // 写入失败说明 stdin 已关闭，回滚计数
+      active.pendingTurns = (active.pendingTurns ?? 1) - 1;
+      logger.warn(`[${lockKey}] injectMessage failed: ${e.message}`);
+      return false;
+    }
   }
 
   /**
