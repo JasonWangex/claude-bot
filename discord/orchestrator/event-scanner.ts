@@ -190,6 +190,21 @@ export async function processPendingEvents(ctx: GoalOrchestrator): Promise<void>
           break;
         }
 
+        case 'review.failed_task': {
+          // Tech lead 对失败任务的裁决 — 只处理 failed 状态的任务
+          if (task.status !== 'failed') {
+            ctx.deps.taskEventRepo.markProcessed(ev.id);
+            continue;
+          }
+          logger.info(`[Scanner] Processing review.failed_task for task ${ev.taskId}`);
+          const fp = (ev.payload ?? {}) as Record<string, unknown>;
+          await ctx.handleFailedTaskReviewResult(ev.goalId, ev.taskId, {
+            verdict: typeof fp.verdict === 'string' ? fp.verdict : undefined,
+            reason: typeof fp.reason === 'string' ? fp.reason : undefined,
+          });
+          break;
+        }
+
         case 'replan.result': {
           // Replan 结果兜底（正常由 triggerReplan 内联读取处理）
           // 只对 completed 状态的任务处理（replan 仅由 completed 任务触发）

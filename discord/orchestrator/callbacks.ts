@@ -9,6 +9,7 @@
 import type { ChatUsageResult } from '../types/index.js';
 import type { GoalOrchestrator } from './index.js';
 import { buildTaskFailedButtons } from './goal-buttons.js';
+import { triggerFailedTaskReview } from './review-handler.js';
 
 export async function onTaskCompleted(
   ctx: GoalOrchestrator,
@@ -133,19 +134,27 @@ export async function onTaskFailed(
     await ctx.saveState(state);
 
     const costInfo = usage ? ` ($${usage.total_cost_usd.toFixed(4)})` : '';
-    const hasContext = !!task.channelId;
+    const guildId = ctx.getGuildId();
+    const hasTechLead = !!state.techLeadChannelId && !!guildId;
 
-    const hint = hasContext
-      ? `Reply "retry ${task.id}" to restart, or "refix ${task.id}" to fix in-place.`
-      : `Reply "retry ${task.id}" to retry.`;
-    const buttons = hasContext
-      ? buildTaskFailedButtons(goalId, task.id)
-      : undefined;
-    await ctx.notifyGoal(state,
-      `Failed: ${ctx.getTaskLabel(state, task.id)} - ${task.description}${costInfo}\nError: ${error}\n\n${hint}`,
-      'error',
-      buttons ? { components: buttons } : undefined,
-    );
+    if (hasTechLead) {
+      // 自动上报 tech lead，由 tech lead 决定是否 retry
+      await ctx.notifyGoal(state,
+        `Failed: ${ctx.getTaskLabel(state, task.id)} - ${task.description}${costInfo}\nError: ${error}\n\nEscalated to tech lead for review.`,
+        'error',
+      );
+      triggerFailedTaskReview(ctx, state, task, guildId!);
+    } else {
+      // 无 tech lead — 回退到手动 retry
+      const hasContext = !!task.channelId;
+      const hint = `Reply "retry ${task.id}" to retry.`;
+      const buttons = hasContext ? buildTaskFailedButtons(goalId, task.id) : undefined;
+      await ctx.notifyGoal(state,
+        `Failed: ${ctx.getTaskLabel(state, task.id)} - ${task.description}${costInfo}\nError: ${error}\n\n${hint}`,
+        'error',
+        buttons ? { components: buttons } : undefined,
+      );
+    }
     if (state.status === 'running') await ctx.reviewAndDispatch(state);
   });
 }

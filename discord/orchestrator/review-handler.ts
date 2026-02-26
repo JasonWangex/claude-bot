@@ -379,6 +379,67 @@ export function triggerPhaseEvaluation(ctx: GoalOrchestrator, state: GoalDriveSt
   })();
 }
 
+/**
+ * 任务失败后通知 tech lead，由 tech lead 决定是否 retry。
+ */
+export function triggerFailedTaskReview(
+  ctx: GoalOrchestrator,
+  state: GoalDriveState,
+  task: GoalTask,
+  guildId: string,
+): void {
+  (async () => {
+    try {
+      ctx.ensureGoalChannelSession(state, guildId);
+      const techLeadChannelId = state.techLeadChannelId ?? state.goalChannelId;
+      const ps = ctx.deps.promptService;
+      const prompt = ps.render('orchestrator.failed_task_review', {
+        TASK_LABEL: ctx.getTaskLabel(state, task.id),
+        TASK_DESCRIPTION: task.description,
+        ERROR: task.error ?? '(unknown)',
+        TASK_ID: task.id,
+      });
+      await ctx.deps.messageHandler.handleBackgroundChat(guildId, techLeadChannelId, prompt);
+    } catch (err: any) {
+      logger.error(`[FailedTaskReview] Failed to trigger review for ${task.id}:`, err);
+    }
+  })();
+}
+
+/**
+ * 处理 tech lead 对失败任务的裁决。
+ * verdict=retry → 调用 retryTask；verdict=skip → 通知用户需要人工干预。
+ */
+export async function handleFailedTaskReviewResult(
+  ctx: GoalOrchestrator,
+  goalId: string,
+  taskId: string,
+  payload: { verdict?: string; reason?: string },
+): Promise<void> {
+  const { verdict, reason } = payload;
+
+  if (verdict === 'retry') {
+    logger.info(`[FailedTaskReview] Tech lead decided to retry task ${taskId}: ${reason}`);
+    const ok = await ctx.retryTask(goalId, taskId);
+    if (!ok) {
+      logger.warn(`[FailedTaskReview] retryTask returned false for ${taskId}`);
+    }
+  } else {
+    // skip — 需要人工干预
+    await ctx.withStateLock(goalId, async () => {
+      const state = await ctx.getState(goalId);
+      if (!state) return;
+      const task = state.tasks.find(t => t.id === taskId);
+      if (!task) return;
+      logger.info(`[FailedTaskReview] Tech lead decided to skip task ${taskId}: ${reason}`);
+      await ctx.notifyGoal(state,
+        `Tech lead reviewed **${ctx.getTaskLabel(state, taskId)}**: cannot auto-fix.\n${reason ? `Reason: ${reason}\n` : ''}Manual intervention required.`,
+        'error',
+      );
+    });
+  }
+}
+
 export async function handlePhaseResult(
   ctx: GoalOrchestrator,
   goalId: string,

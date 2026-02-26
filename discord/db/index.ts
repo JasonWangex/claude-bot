@@ -56,6 +56,7 @@ import migration040 from './migrations/040_create_projects.js';
 import migration041 from './migrations/041_add_idea_type_body.js';
 import migration042 from './migrations/042_rename_reviewer_to_tech_lead.js';
 import migration043 from './migrations/043_update_task_review_prompt.js';
+import migration044 from './migrations/044_add_failed_task_review_prompt.js';
 
 const allMigrations: Migration[] = [
   migration001,
@@ -101,6 +102,7 @@ const allMigrations: Migration[] = [
   migration041,
   migration042,
   migration043,
+  migration044,
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

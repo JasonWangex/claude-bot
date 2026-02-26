@@ -316,6 +316,29 @@ Report result via \`bot_task_event\`:
     sortOrder: 0,
   });
 
+  // ---- orchestrator.failed_task_review (任务失败后 tech lead 裁决) ----
+  entries.push({
+    key: 'orchestrator.failed_task_review',
+    category: 'orchestrator',
+    name: '失败任务审核',
+    description: '任务失败后发给 tech lead，由 tech lead 决定是否 retry',
+    template: `## Task Failed: {{TASK_LABEL}}
+**Description:** {{TASK_DESCRIPTION}}
+**Error:** \`{{ERROR}}\`
+
+Decide: can this be automatically retried/fixed, or does it need human intervention?
+
+Report via \`bot_task_event\`:
+- \`task_id\`: "{{TASK_ID}}"
+- \`event_type\`: "review.failed_task"
+- \`payload\`: \`{ "verdict": "retry" | "skip", "reason": "..." }\`
+
+Use \`retry\` if the error is transient or recoverable. Use \`skip\` if it requires human intervention.`,
+    variables: ['TASK_LABEL', 'TASK_DESCRIPTION', 'ERROR', 'TASK_ID'],
+    parentKey: null,
+    sortOrder: 0,
+  });
+
   // ---- orchestrator.conflict_review (冲突解决请求，发给 tech lead) ----
   entries.push({
     key: 'orchestrator.conflict_review',

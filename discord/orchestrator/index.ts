@@ -87,6 +87,8 @@ import {
   handleConflictResolutionResult as _handleConflictResolutionResult,
   triggerPhaseEvaluation as _triggerPhaseEvaluation,
   handlePhaseResult as _handlePhaseResult,
+  triggerFailedTaskReview as _triggerFailedTaskReview,
+  handleFailedTaskReviewResult as _handleFailedTaskReviewResult,
 } from './review-handler.js';
 import type { MergeConflictPayload } from './orchestrator-types.js';
 
@@ -589,5 +591,11 @@ export class GoalOrchestrator {
   }
   async handlePhaseResult(goalId: string, triggerTaskId: string, result: { decision?: string; summary?: string; issues?: string[] }) {
     return _handlePhaseResult(this, goalId, triggerTaskId, result);
+  }
+  triggerFailedTaskReview(state: GoalDriveState, task: GoalTask, guildId: string) {
+    return _triggerFailedTaskReview(this, state, task, guildId);
+  }
+  async handleFailedTaskReviewResult(goalId: string, taskId: string, payload: { verdict?: string; reason?: string }) {
+    return _handleFailedTaskReviewResult(this, goalId, taskId, payload);
   }
 }
