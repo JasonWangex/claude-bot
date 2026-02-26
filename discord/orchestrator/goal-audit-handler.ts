@@ -82,7 +82,7 @@ async function runGoalAudit(
 
   // 6. Fire-and-forget：审查输出直接发到 auditChannelId
   logger.info(`[GoalAudit] Starting code review for goal ${state.goalId} in channel ${auditChannelId}`);
-  ctx.deps.messageHandler.handleBackgroundChat(guildId, auditChannelId, prompt)
+  ctx.deps.messageHandler.handleBackgroundChat(guildId, auditChannelId, prompt, 'goal-audit')
     .then(() => {
       logger.info(`[GoalAudit] Code review completed for goal ${state.goalId}`);
       ctx.appendTimeline(state.goalId, `代码审查完成`, 'success');

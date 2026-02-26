@@ -381,7 +381,7 @@ export function executeTaskPipeline(
 
       const taskPrompt = ctx.buildTaskPrompt(task, state);
       logger.info(`[Orchestrator] Pipeline ${taskId}: ${task.type} → single execute`);
-      const u = await ctx.deps.messageHandler.handleBackgroundChat(guildId, channelId, taskPrompt);
+      const u = await ctx.deps.messageHandler.handleBackgroundChat(guildId, channelId, taskPrompt, 'orchestrator');
       ctx.accumulateUsage(usage, u);
 
       if (!await ctx.isTaskStillRunning(goalId, taskId)) {

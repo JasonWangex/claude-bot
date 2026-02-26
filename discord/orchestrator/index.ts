@@ -488,7 +488,7 @@ export class GoalOrchestrator {
       const usage = this.emptyUsage();
       try {
         logger.info(`[Orchestrator] Task ${taskId} executing in channel ${channelId}`);
-        const u = await this.deps.messageHandler.handleBackgroundChat(guildId, channelId, message);
+        const u = await this.deps.messageHandler.handleBackgroundChat(guildId, channelId, message, 'orchestrator');
         this.accumulateUsage(usage, u);
         logger.info(`[Orchestrator] Task ${taskId} completed`);
         await this.onTaskCompleted(goalId, taskId, usage);

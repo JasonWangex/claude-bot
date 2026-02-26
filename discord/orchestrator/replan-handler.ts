@@ -53,7 +53,7 @@ export async function triggerReplan(
     const techLeadChannelId = state.techLeadChannelId ?? state.goalChannelId;
 
     logger.info(`[Orchestrator] triggerReplan: sending to tech lead channel ${techLeadChannelId}`);
-    await ctx.deps.messageHandler.handleBackgroundChat(guildId, techLeadChannelId, replanPrompt);
+    await ctx.deps.messageHandler.handleBackgroundChat(guildId, techLeadChannelId, replanPrompt, 'replan');
 
     // 4. 内联读取 replan.result 事件（tech lead session 结束后写入）
     const raw = ctx.deps.taskEventRepo.read<ReplanResult>(triggerTaskId, 'replan.result');

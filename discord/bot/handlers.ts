@@ -932,14 +932,31 @@ export class MessageHandler {
 
   /**
    * 后台发送消息到指定 session
+   * @param source 调用来源标识（如 'qdev', 'code-audit', 'orchestrator'）。
+   *               有值则显示 [source] 指示 embed；未传则显示 [BackgroundChat]。
    */
   async handleBackgroundChat(
     guildId: string,
     channelId: string,
     message: string,
+    source?: string,
   ): Promise<ChatUsageResult> {
     const session = this.stateManager.getSession(guildId, channelId);
     if (!session) throw new Error('Session not found');
+
+    // 向频道发送来源指示 embed（hidden session 无真实 Discord channel，跳过）
+    // fire-and-forget：embed 失败不阻断 Claude 执行
+    if (!session.hidden) {
+      const label = source ?? 'BackgroundChat';
+      const preview = message.replace(/\n+/g, ' ');
+      const indicator = preview.length > 100 ? `${preview.slice(0, 100)}…` : preview;
+      this.mq.send(channelId, `**[${label}]** ${indicator}`, {
+        embedColor: EmbedColors.GRAY,
+        priority: 'high',
+        silent: true,
+      }).catch(err => logger.warn('[handleBackgroundChat] indicator send failed:', err));
+    }
+
     return this.sendChatInternal(guildId, session, message);
   }
 

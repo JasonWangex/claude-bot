@@ -61,7 +61,7 @@ export function triggerTaskReview(ctx: GoalOrchestrator, state: GoalDriveState, 
 
     // 3. 纯事件驱动：fire-and-forget，结果由 event scanner 处理
     logger.info(`[PhaseReview] Firing review for ${taskId} via hidden audit session ${auditSessionKey}`);
-    ctx.deps.messageHandler.handleBackgroundChat(guildId, auditSessionKey, prompt)
+    ctx.deps.messageHandler.handleBackgroundChat(guildId, auditSessionKey, prompt, 'review')
       .catch(err => logger.error(`[AuditSession] handleBackgroundChat error for ${taskId}:`, err));
 
     // audit session 不在此处清理，生命周期延伸到 mergeAndCleanup
@@ -201,7 +201,7 @@ export function triggerConflictReview(
         `[GoalOrchestrator] Conflict review queued: ${ctx.getTaskLabel(state, task.id)}`,
         'pipeline',
       );
-      await ctx.deps.messageHandler.handleBackgroundChat(guildId, techLeadChannelId, prompt);
+      await ctx.deps.messageHandler.handleBackgroundChat(guildId, techLeadChannelId, prompt, 'review');
     } catch (err: any) {
       logger.error(`[ConflictReview] Failed to trigger conflict review for ${task.id}:`, err);
     }
@@ -354,7 +354,7 @@ export function triggerPhaseEvaluation(ctx: GoalOrchestrator, state: GoalDriveSt
       );
 
       logger.info(`[PhaseReview] Triggering phase ${phase} evaluation for goal ${goalId}`);
-      await ctx.deps.messageHandler.handleBackgroundChat(guildId, techLeadChannelId, prompt);
+      await ctx.deps.messageHandler.handleBackgroundChat(guildId, techLeadChannelId, prompt, 'review');
 
       // Fallback: 检查事件
       const phaseResult = ctx.deps.taskEventRepo.read<{
@@ -399,7 +399,7 @@ export function triggerFailedTaskReview(
         ERROR: task.error ?? '(unknown)',
         TASK_ID: task.id,
       });
-      await ctx.deps.messageHandler.handleBackgroundChat(guildId, techLeadChannelId, prompt);
+      await ctx.deps.messageHandler.handleBackgroundChat(guildId, techLeadChannelId, prompt, 'review');
     } catch (err: any) {
       logger.error(`[FailedTaskReview] Failed to trigger review for ${task.id}:`, err);
     }

@@ -1,12 +1,12 @@
 /**
- * POST /api/channels/:channelId/qdev — 快速创建开发任务
+ * POST /api/channels/:channelId/code-audit — 在新频道中发起代码审查
  *
  * 流程:
- * 1. 解析并校验请求体参数
+ * 1. 获取当前 session 信息（name、model、cwd）
  * 2. 推断 category_id（未提供时从父 channel 自动获取）
- * 3. 调用 qdevCore 执行核心逻辑
+ * 3. 调用 qdevCore，worktree=false（复用当前 worktree），频道名为 "审计:{currentName}"
  * 4. 立即返回 202 Accepted
- * 5. 后台触发 Claude 处理
+ * 5. 后台触发 /code-audit
  */
 
 import { ChannelType } from 'discord.js';
@@ -15,7 +15,7 @@ import { sendJson, requireAuth, readJsonBody } from '../middleware.js';
 import { qdevCore } from '../../utils/qdev-core.js';
 import { logger } from '../../utils/logger.js';
 
-export const qdev: RouteHandler = async (req, res, params, deps) => {
+export const codeAudit: RouteHandler = async (req, res, params, deps) => {
   const guildId = requireAuth(res);
   if (!guildId) return;
 
@@ -27,22 +27,12 @@ export const qdev: RouteHandler = async (req, res, params, deps) => {
   }
 
   const body = await readJsonBody<{
-    description: string;
     model?: string;
     category_id?: string;
-    branch_name?: string;
-    channel_name?: string;
-    base_branch?: string;
-    worktree?: boolean;
   }>(req);
 
-  if (!body?.description || typeof body.description !== 'string') {
-    sendJson(res, 400, { ok: false, error: '"description" field is required' });
-    return;
-  }
-
   // 需要 category_id 来创建新 channel
-  let categoryId = body.category_id;
+  let categoryId = body?.category_id;
   if (!categoryId) {
     try {
       const channel = await deps.client.channels.fetch(channelId);
@@ -59,19 +49,19 @@ export const qdev: RouteHandler = async (req, res, params, deps) => {
     return;
   }
 
-  const description = body.description.trim();
+  const auditChannelName = `审计:${session.name || channelId.slice(-6)}`;
+  const auditPrompt = '/code-audit';
+  const model = body?.model?.trim() || session.model || undefined;
 
   try {
     const result = await qdevCore({
       guildId,
       channelId,
-      description,
-      model: body.model?.trim() || undefined,
+      description: auditPrompt,
+      model,
       categoryId,
-      branchName: body.branch_name?.trim() || undefined,
-      channelName: body.channel_name?.trim() || undefined,
-      baseBranch: body.base_branch?.trim() || undefined,
-      worktree: body.worktree !== false,  // 默认 true
+      channelName: auditChannelName,
+      worktree: false,
     }, {
       stateManager: deps.stateManager,
       client: deps.client,
@@ -85,28 +75,25 @@ export const qdev: RouteHandler = async (req, res, params, deps) => {
       data: {
         channel_id: result.channelId,
         name: result.channelName,
-        branch: result.branchName || null,
         cwd: result.cwd,
         parent_channel_id: result.parentChannelId,
         status: 'accepted',
       },
     });
 
-    // 后台触发 Claude
+    // 后台触发 /code-audit
     (async () => {
       try {
-        logger.info(`[qdev] Background chat started for channel ${result.channelId}`);
-        await deps.messageHandler.handleBackgroundChat(guildId, result.channelId, description, 'qdev');
-        logger.info(`[qdev] Background chat completed for channel ${result.channelId}`);
+        logger.info(`[code-audit] Background chat started for channel ${result.channelId}`);
+        await deps.messageHandler.handleBackgroundChat(guildId, result.channelId, auditPrompt, 'code-audit');
+        logger.info(`[code-audit] Background chat completed for channel ${result.channelId}`);
       } catch (error: any) {
-        logger.error(`[qdev] Background chat failed for channel ${result.channelId}:`, error);
+        logger.error(`[code-audit] Background chat failed for channel ${result.channelId}:`, error);
         await deps.mq.sendLong(result.channelId, `Error: ${error.message}`, { silent: true }).catch(() => {});
       }
     })();
   } catch (error: any) {
-    // 用户输入错误（参数校验失败、branch 不存在等 git 错误）→ 400；其余 → 500
-    const isUserError = error.message?.startsWith('Invalid ') ||
-                        error.name === 'GitOperationError';
-    sendJson(res, isUserError ? 400 : 500, { ok: false, error: `qdev failed: ${error.message}` });
+    const isUserError = error.message?.startsWith('Invalid ') || error.name === 'GitOperationError';
+    sendJson(res, isUserError ? 400 : 500, { ok: false, error: `code-audit failed: ${error.message}` });
   }
 };

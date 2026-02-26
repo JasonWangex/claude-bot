@@ -370,7 +370,7 @@ export function sendCheckIn(
       );
 
       logger.info(`[CheckIn] Sending check-in #${attempt} for task ${taskId}`);
-      await ctx.deps.messageHandler.handleBackgroundChat(guildId, channelId, prompt);
+      await ctx.deps.messageHandler.handleBackgroundChat(guildId, channelId, prompt, 'check-in');
     } catch (err: any) {
       logger.error(`[CheckIn] Failed to send check-in for task ${taskId}:`, err);
     }

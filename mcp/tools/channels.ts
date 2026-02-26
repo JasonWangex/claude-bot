@@ -45,6 +45,21 @@ export function registerChannelTools(server: McpServer) {
     return { content: [{ type: 'text', text: JSON.stringify(r.data ?? r, null, 2) }] };
   });
 
+  server.registerTool('bot_code_audit', {
+    title: 'Code Audit',
+    description: 'Launch a code audit in a new channel (reuses current worktree). Creates a channel named "审计:{currentTitle}" and triggers /code-audit.',
+    inputSchema: {
+      channel_id: z.string().describe('Parent channel ID to audit from'),
+      model: z.string().optional().describe('Claude model to use (e.g. claude-sonnet-4-6, claude-opus-4-6). Defaults to current channel setting.'),
+      category_id: z.string().optional().describe('Discord category ID. Auto-detected from parent channel if omitted.'),
+    },
+  }, async ({ channel_id, model, category_id }) => {
+    const r = await apiPost(`/api/channels/${channel_id}/code-audit`, {
+      model, category_id,
+    });
+    return { content: [{ type: 'text', text: JSON.stringify(r.data ?? r, null, 2) }] };
+  });
+
   server.registerTool('bot_qdev', {
     title: 'Quick Dev',
     description: 'Quick-create dev sub-task: auto branch, worktree, Discord channel, trigger Claude.',

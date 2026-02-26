@@ -50,7 +50,7 @@ export const sendMessage: RouteHandler = async (req, res, params, deps) => {
   (async () => {
     try {
       logger.info(`[API] Background chat started for thread ${channelId}`);
-      await deps.messageHandler.handleBackgroundChat(guildId, channelId, body.text);
+      await deps.messageHandler.handleBackgroundChat(guildId, channelId, body.text, 'message');
       logger.info(`[API] Background chat completed for thread ${channelId}`);
     } catch (error: any) {
       logger.error(`[API] Background chat failed for thread ${channelId}:`, error);

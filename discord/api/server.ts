@@ -25,6 +25,7 @@ import { setGoalTasks } from './routes/goal-tasks.js';
 import { createGoalEvent } from './routes/goal-events.js';
 import { listGoalTodos, createGoalTodo, updateGoalTodo, deleteGoalTodo } from './routes/goal-todos.js';
 import { qdev } from './routes/qdev.js';
+import { codeAudit } from './routes/code-audit.js';
 import { listDevLogs, getDevLog, createDevLog } from './routes/devlogs.js';
 import { listIdeas, createIdea, getIdea, updateIdea, deleteIdea } from './routes/ideas.js';
 import { listKnowledgeBase, createKnowledgeBase, getKnowledgeBaseEntry, updateKnowledgeBase, deleteKnowledgeBase } from './routes/knowledge-base.js';
@@ -76,6 +77,7 @@ function defineRoutes(): Route[] {
     r('POST',   '/api/channels/:channelId/archive', archiveChannel),
     r('POST',   '/api/channels/:channelId/fork', forkChannel),
     r('POST',   '/api/channels/:channelId/qdev', qdev),
+    r('POST',   '/api/channels/:channelId/code-audit', codeAudit),
 
     // Channel sessions
     r('GET',  '/api/channels/:channelId/sessions', listChannelSessions),

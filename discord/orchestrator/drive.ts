@@ -133,7 +133,7 @@ export async function startDrive(ctx: GoalOrchestrator, params: StartDriveParams
       GOAL_ID: goalId,
     });
     try {
-      await ctx.deps.messageHandler.handleBackgroundChat(guildId, techLeadChannelId, initPrompt);
+      await ctx.deps.messageHandler.handleBackgroundChat(guildId, techLeadChannelId, initPrompt, 'drive');
     } catch (err: any) {
       logger.warn(`[Orchestrator] Failed to send tech lead init prompt: ${err.message}`);
     }

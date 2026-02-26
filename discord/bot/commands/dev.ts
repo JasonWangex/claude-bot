@@ -41,6 +41,15 @@ export const devCommands = [
     ),
 
   new SlashCommandBuilder()
+    .setName('code-audit')
+    .setDescription('Run code audit in a new channel (reuses current worktree)')
+    .addStringOption(opt =>
+      opt.setName('model').setDescription('Claude model to use (defaults to current channel setting)')
+        .addChoices(...MODEL_OPTIONS.map(m => ({ name: m.label, value: m.id })))
+        .setRequired(false)
+    ),
+
+  new SlashCommandBuilder()
     .setName('idea')
     .setDescription('Record an idea or develop an existing one')
     .addStringOption(opt =>
@@ -69,6 +78,8 @@ export async function handleDevCommand(
   switch (interaction.commandName) {
     case 'qdev':
       return handleQdev(interaction, deps);
+    case 'code-audit':
+      return handleCodeAudit(interaction, deps);
     case 'idea':
       return handleIdea(interaction, deps);
     case 'commit':
@@ -133,7 +144,7 @@ async function handleQdev(
     });
 
     // 触发 Claude 处理（fire-and-forget）
-    messageHandler.handleBackgroundChat(guildId, result.channelId, description).catch((err) => {
+    messageHandler.handleBackgroundChat(guildId, result.channelId, description, 'qdev').catch((err) => {
       logger.error('qdev background chat failed:', err);
     });
 
@@ -148,6 +159,78 @@ async function handleQdev(
   } catch (error: any) {
     logger.error('qdev failed:', error);
     await interaction.editReply(`qdev failed: ${error.message}`);
+  }
+}
+
+// ========== /code-audit ==========
+
+async function handleCodeAudit(
+  interaction: ChatInputCommandInteraction,
+  deps: CommandDeps,
+): Promise<void> {
+  if (!requireAuth(interaction)) return;
+  if (!requireThread(interaction)) return;
+
+  const guildId = interaction.guildId!;
+  const channelId = interaction.channelId;
+  const model = interaction.options.getString('model') || undefined;
+  const { stateManager, client, config, messageHandler } = deps;
+
+  const session = stateManager.getSession(guildId, channelId);
+  if (!session) {
+    await interaction.reply({ content: 'No session found for this thread.', ephemeral: true });
+    return;
+  }
+
+  await interaction.deferReply();
+  await interaction.editReply('Creating code audit channel...');
+
+  try {
+    // 从当前 channel 的 parentId 获取 Category
+    const channel = interaction.channel;
+    let categoryId: string | undefined;
+    if (channel && 'parentId' in channel && channel.parentId) {
+      const parent = await client.channels.fetch(channel.parentId);
+      if (parent && parent.type === ChannelType.GuildCategory) {
+        categoryId = parent.id;
+      }
+    }
+    if (!categoryId) {
+      await interaction.editReply('This command must be used in a task channel (under a Category).');
+      return;
+    }
+
+    const auditChannelName = `审计:${session.name || channelId.slice(-6)}`;
+    const auditPrompt = '/code-audit';
+
+    const result = await qdevCore({
+      guildId,
+      channelId,
+      description: auditPrompt,
+      model: model || session.model || undefined,
+      categoryId,
+      channelName: auditChannelName,
+      worktree: false,
+    }, {
+      stateManager,
+      client,
+      worktreesDir: config.worktreesDir,
+      channelService: deps.channelService,
+    });
+
+    // 触发 Claude 执行代码审查（fire-and-forget）
+    messageHandler.handleBackgroundChat(guildId, result.channelId, auditPrompt, 'code-audit').catch((err) => {
+      logger.error('code-audit background chat failed:', err);
+    });
+
+    await interaction.editReply(
+      `**Code audit started**\n` +
+      `Thread: <#${result.channelId}>\n` +
+      `Working directory: \`${result.cwd}\``
+    );
+  } catch (error: any) {
+    logger.error('code-audit failed:', error);
+    await interaction.editReply(`code-audit failed: ${error.message}`);
   }
 }
 
@@ -267,7 +350,7 @@ async function handleCommit(
     ephemeral: true,
   });
 
-  messageHandler.handleBackgroundChat(guildId, channelId, prompt).catch((err) => {
+  messageHandler.handleBackgroundChat(guildId, channelId, prompt, 'commit').catch((err) => {
     logger.error('commit failed:', err);
     messageQueue.sendLong(channelId, `commit failed: ${err.message}`).catch(() => {});
   });
@@ -341,7 +424,7 @@ async function handleMerge(
 
   // Step 3: 在 target session 中用全新 Claude 执行 merge
   // merge skill 最后会通过 MCP bot_tasks(action="delete") 删除 channel 和 session
-  messageHandler.handleBackgroundChat(guildId, targetSession.channelId, prompt).catch((err) => {
+  messageHandler.handleBackgroundChat(guildId, targetSession.channelId, prompt, 'merge').catch((err) => {
     logger.error('merge failed:', err);
     messageQueue.sendLong(targetSession.channelId, `merge failed: ${err.message}`).catch(() => {});
   });

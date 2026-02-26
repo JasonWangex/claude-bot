@@ -616,7 +616,7 @@ export class DiscordBot {
 
       // 通过原生 skill 触发 goal
       const prompt = `/goal ${goal.name}`;
-      this.messageHandler.handleBackgroundChat(guildId, channelId, prompt).catch((err) => {
+      this.messageHandler.handleBackgroundChat(guildId, channelId, prompt, 'goal').catch((err) => {
         logger.error('goal drive_prompt failed:', err);
         this.messageQueue.sendLong(channelId, `goal drive_prompt failed: ${err.message}`).catch(() => {});
       });
@@ -719,7 +719,7 @@ export class DiscordBot {
           }
 
           // 触发 Claude 处理
-          this.messageHandler.handleBackgroundChat(guildId, forkResult.channelId, idea.name).catch((err) => {
+          this.messageHandler.handleBackgroundChat(guildId, forkResult.channelId, idea.name, 'idea→qdev').catch((err) => {
             logger.error('idea qdev failed:', err);
             this.messageQueue.sendLong(forkResult.channelId, `idea qdev failed: ${err.message}`).catch(() => {});
           });
@@ -748,7 +748,7 @@ export class DiscordBot {
           await ideaRepo.save(idea);
 
           const goalPrompt = `/goal ${idea.name}`;
-          this.messageHandler.handleBackgroundChat(guildId, channelId, goalPrompt).catch((err) => {
+          this.messageHandler.handleBackgroundChat(guildId, channelId, goalPrompt, 'idea→goal').catch((err) => {
             logger.error('idea to goal failed:', err);
             this.messageQueue.sendLong(channelId, `idea to goal failed: ${err.message}`).catch(() => {});
           });
@@ -995,7 +995,7 @@ export class DiscordBot {
     const authErrorInterceptor = new AuthErrorInterceptor(
       // onRetry：向受影响的 channel 发送 "continue"
       (guildId, channelId) => {
-        this.messageHandler.handleBackgroundChat(guildId, channelId, 'continue').catch((err: any) => {
+        this.messageHandler.handleBackgroundChat(guildId, channelId, 'continue', 'auth-retry').catch((err: any) => {
           logger.error('[AuthErrorInterceptor] Retry "continue" failed:', err);
           // AUTH_ERROR：handleAuthError 已在 sendChatInternal 内部调用并安排了下一次重试，
           // 此处不能调 onSuccess（会重置计数并取消已安排的 timer）
@@ -1035,7 +1035,7 @@ export class DiscordBot {
     const apiErrorInterceptor = new ApiErrorInterceptor(
       // onRetry：向受影响的 channel 发送 "continue"
       (guildId, channelId) => {
-        this.messageHandler.handleBackgroundChat(guildId, channelId, 'continue').catch((err: any) => {
+        this.messageHandler.handleBackgroundChat(guildId, channelId, 'continue', 'api-retry').catch((err: any) => {
           logger.error('[ApiErrorInterceptor] Retry "continue" failed:', err);
           if (err instanceof ClaudeExecutionError && err.errorType === ClaudeErrorType.API_ERROR) return;
           // 其他错误（如 session 已消失）：重置计数避免 Map 泄漏

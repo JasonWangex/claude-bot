@@ -148,7 +148,7 @@ async function handleGoal(
     // 有参数，当前 session：通过原生 skill 转发给 Claude
     const prompt = text ? `/goal ${text}` : '/goal';
     await interaction.reply(`Goal: ${text}...`);
-    messageHandler.handleBackgroundChat(guildId, channelId, prompt).catch((err) => {
+    messageHandler.handleBackgroundChat(guildId, channelId, prompt, 'goal').catch((err) => {
       logger.error('goal failed:', err);
       messageQueue.sendLong(channelId, `goal failed: ${err.message}`).catch(() => {});
     });
@@ -207,7 +207,7 @@ async function handleGoal(
 
     // 6. 在新 session 中触发 goal skill
     const goalPrompt = text ? `/goal ${text}` : '/goal';
-    messageHandler.handleBackgroundChat(guildId, forkResult.channelId, goalPrompt).catch((err) => {
+    messageHandler.handleBackgroundChat(guildId, forkResult.channelId, goalPrompt, 'goal').catch((err) => {
       logger.error('goal (new session) background chat failed:', err);
     });
 

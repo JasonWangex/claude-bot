@@ -50,7 +50,7 @@ const GENERAL_CMDS = new Set(['login', 'start', 'help', 'status']);
 const TASK_CMDS = new Set(['close', 'info', 'cd']);
 const SESSION_CMDS = new Set(['clear', 'compact', 'rewind', 'plan', 'stop', 'attach', 'sessions']);
 const MODEL_CMDS = new Set(['model']);
-const DEV_CMDS = new Set(['qdev', 'idea', 'commit', 'merge']);
+const DEV_CMDS = new Set(['qdev', 'code-audit', 'idea', 'commit', 'merge']);
 const GOAL_CMDS = new Set(['goal']);
 
 /**

@@ -37,7 +37,7 @@ export function startFeedbackInvestigation(
 
       const prompt = buildFeedbackInvestigationPrompt(ctx, task, state);
       logger.info(`[Orchestrator] Pipeline ${taskId}: feedback investigation started`);
-      await ctx.deps.messageHandler.handleBackgroundChat(guildId, channelId, prompt);
+      await ctx.deps.messageHandler.handleBackgroundChat(guildId, channelId, prompt, 'feedback');
 
       // 读取调查结论
       const conclusion = await readInvestigationResult(ctx, state, task);
