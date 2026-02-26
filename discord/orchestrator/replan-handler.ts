@@ -38,7 +38,7 @@ export async function triggerReplan(
     // 2. 获取 Goal 元数据
     const goalMeta = await ctx.deps.goalMetaRepo.get(state.goalId);
 
-    // 3. 构建 prompt 并发送给 reviewer session
+    // 3. 构建 prompt 并发送给 tech lead session
     const replanCtx: ReplanContext = {
       state,
       goalMeta,
@@ -50,12 +50,12 @@ export async function triggerReplan(
     const replanPrompt = buildReplanPrompt(replanCtx);
 
     ctx.ensureGoalChannelSession(state, guildId);
-    const reviewerChannelId = state.reviewerChannelId ?? state.goalChannelId;
+    const techLeadChannelId = state.techLeadChannelId ?? state.goalChannelId;
 
-    logger.info(`[Orchestrator] triggerReplan: sending to reviewer channel ${reviewerChannelId}`);
-    await ctx.deps.messageHandler.handleBackgroundChat(guildId, reviewerChannelId, replanPrompt);
+    logger.info(`[Orchestrator] triggerReplan: sending to tech lead channel ${techLeadChannelId}`);
+    await ctx.deps.messageHandler.handleBackgroundChat(guildId, techLeadChannelId, replanPrompt);
 
-    // 4. 内联读取 replan.result 事件（reviewer session 结束后写入）
+    // 4. 内联读取 replan.result 事件（tech lead session 结束后写入）
     const raw = ctx.deps.taskEventRepo.read<ReplanResult>(triggerTaskId, 'replan.result');
     if (!raw || !Array.isArray(raw.changes) || typeof raw.reasoning !== 'string') {
       logger.warn(`[Orchestrator] triggerReplan: missing or invalid replan.result event for task ${triggerTaskId}`);

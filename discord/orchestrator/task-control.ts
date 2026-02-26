@@ -47,6 +47,12 @@ export async function markTaskDone(ctx: GoalOrchestrator, goalId: string, taskId
   return true;
 }
 
+/**
+ * 轻量重试：保留 channel/branch 上下文，在原有 channel 中继续执行。
+ * 有 channel 上下文则原地 resume，无上下文则轻量重置后重新派发。
+ * 适用于任务失败后希望在原 thread 中继续的场景。
+ * 如需完全从头开始，请使用 resetAndStart。
+ */
 export async function retryTask(ctx: GoalOrchestrator, goalId: string, taskId: string): Promise<boolean> {
   const state = await ctx.getState(goalId);
   if (!state) return false;
@@ -54,8 +60,60 @@ export async function retryTask(ctx: GoalOrchestrator, goalId: string, taskId: s
   if (!task) return false;
   if (task.status !== 'failed' && task.status !== 'blocked_feedback' && task.status !== 'paused') return false;
 
-  // paused 任务可能还有运行中的进程（理论上不会，但防御性处理）
-  if (task.status === 'paused' && task.channelId) {
+  const guildId = ctx.getGuildId();
+  if (!guildId) return false;
+
+  // 有 channel 上下文 → 保留 branch/thread，在原 channel 中 resume
+  if (task.channelId) {
+    const lockKey = StateManager.channelLockKey(guildId, task.channelId);
+    ctx.deps.claudeClient.abort(lockKey);
+
+    const savedError = task.error;
+    task.status = 'running';
+    task.error = undefined;
+    task.pipelinePhase = 'execute';
+    task.feedback = undefined;
+    task.auditRetries = 0;
+    await ctx.saveState(state);
+    await ctx.notifyGoal(state,
+      `Retrying task (resume): ${ctx.getTaskLabel(state, task.id)} - ${task.description}`,
+      'warning',
+    );
+    const errorHint = savedError ? `\n上次错误：${savedError}` : '';
+    const prompt = `[Retry] 任务${errorHint ? '因以下原因失败，请修正后继续' : '恢复执行'}。${errorHint}\n请检查工作区现有进度并继续完成任务。`;
+    ctx.executeTaskInBackground(goalId, taskId, guildId, task.channelId, prompt);
+    return true;
+  }
+
+  // 无 channel 上下文 → 轻量重置后重新派发（不清除统计数据）
+  task.status = 'pending';
+  task.error = undefined;
+  task.branchName = undefined;
+  task.channelId = undefined;
+  task.dispatchedAt = undefined;
+  task.feedback = undefined;
+  task.pipelinePhase = undefined;
+  task.auditRetries = 0;
+  ctx.deps.taskEventRepo.clearByTask(taskId);
+  ctx.clearCheckInState(taskId);
+  await ctx.saveState(state);
+  await ctx.notifyGoal(state, `Retrying task (re-dispatch): ${ctx.getTaskLabel(state, task.id)} - ${task.description}`, 'warning');
+  if (state.status === 'running') await ctx.reviewAndDispatch(state);
+  return true;
+}
+
+/**
+ * 完全重试：清空所有上下文和统计数据，从头开始派发新的 branch/thread。
+ * 适用于需要完全重来的场景（如分支严重冲突、需要换方向等）。
+ */
+export async function resetAndStart(ctx: GoalOrchestrator, goalId: string, taskId: string): Promise<boolean> {
+  const state = await ctx.getState(goalId);
+  if (!state) return false;
+  const task = state.tasks.find(t => t.id === taskId);
+  if (!task) return false;
+  if (task.status !== 'failed' && task.status !== 'blocked_feedback' && task.status !== 'paused') return false;
+
+  if (task.channelId) {
     const guildId = ctx.getGuildId();
     if (guildId) {
       const lockKey = StateManager.channelLockKey(guildId, task.channelId);
@@ -78,53 +136,15 @@ export async function retryTask(ctx: GoalOrchestrator, goalId: string, taskId: s
   task.cacheWriteIn = undefined;
   task.costUsd = undefined;
   task.durationMs = undefined;
-  // 清除上一轮 review 遗留的 issues，避免污染新一轮 check-in
   if (task.metadata?.lastReviewIssues) {
     const { lastReviewIssues: _, ...rest } = task.metadata;
     task.metadata = Object.keys(rest).length ? rest : undefined;
   }
-  // 清除旧事件，防止 check-in 监工误判新一轮执行已上报
   ctx.deps.taskEventRepo.clearByTask(taskId);
   ctx.clearCheckInState(taskId);
   await ctx.saveState(state);
-  await ctx.notifyGoal(state, `Retrying task: ${ctx.getTaskLabel(state, task.id)} - ${task.description}`, 'warning');
+  await ctx.notifyGoal(state, `Reset and start task: ${ctx.getTaskLabel(state, task.id)} - ${task.description}`, 'warning');
   if (state.status === 'running') await ctx.reviewAndDispatch(state);
-  return true;
-}
-
-/**
- * 轻量重试：保留 branch/thread 上下文，从 audit 阶段重新开始修复
- * 适用于 audit fix 耗尽但代码本身大部分完成的场景
- */
-export async function refixTask(ctx: GoalOrchestrator, goalId: string, taskId: string): Promise<boolean> {
-  const state = await ctx.getState(goalId);
-  if (!state) return false;
-  const task = state.tasks.find(t => t.id === taskId);
-  if (!task) return false;
-  // refix 只对 failed 且有 threadId 的任务有效（即有代码上下文）
-  if (task.status !== 'failed' || !task.channelId) return false;
-
-  const guildId = ctx.getGuildId();
-  if (!guildId) return false;
-
-  // 中止可能残留的进程
-  const lockKey = StateManager.channelLockKey(guildId, task.channelId);
-  ctx.deps.claudeClient.abort(lockKey);
-
-  // 保留 branch/thread/dispatchedAt，重置状态
-  task.status = 'running';
-  task.error = undefined;
-  task.pipelinePhase = 'execute';
-  task.auditRetries = (task.auditRetries ?? 0) + 1;
-  await ctx.saveState(state);
-
-  await ctx.notifyGoal(state,
-    `Refixing task: ${ctx.getTaskLabel(state, task.id)} - ${task.description}`,
-    'warning',
-  );
-
-  // 重新执行 pipeline（在已有 thread 中继续）
-  ctx.executeTaskPipeline(goalId, taskId, guildId, task.channelId, task, state);
   return true;
 }
 
@@ -178,46 +198,6 @@ export async function pauseTask(ctx: GoalOrchestrator, goalId: string, taskId: s
     `Paused task: ${ctx.getTaskLabel(state, task.id)} - ${task.description}\nBranch/thread preserved for resume.`,
     'warning'
   );
-  return true;
-}
-
-/**
- * 恢复暂停的任务：使用保留的 branch/thread 重新执行
- */
-export async function resumeTask(ctx: GoalOrchestrator, goalId: string, taskId: string): Promise<boolean> {
-  const state = await ctx.getState(goalId);
-  if (!state) return false;
-  const task = state.tasks.find(t => t.id === taskId);
-  if (!task || task.status !== 'paused') return false;
-
-  const guildId = ctx.getGuildId();
-  if (!guildId) return false;
-
-  // 任务有保留的 thread 和 branch → 在原有 thread 中继续执行
-  if (task.channelId && task.branchName) {
-    task.status = 'running';
-    await ctx.saveState(state);
-    await ctx.notifyGoal(state,
-      `Resumed task: ${ctx.getTaskLabel(state, task.id)} - ${task.description}`,
-      'success'
-    );
-
-    const taskPrompt = `[Resumed] Continue working on this task. Your previous progress has been preserved.`;
-    ctx.executeTaskInBackground(state.goalId, task.id, guildId, task.channelId, taskPrompt);
-    return true;
-  }
-
-  // 没有保留上下文 → 重置为 pending，重新派发
-  task.status = 'pending';
-  task.branchName = undefined;
-  task.channelId = undefined;
-  task.dispatchedAt = undefined;
-  await ctx.saveState(state);
-  await ctx.notifyGoal(state,
-    `Resumed task: ${ctx.getTaskLabel(state, task.id)} - ${task.description} (re-dispatch)`,
-    'success'
-  );
-  if (state.status === 'running') await ctx.dispatchNext(state);
   return true;
 }
 

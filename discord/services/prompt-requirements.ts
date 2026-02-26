@@ -17,7 +17,7 @@ export const PROMPT_REQUIREMENTS: PromptRequirement[] = [
   { key: 'orchestrator.feedback_investigation', variables: ['TASK_LABEL', 'TASK_DESCRIPTION', 'GOAL_BRANCH', 'FEEDBACK_TYPE', 'FEEDBACK_REASON', 'FEEDBACK_DETAILS', 'TASK_ID'] },
   { key: 'orchestrator.check_in',               variables: ['TASK_LABEL', 'REVIEW_ISSUES'] },
   { key: 'orchestrator.phase_review',            variables: ['PHASE_NUMBER', 'GOAL_NAME', 'TASK_REVIEW_SUMMARIES', 'PROGRESS_SUMMARY', 'PHASE_TASK_ID'] },
-  { key: 'orchestrator.reviewer_init',           variables: ['GOAL_NAME', 'GOAL_BRANCH', 'GOAL_ID'] },
+  { key: 'orchestrator.tech_lead_init',          variables: ['GOAL_NAME', 'GOAL_BRANCH', 'GOAL_ID'] },
   { key: 'orchestrator.task_review',             variables: ['TASK_LABEL', 'TASK_DESCRIPTION', 'BRANCH_NAME', 'DIFF_STATS', 'TASK_ID'] },
 
   // ================================================================

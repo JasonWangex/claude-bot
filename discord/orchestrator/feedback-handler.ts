@@ -58,9 +58,9 @@ export function startFeedbackInvestigation(
           break;
 
         case 'retry':
-          // 需要完全重试
+          // 在原 channel 中继续执行（resume 语义），调查结论留在 thread 供参考
           await ctx.notifyGoal(state,
-            `[GoalOrchestrator] ${taskId}: 调查结论 — 需要完全重试\n原因: ${conclusion.reason}`,
+            `[GoalOrchestrator] ${taskId}: 调查结论 — 在原 thread 继续执行\n原因: ${conclusion.reason}`,
             'warning',
             { logOnly: true },
           );
@@ -69,9 +69,11 @@ export function startFeedbackInvestigation(
             if (!freshState) return;
             const freshTask = freshState.tasks.find(t => t.id === taskId);
             if (!freshTask) return;
-            // retryTask 要求 failed 状态，先改回 failed 再调用
-            freshTask.status = 'failed';
-            await ctx.saveState(freshState);
+            // 确保 task 处于 retryTask 可接受的状态
+            if (!['failed', 'blocked_feedback', 'paused'].includes(freshTask.status)) {
+              freshTask.status = 'failed';
+              await ctx.saveState(freshState);
+            }
           });
           await ctx.retryTask(goalId, taskId);
           break;

@@ -187,7 +187,7 @@ export function triggerConflictReview(
   (async () => {
     try {
       ctx.ensureGoalChannelSession(state, guildId);
-      const reviewerChannelId = state.reviewerChannelId ?? state.goalChannelId;
+      const techLeadChannelId = state.techLeadChannelId ?? state.goalChannelId;
       const ps = ctx.deps.promptService;
       const prompt = ps.render('orchestrator.conflict_review', {
         TASK_LABEL: ctx.getTaskLabel(state, task.id),
@@ -201,7 +201,7 @@ export function triggerConflictReview(
         `[GoalOrchestrator] Conflict review queued: ${ctx.getTaskLabel(state, task.id)}`,
         'pipeline',
       );
-      await ctx.deps.messageHandler.handleBackgroundChat(guildId, reviewerChannelId, prompt);
+      await ctx.deps.messageHandler.handleBackgroundChat(guildId, techLeadChannelId, prompt);
     } catch (err: any) {
       logger.error(`[ConflictReview] Failed to trigger conflict review for ${task.id}:`, err);
     }
@@ -239,7 +239,7 @@ export function nudgeConflictReview(
       const subtaskDir = ctx.findWorktreeDir(stdout, branchName);
 
       await ctx.notifyGoal(state,
-        `[GoalOrchestrator] Conflict review nudge #${attempt} for ${ctx.getTaskLabel(state, task.id)} (reviewer stalled)`,
+        `[GoalOrchestrator] Conflict review nudge #${attempt} for ${ctx.getTaskLabel(state, task.id)} (tech lead stalled)`,
         'warning',
       );
       triggerConflictReview(ctx, state, task, guildId, {
@@ -268,7 +268,7 @@ export async function handleConflictResolutionResult(
 
     if (result.resolved) {
       task.merged = true;
-      ctx.clearReviewerNudgeState(taskId);
+      ctx.clearTechLeadNudgeState(taskId);
       await ctx.saveState(state);
       await ctx.notifyGoal(state,
         `Reviewer resolved conflict and merged: ${ctx.getTaskLabel(state, taskId)} — ${result.summary ?? 'OK'}`,
@@ -304,7 +304,7 @@ export async function handleConflictResolutionResult(
       if (refreshed && refreshed.status === 'running') await ctx.reviewAndDispatch(refreshed, taskId);
     } else {
       task.status = 'blocked';
-      task.error = `merge conflict (reviewer could not resolve: ${result.summary ?? 'unknown'})`;
+      task.error = `merge conflict (tech lead could not resolve: ${result.summary ?? 'unknown'})`;
       await ctx.saveState(state);
       await ctx.notifyGoal(state,
         `Reviewer could not resolve conflict for ${ctx.getTaskLabel(state, taskId)}: ${result.summary ?? 'unknown'}\nManual resolution needed.`,
@@ -320,7 +320,7 @@ export async function handleConflictResolutionResult(
  */
 export function triggerPhaseEvaluation(ctx: GoalOrchestrator, state: GoalDriveState, phase: number, guildId: string): void {
   const goalId = state.goalId;
-  const reviewerChannelId = state.reviewerChannelId ?? state.goalChannelId;
+  const techLeadChannelId = state.techLeadChannelId ?? state.goalChannelId;
 
   (async () => {
     try {
@@ -354,7 +354,7 @@ export function triggerPhaseEvaluation(ctx: GoalOrchestrator, state: GoalDriveSt
       );
 
       logger.info(`[PhaseReview] Triggering phase ${phase} evaluation for goal ${goalId}`);
-      await ctx.deps.messageHandler.handleBackgroundChat(guildId, reviewerChannelId, prompt);
+      await ctx.deps.messageHandler.handleBackgroundChat(guildId, techLeadChannelId, prompt);
 
       // Fallback: 检查事件
       const phaseResult = ctx.deps.taskEventRepo.read<{

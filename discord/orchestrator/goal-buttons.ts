@@ -77,10 +77,10 @@ export function buildRollbackConfirmButtons(goalId: string): ActionRowBuilder<Bu
   return [row];
 }
 
-// ==================== 任务失败 retry/refix 按钮 ====================
+// ==================== 任务失败 retry 按钮 ====================
 
 /**
- * 生成任务失败后的操作按钮组：Retry（完全重试）+ Refix（保留上下文修复）
+ * 生成任务失败后的操作按钮组：Retry（在原 channel 恢复执行）
  */
 export function buildTaskFailedButtons(goalId: string, taskId: string): ActionRowBuilder<ButtonBuilder>[] {
   const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -88,10 +88,6 @@ export function buildTaskFailedButtons(goalId: string, taskId: string): ActionRo
       .setCustomId(`goal:retry_task:${goalId}:${taskId}`)
       .setLabel('🔄 Retry')
       .setStyle(ButtonStyle.Primary),
-    new ButtonBuilder()
-      .setCustomId(`goal:refix_task:${goalId}:${taskId}`)
-      .setLabel('🔧 Refix')
-      .setStyle(ButtonStyle.Secondary),
   );
   return [row];
 }

@@ -2,7 +2,7 @@
  * Goal Audit Handler — Goal 完成后自动代码审查
  *
  * Goal 所有子任务完成并合并后，自动对 goal 分支相对于 main 的全部变更
- * 运行 4 阶段代码审查，报告直接输出到 reviewer channel。
+ * 运行 4 阶段代码审查，报告直接输出到 tech lead channel。
  */
 
 import type { GoalDriveState } from '../types/index.js';
@@ -61,8 +61,8 @@ async function runGoalAudit(
     logger.warn(`[GoalAudit] Failed to collect diff stats: ${err.message}`);
   }
 
-  // 3. 设置 audit session（使用 reviewer channel，Opus 模型，CWD = goal worktree）
-  const auditChannelId = state.reviewerChannelId ?? state.goalChannelId;
+  // 3. 设置 audit session（使用 tech lead channel，Opus 模型，CWD = goal worktree）
+  const auditChannelId = state.techLeadChannelId ?? state.goalChannelId;
   ctx.deps.stateManager.getOrCreateSession(guildId, auditChannelId, {
     name: `audit-${state.goalName}`,
     cwd: goalWorktreeDir,

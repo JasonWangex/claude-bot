@@ -54,6 +54,7 @@ import migration038 from './migrations/038_add_hidden_channel.js';
 import migration039 from './migrations/039_create_session_changes.js';
 import migration040 from './migrations/040_create_projects.js';
 import migration041 from './migrations/041_add_idea_type_body.js';
+import migration042 from './migrations/042_rename_reviewer_to_tech_lead.js';
 
 const allMigrations: Migration[] = [
   migration001,
@@ -97,6 +98,7 @@ const allMigrations: Migration[] = [
   migration039,
   migration040,
   migration041,
+  migration042,
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

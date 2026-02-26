@@ -7,9 +7,8 @@
  * POST /api/goals/:goalId/resume  — 恢复
  * POST /api/goals/:goalId/tasks/:taskId/skip    — 跳过子任务
  * POST /api/goals/:goalId/tasks/:taskId/done    — 标记手动任务完成
- * POST /api/goals/:goalId/tasks/:taskId/retry   — 重试失败/blocked/paused 任务
+ * POST /api/goals/:goalId/tasks/:taskId/retry   — 重试/恢复失败/blocked/paused 任务（保留 channel/branch 上下文）
  * POST /api/goals/:goalId/tasks/:taskId/pause   — 暂停运行中的任务
- * POST /api/goals/:goalId/tasks/:taskId/resume  — 恢复暂停的任务
  * POST /api/goals/:goalId/rollback               — 发起回滚评估（需 body.checkpointId）
  * POST /api/goals/:goalId/confirm-rollback        — 确认执行回滚
  * POST /api/goals/:goalId/cancel-rollback         — 取消回滚
@@ -180,11 +179,11 @@ export const retryTask: RouteHandler = async (_req, res, params, deps) => {
     return;
   }
 
-  sendJson(res, 200, { ok: true, data: { status: 'pending' } });
+  sendJson(res, 200, { ok: true, data: { status: 'running' } });
 };
 
-// POST /api/goals/:goalId/tasks/:taskId/refix
-export const refixTask: RouteHandler = async (_req, res, params, deps) => {
+// POST /api/goals/:goalId/tasks/:taskId/reset
+export const resetAndStartTask: RouteHandler = async (_req, res, params, deps) => {
   const guildId = requireAuth(res);
   if (!guildId) return;
 
@@ -193,13 +192,13 @@ export const refixTask: RouteHandler = async (_req, res, params, deps) => {
     return;
   }
 
-  const ok = await deps.orchestrator.refixTask(params.goalId, params.taskId);
+  const ok = await deps.orchestrator.resetAndStart(params.goalId, params.taskId);
   if (!ok) {
-    sendJson(res, 400, { ok: false, error: 'Task not found or not in refixable state (must be failed with existing context)' });
+    sendJson(res, 400, { ok: false, error: 'Task not found or not in resettable state (failed/blocked_feedback/paused)' });
     return;
   }
 
-  sendJson(res, 200, { ok: true, data: { status: 'running' } });
+  sendJson(res, 200, { ok: true, data: { status: 'pending' } });
 };
 
 // POST /api/goals/:goalId/tasks/:taskId/pause
@@ -219,25 +218,6 @@ export const pauseTask: RouteHandler = async (_req, res, params, deps) => {
   }
 
   sendJson(res, 200, { ok: true, data: { status: 'paused' } });
-};
-
-// POST /api/goals/:goalId/tasks/:taskId/resume
-export const resumeTask: RouteHandler = async (_req, res, params, deps) => {
-  const guildId = requireAuth(res);
-  if (!guildId) return;
-
-  if (!deps.orchestrator) {
-    sendJson(res, 503, { ok: false, error: 'Orchestrator not available' });
-    return;
-  }
-
-  const ok = await deps.orchestrator.resumeTask(params.goalId, params.taskId);
-  if (!ok) {
-    sendJson(res, 400, { ok: false, error: 'Task not found or not paused' });
-    return;
-  }
-
-  sendJson(res, 200, { ok: true, data: { status: 'running' } });
 };
 
 // POST /api/goals/:goalId/tasks/:taskId/nudge

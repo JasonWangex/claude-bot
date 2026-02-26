@@ -41,10 +41,6 @@ export async function retryTask(goalId: string, taskId: string) {
   return apiPost(`/api/goals/${goalId}/tasks/${taskId}/retry`);
 }
 
-export async function refixTask(goalId: string, taskId: string) {
-  return apiPost(`/api/goals/${goalId}/tasks/${taskId}/refix`);
-}
-
 export async function markTaskDone(goalId: string, taskId: string) {
   return apiPost(`/api/goals/${goalId}/tasks/${taskId}/done`);
 }
@@ -54,7 +50,7 @@ export async function pauseGoalTask(goalId: string, taskId: string) {
 }
 
 export async function resumeGoalTask(goalId: string, taskId: string) {
-  return apiPost(`/api/goals/${goalId}/tasks/${taskId}/resume`);
+  return apiPost(`/api/goals/${goalId}/tasks/${taskId}/retry`);
 }
 
 export interface CreateGoalData {

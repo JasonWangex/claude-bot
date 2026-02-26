@@ -71,7 +71,7 @@ export async function doMergeAndCleanup(ctx: GoalOrchestrator, state: GoalDriveS
 
     if (result.success) {
       task.merged = true;
-      ctx.clearReviewerNudgeState(task.id);
+      ctx.clearTechLeadNudgeState(task.id);
 
       // 关闭 audit session（hidden session，只需归档内存 session，无 Discord channel）
       const guildIdForAudit = ctx.getGuildId();
@@ -93,13 +93,13 @@ export async function doMergeAndCleanup(ctx: GoalOrchestrator, state: GoalDriveS
         await cleanupTaskChannel(ctx, task, guildIdForChannel);
       }
     } else {
-      // 无论是真正的 conflict 还是其他 merge 失败，统一交由 reviewer 处理
+      // 无论是真正的 conflict 还是其他 merge 失败，统一交由 tech lead 处理
       const reason = result.conflict
         ? `Merge conflict`
         : `Merge failed (treated as conflict): ${result.error ?? 'unknown error'}`;
       await abortMerge(goalWorktreeDir);
       await ctx.notifyGoal(state,
-        `${reason}: \`${branchName}\` → \`${state.goalBranch}\`. Queued for reviewer...`,
+        `${reason}: \`${branchName}\` → \`${state.goalBranch}\`. Queued for tech lead...`,
         'warning'
       );
       ctx.deps.taskEventRepo.write(task.id, state.goalId, 'merge.conflict', {
@@ -114,11 +114,11 @@ export async function doMergeAndCleanup(ctx: GoalOrchestrator, state: GoalDriveS
     }
   } catch (err: any) {
     logger.error('[Orchestrator] mergeAndCleanup error:', err);
-    // 任何异常都视为 conflict，提交事件交由 reviewer 处理（前提是已知 goalWorktreeDir）
+    // 任何异常都视为 conflict，提交事件交由 tech lead 处理（前提是已知 goalWorktreeDir）
     if (goalWorktreeDir) {
       await abortMerge(goalWorktreeDir);
       await ctx.notifyGoal(state,
-        `Merge exception (treated as conflict): \`${branchName}\` → \`${state.goalBranch}\`. Queued for reviewer...\nError: ${err.message}`,
+        `Merge exception (treated as conflict): \`${branchName}\` → \`${state.goalBranch}\`. Queued for tech lead...\nError: ${err.message}`,
         'warning'
       );
       ctx.deps.taskEventRepo.write(task.id, state.goalId, 'merge.conflict', {

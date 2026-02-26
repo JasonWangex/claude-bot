@@ -5,7 +5,7 @@
  * 1. 定时扫描 goal 级别事件（goal.drive）
  * 2. 扫描并分发 task 级别事件（task.completed / review / replan / merge.conflict）
  * 3. 检测 orphaned tasks（session 已结束但无事件上报）并触发 check-in
- * 4. 监控 completed + unmerged 任务的 reviewer 状态
+ * 4. 监控 completed + unmerged 任务的 tech lead 状态
  */
 
 import type { GoalDriveState, GoalTask } from '../types/index.js';
@@ -158,17 +158,17 @@ export async function processPendingEvents(ctx: GoalOrchestrator): Promise<void>
         }
 
         case 'merge.conflict': {
-          // Merge 冲突等待 reviewer 处理 — reviewer 忙时跳过，下轮再试
+          // Merge 冲突等待 tech lead 处理 — tech lead 忙时跳过，下轮再试
           if (task.merged) {
             ctx.deps.taskEventRepo.markProcessed(ev.id);
             continue;
           }
           const guildId = ctx.getGuildId();
           if (!guildId) continue; // 未连接 guild，下轮重试
-          const reviewerChannelId = state.reviewerChannelId ?? state.goalChannelId;
-          const reviewerLockKey = StateManager.channelLockKey(guildId, reviewerChannelId);
-          if (ctx.deps.claudeClient.isRunning(reviewerLockKey)) {
-            continue; // reviewer 忙，不标 processed，下轮重试
+          const techLeadChannelId = state.techLeadChannelId ?? state.goalChannelId;
+          const techLeadLockKey = StateManager.channelLockKey(guildId, techLeadChannelId);
+          if (ctx.deps.claudeClient.isRunning(techLeadLockKey)) {
+            continue; // tech lead 忙，不标 processed，下轮重试
           }
           logger.info(`[Scanner] Processing merge.conflict for task ${ev.taskId}`);
           ctx.triggerConflictReview(state, task, guildId, ev.payload as MergeConflictPayload);
@@ -295,31 +295,31 @@ export async function checkOrphanedTasks(ctx: GoalOrchestrator): Promise<void> {
       }
 
       // Cooldown 检查（基于完成时间或上次轻推时间）
-      const lastNudge = ctx.lastReviewerNudgeAt.get(task.id) ?? (task.completedAt ?? Date.now());
+      const lastNudge = ctx.lastTechLeadNudgeAt.get(task.id) ?? (task.completedAt ?? Date.now());
       if (now - lastNudge < CHECK_IN_COOLDOWN) continue;
 
-      const count = ctx.reviewerNudgeCounts.get(task.id) ?? 0;
+      const count = ctx.techLeadNudgeCounts.get(task.id) ?? 0;
       if (count >= MAX_CHECK_INS) {
         logger.warn(`[ReviewerNudge] Task ${task.id} exceeded max nudges, marking blocked`);
         task.status = 'blocked';
         task.error = `Reviewer did not respond after ${MAX_CHECK_INS} nudge attempts`;
         await ctx.saveState(state);
         await ctx.notifyGoal(state,
-          `Task ${ctx.getTaskLabel(state, task.id)} reviewer stalled (${MAX_CHECK_INS} nudges). Manual intervention needed.`,
+          `Task ${ctx.getTaskLabel(state, task.id)} tech lead stalled (${MAX_CHECK_INS} nudges). Manual intervention needed.`,
           'error',
         );
-        clearReviewerNudgeState(ctx, task.id);
+        clearTechLeadNudgeState(ctx, task.id);
         continue;
       }
 
-      logger.info(`[ReviewerNudge] Nudging reviewer for task ${task.id} (attempt ${count + 1}, phase=${task.pipelinePhase})`);
+      logger.info(`[ReviewerNudge] Nudging tech lead for task ${task.id} (attempt ${count + 1}, phase=${task.pipelinePhase})`);
       if (task.pipelinePhase === 'conflict') {
-        ctx.nudgeConflictReview(state, task, guildId, count + 1);  // conflict 仍用 reviewer channel
+        ctx.nudgeConflictReview(state, task, guildId, count + 1);  // conflict 仍用 tech lead channel
       } else {
         ctx.triggerTaskReview(state, task, guildId);  // 创建独立 audit session
       }
-      ctx.reviewerNudgeCounts.set(task.id, count + 1);
-      ctx.lastReviewerNudgeAt.set(task.id, now);
+      ctx.techLeadNudgeCounts.set(task.id, count + 1);
+      ctx.lastTechLeadNudgeAt.set(task.id, now);
     }
   }
 }
@@ -362,15 +362,15 @@ export function sendCheckIn(
   })();
 }
 
-/** 清除任务的 check-in 追踪状态（subtask + reviewer nudge） */
+/** 清除任务的 check-in 追踪状态（subtask + tech lead nudge） */
 export function clearCheckInState(ctx: GoalOrchestrator, taskId: string): void {
   ctx.checkInCounts.delete(taskId);
   ctx.lastCheckInAt.delete(taskId);
-  clearReviewerNudgeState(ctx, taskId);
+  clearTechLeadNudgeState(ctx, taskId);
 }
 
-/** 清除任务的 reviewer 轻推追踪状态 */
-export function clearReviewerNudgeState(ctx: GoalOrchestrator, taskId: string): void {
-  ctx.reviewerNudgeCounts.delete(taskId);
-  ctx.lastReviewerNudgeAt.delete(taskId);
+/** 清除任务的 tech lead 轻推追踪状态 */
+export function clearTechLeadNudgeState(ctx: GoalOrchestrator, taskId: string): void {
+  ctx.techLeadNudgeCounts.delete(taskId);
+  ctx.lastTechLeadNudgeAt.delete(taskId);
 }

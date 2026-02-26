@@ -91,26 +91,26 @@ export async function startDrive(ctx: GoalOrchestrator, params: StartDriveParams
     tasks,
   };
 
-  // 创建审核员专用 channel（与 goal channel 同一 Category 下）
+  // 创建 Tech Lead 专用 channel（与 goal channel 同一 Category 下）
   const guildId = ctx.getGuildId();
   if (guildId) {
     try {
       const categoryId = await ctx.findCategoryId(goalChannelId);
       if (categoryId) {
         const guild = await ctx.deps.client.guilds.fetch(guildId);
-        const reviewerChannel = await guild.channels.create({
-          name: `g${goalSeq}-reviewer`,
+        const techLeadChannel = await guild.channels.create({
+          name: `g${goalSeq}-tech-lead`,
           type: ChannelType.GuildText,
           parent: categoryId,
-          reason: `Goal reviewer: ${goalName}`,
+          reason: `Goal tech lead: ${goalName}`,
         });
-        state.reviewerChannelId = reviewerChannel.id;
-        logger.info(`[Orchestrator] Created reviewer channel: ${reviewerChannel.id} for goal ${goalId}`);
+        state.techLeadChannelId = techLeadChannel.id;
+        logger.info(`[Orchestrator] Created tech lead channel: ${techLeadChannel.id} for goal ${goalId}`);
       } else {
-        logger.warn(`[Orchestrator] Cannot find Category for goal channel ${goalChannelId}, reviewer will use goal channel`);
+        logger.warn(`[Orchestrator] Cannot find Category for goal channel ${goalChannelId}, tech lead will use goal channel`);
       }
     } catch (err: any) {
-      logger.warn(`[Orchestrator] Failed to create reviewer channel: ${err.message}, falling back to goal channel`);
+      logger.warn(`[Orchestrator] Failed to create tech lead channel: ${err.message}, falling back to goal channel`);
     }
   }
 
@@ -123,19 +123,19 @@ export async function startDrive(ctx: GoalOrchestrator, params: StartDriveParams
     logger.warn(`[Orchestrator] Failed to sync goal meta status to Processing: ${err.message}`);
   }
 
-  // 为审核员 channel 创建 Opus 会话并发送初始化 prompt
+  // 为 Tech Lead channel 创建 Opus 会话并发送初始化 prompt
   if (guildId) {
     ctx.ensureGoalChannelSession(state, guildId);
-    const reviewerChannelId = state.reviewerChannelId ?? state.goalChannelId;
-    const initPrompt = ctx.deps.promptService.render('orchestrator.reviewer_init', {
+    const techLeadChannelId = state.techLeadChannelId ?? state.goalChannelId;
+    const initPrompt = ctx.deps.promptService.render('orchestrator.tech_lead_init', {
       GOAL_NAME: goalName,
       GOAL_BRANCH: goalBranch,
       GOAL_ID: goalId,
     });
     try {
-      await ctx.deps.messageHandler.handleBackgroundChat(guildId, reviewerChannelId, initPrompt);
+      await ctx.deps.messageHandler.handleBackgroundChat(guildId, techLeadChannelId, initPrompt);
     } catch (err: any) {
-      logger.warn(`[Orchestrator] Failed to send reviewer init prompt: ${err.message}`);
+      logger.warn(`[Orchestrator] Failed to send tech lead init prompt: ${err.message}`);
     }
   }
 
@@ -144,7 +144,7 @@ export async function startDrive(ctx: GoalOrchestrator, params: StartDriveParams
     `Branch: \`${goalBranch}\`\n` +
     `Tasks: ${state.tasks.length}\n` +
     `Max concurrent: ${maxConcurrent}` +
-    (state.reviewerChannelId ? `\nReviewer: <#${state.reviewerChannelId}>` : ''),
+    (state.techLeadChannelId ? `\nTech Lead: <#${state.techLeadChannelId}>` : ''),
     'success',
     { driveChannel: true },  // 唯一发送到 drive channel 的消息
   );
@@ -191,7 +191,7 @@ export async function resumeDrive(ctx: GoalOrchestrator, goalId: string): Promis
   await ctx.saveState(state);
   await ctx.notifyGoal(state, `Goal "${state.goalName}" resumed`, 'success');
 
-  // 确保 reviewer session 存在（Bot 重启后 paused drive 不经过 restoreRunningDrives）
+  // 确保 tech lead session 存在（Bot 重启后 paused drive 不经过 restoreRunningDrives）
   const guildId = ctx.getGuildId();
   if (guildId) {
     ctx.ensureGoalChannelSession(state, guildId);
@@ -284,7 +284,7 @@ export async function restoreRunningDrives(ctx: GoalOrchestrator): Promise<void>
 
     ctx.activeDrives.set(state.goalId, state);
 
-    // 恢复 reviewer channel session（确保 cwd 和 Opus 模型正确设置）
+    // 恢复 tech lead channel session（确保 cwd 和 Opus 模型正确设置）
     const guildId = ctx.getGuildId();
     if (guildId) {
       ctx.ensureGoalChannelSession(state, guildId);

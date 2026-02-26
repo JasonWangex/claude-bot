@@ -16,7 +16,7 @@ import { registerGoalEventTools } from './goal-event.js';
 export function registerAllTools(server: McpServer) {
   registerChannelTools(server);       // 3 tools: bot_channels (list/get/delete), bot_send_message, bot_qdev
   registerGoalTools(server);          // 1 tool:  bot_goals (list/get/create/update)
-  registerGoalTaskTools(server);      // 1 tool:  bot_goal_tasks (list/set/skip/done/retry/refix/pause/resume)
+  registerGoalTaskTools(server);      // 1 tool:  bot_goal_tasks (list/set/skip/done/retry/reset/pause/nudge)
   registerGoalTodoTools(server);      // 1 tool:  bot_goal_todos (list/add/done/undone/delete)
   registerDataTools(server);          // 2 tools: bot_devlogs, bot_ideas
   registerSystemTools(server);        // 1 tool:  bot_status

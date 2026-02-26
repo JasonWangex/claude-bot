@@ -270,18 +270,20 @@ Please confirm your status:
     sortOrder: 0,
   });
 
-  // ---- orchestrator.reviewer_init (审核员初始化) ----
+  // ---- orchestrator.tech_lead_init (Tech Lead 初始化) ----
   entries.push({
-    key: 'orchestrator.reviewer_init',
+    key: 'orchestrator.tech_lead_init',
     category: 'orchestrator',
-    name: 'Reviewer 初始化',
-    description: 'Goal Drive 启动时发送给 reviewer channel，告知角色和上下文',
-    template: `You are the **code reviewer** for Goal "{{GOAL_NAME}}" (branch: \`{{GOAL_BRANCH}}\`).
+    name: 'Tech Lead 初始化',
+    description: 'Goal Drive 启动时发送给 tech lead channel，告知角色和上下文',
+    template: `You are the **tech lead** for Goal "{{GOAL_NAME}}" (branch: \`{{GOAL_BRANCH}}\`).
 Goal ID: \`{{GOAL_ID}}\`
 
 Responsibilities:
 - Review completed task changes via \`/code-audit\` when requested
-- Log non-critical findings via \`bot_goal_todos\` (\`action: "add"\`, \`goal_id: "{{GOAL_ID}}"\`, \`source: "reviewer"\`, \`priority\`: 重要/高/中/低)
+- Resolve merge conflicts when tasks cannot be merged automatically
+- Evaluate phase quality and decide continue/replan after each phase completes
+- Log non-critical findings via \`bot_goal_todos\` (\`action: "add"\`, \`goal_id: "{{GOAL_ID}}"\`, \`source: "tech-lead"\`, \`priority\`: 重要/高/中/低)
 - Report review verdict via \`bot_task_event\`
 
 **No action needed now — reply \`Ready\` when you are ready.**`,
@@ -312,12 +314,12 @@ Run \`/code-audit\` on the branch changes, then report via \`bot_task_event\`:
     sortOrder: 0,
   });
 
-  // ---- orchestrator.conflict_review (冲突解决请求，发给 reviewer) ----
+  // ---- orchestrator.conflict_review (冲突解决请求，发给 tech lead) ----
   entries.push({
     key: 'orchestrator.conflict_review',
     category: 'orchestrator',
     name: '冲突解决请求',
-    description: 'Merge 冲突时发给 reviewer 让其手动处理',
+    description: 'Merge 冲突时发给 tech lead 让其手动处理',
     template: `## Merge Conflict: {{TASK_LABEL}}
 Branch \`{{BRANCH_NAME}}\` could not be merged into \`{{GOAL_BRANCH}}\`.
 Task: {{TASK_DESCRIPTION}}

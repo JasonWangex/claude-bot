@@ -311,7 +311,7 @@ export interface Task {
   // 多模型流水线
   complexity?: TaskComplexity;   // 代码任务复杂度，Goal 创建时标注
   pipelinePhase?: PipelinePhase; // 当前阶段: 'execute'
-  auditRetries?: number;         // refix 重试计数（最多 3）
+  auditRetries?: number;         // audit-fix 循环重试计数（最多 3）
   auditSessionKey?: string;      // per-task audit session 的虚拟 channelId（'audit-{taskId}'），持久化后重启可恢复
 
   // 执行状态
@@ -386,7 +386,7 @@ export interface GoalDriveState {
   goalName: string;
   goalBranch: string;
   goalChannelId: string;      // 调度员 channel（用于通知用户）
-  reviewerChannelId?: string; // 审核员专用 channel（Opus 审核实例运行在此）
+  techLeadChannelId?: string; // Tech Lead 专用 channel（Opus 实例运行在此，负责审查、冲突解决、阶段评估）
   baseCwd: string;
   status: GoalDriveStatus;
   createdAt: number;

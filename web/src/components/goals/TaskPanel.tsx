@@ -6,10 +6,9 @@ import {
   CheckCircleOutlined,
   PauseOutlined,
   CaretRightOutlined,
-  ToolOutlined,
 } from '@ant-design/icons';
 import { TaskStatusBadge } from './StatusBadge';
-import { skipTask, retryTask, refixTask, markTaskDone, pauseGoalTask, resumeGoalTask } from '@/lib/hooks/use-goals';
+import { skipTask, retryTask, markTaskDone, pauseGoalTask, resumeGoalTask } from '@/lib/hooks/use-goals';
 import type { GoalTask } from '@/lib/types';
 
 const { Text } = Typography;
@@ -90,15 +89,6 @@ export function TaskPanel({ goalId, tasks, onAction }: TaskPanelProps) {
                           onClick={() => handleAction(task.id, () => retryTask(goalId, task.id))}
                           title="重试（从头开始）"
                         />
-                        {task.channelId && (
-                          <Button
-                            type="text" size="small" icon={<ToolOutlined />}
-                            disabled={acting !== null && acting !== task.id}
-                            loading={acting === task.id}
-                            onClick={() => handleAction(task.id, () => refixTask(goalId, task.id))}
-                            title="重新修复（保留代码）"
-                          />
-                        )}
                       </>
                     )}
                     {task.type === '手动' && task.status === 'running' && (

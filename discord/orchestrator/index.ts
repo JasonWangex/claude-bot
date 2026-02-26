@@ -37,10 +37,9 @@ import {
   skipTask as _skipTask,
   markTaskDone as _markTaskDone,
   retryTask as _retryTask,
-  refixTask as _refixTask,
+  resetAndStart as _resetAndStart,
   replanFromTask as _replanFromTask,
   pauseTask as _pauseTask,
-  resumeTask as _resumeTask,
   nudgeTask as _nudgeTask,
   buildNudgePrompt as _buildNudgePrompt,
 } from './task-control.js';
@@ -78,7 +77,7 @@ import {
   startEventScanner as _startEventScanner,
   sendCheckIn as _sendCheckIn,
   clearCheckInState as _clearCheckInState,
-  clearReviewerNudgeState as _clearReviewerNudgeState,
+  clearTechLeadNudgeState as _clearTechLeadNudgeState,
 } from './event-scanner.js';
 import {
   triggerTaskReview as _triggerTaskReview,
@@ -105,9 +104,9 @@ export class GoalOrchestrator {
   checkInCounts = new Map<string, number>();         // taskId → check-in 次数
   lastCheckInAt = new Map<string, number>();         // taskId → 上次 check-in 时间
 
-  // Reviewer 轻推状态（completed + unmerged 任务）
-  reviewerNudgeCounts = new Map<string, number>();   // taskId → 轻推次数
-  lastReviewerNudgeAt = new Map<string, number>();   // taskId → 上次轻推时间
+  // Tech Lead 轻推状态（completed + unmerged 任务）
+  techLeadNudgeCounts = new Map<string, number>();   // taskId → 轻推次数
+  lastTechLeadNudgeAt = new Map<string, number>();   // taskId → 上次轻推时间
 
   // goal event 重试计数（eventId → 失败次数），超过上限后放弃并标记已处理
   goalEventRetryCounts = new Map<string, number>();
@@ -402,15 +401,15 @@ export class GoalOrchestrator {
     return parts.join('\n\n');
   }
 
-  /** 确保 Goal/Reviewer Channel 有 Opus 会话 */
+  /** 确保 Tech Lead Channel 有 Opus 会话 */
   ensureGoalChannelSession(state: GoalDriveState, guildId: string): void {
-    const reviewerChannelId = state.reviewerChannelId ?? state.goalChannelId;
-    this.deps.stateManager.getOrCreateSession(guildId, reviewerChannelId, {
-      name: `review-${state.goalName}`,
+    const techLeadChannelId = state.techLeadChannelId ?? state.goalChannelId;
+    this.deps.stateManager.getOrCreateSession(guildId, techLeadChannelId, {
+      name: `tech-lead-${state.goalName}`,
       cwd: state.baseCwd,
     });
-    this.deps.stateManager.setSessionCwd(guildId, reviewerChannelId, state.baseCwd);
-    this.deps.stateManager.setSessionModel(guildId, reviewerChannelId, this.deps.config.pipelineOpusModel);
+    this.deps.stateManager.setSessionCwd(guildId, techLeadChannelId, state.baseCwd);
+    this.deps.stateManager.setSessionModel(guildId, techLeadChannelId, this.deps.config.pipelineOpusModel);
   }
 
   /** 为 per-task 审计创建独立的 hidden audit session */
@@ -525,10 +524,9 @@ export class GoalOrchestrator {
   async skipTask(goalId: string, taskId: string) { return _skipTask(this, goalId, taskId); }
   async markTaskDone(goalId: string, taskId: string) { return _markTaskDone(this, goalId, taskId); }
   async retryTask(goalId: string, taskId: string) { return _retryTask(this, goalId, taskId); }
-  async refixTask(goalId: string, taskId: string) { return _refixTask(this, goalId, taskId); }
+  async resetAndStart(goalId: string, taskId: string) { return _resetAndStart(this, goalId, taskId); }
   async replanFromTask(goalId: string, taskId: string) { return _replanFromTask(this, goalId, taskId); }
   async pauseTask(goalId: string, taskId: string) { return _pauseTask(this, goalId, taskId); }
-  async resumeTask(goalId: string, taskId: string) { return _resumeTask(this, goalId, taskId); }
   async nudgeTask(goalId: string, taskId: string) { return _nudgeTask(this, goalId, taskId); }
   buildNudgePrompt(task: GoalTask, label: string) { return _buildNudgePrompt(task, label); }
 
@@ -570,7 +568,7 @@ export class GoalOrchestrator {
     return _sendCheckIn(this, state, task, guildId, attempt, reviewIssues);
   }
   clearCheckInState(taskId: string) { return _clearCheckInState(this, taskId); }
-  clearReviewerNudgeState(taskId: string) { return _clearReviewerNudgeState(this, taskId); }
+  clearTechLeadNudgeState(taskId: string) { return _clearTechLeadNudgeState(this, taskId); }
 
   // -- Review / Audit --
   triggerTaskReview(state: GoalDriveState, task: GoalTask, guildId: string) { return _triggerTaskReview(this, state, task, guildId); }
