@@ -196,8 +196,10 @@ export class MessageHandler {
     }
 
     // Claude 正在处理时，直接注入 stdin，无需排队
+    // 注意：ExitPlanMode / AskUserQuestion 等待期间 isRunning=true，但不能注入——
+    // Claude 在等 tool_result，注入新 user 消息会破坏状态，必须跳过。
     const lockKey = StateManager.channelLockKey(guildId, channelId);
-    if (this.claudeClient.isRunning(lockKey)) {
+    if (this.claudeClient.isRunning(lockKey) && !this.interactionRegistry.hasPendingForChannel(channelId)) {
       const injected = this.claudeClient.injectMessage(lockKey, text);
       if (injected) {
         logger.info(`[${session.name}] Message injected to running Claude process`);
@@ -250,9 +252,9 @@ export class MessageHandler {
 
       const caption = message.content?.trim() || 'Please look at this image';
 
-      // Claude 正在处理时，直接注入 stdin
+      // Claude 正在处理时，直接注入 stdin（pending 交互期间跳过，同 handleMessage）
       const lockKey = StateManager.channelLockKey(guildId, channelId);
-      if (this.claudeClient.isRunning(lockKey)) {
+      if (this.claudeClient.isRunning(lockKey) && !this.interactionRegistry.hasPendingForChannel(channelId)) {
         const injected = this.claudeClient.injectMessage(lockKey, caption, [image]);
         if (injected) {
           logger.info(`[${session.name}] Image injected to running Claude process`);

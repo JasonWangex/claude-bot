@@ -120,6 +120,17 @@ export class InteractionRegistry {
   }
 
   /**
+   * 检查指定 channel 是否有等待中的交互（ExitPlanMode / AskUserQuestion 等）
+   * 用于在 injectMessage 前判断是否应跳过注入
+   */
+  hasPendingForChannel(channelId: string): boolean {
+    for (const entry of this.pending.values()) {
+      if (entry.channelId === channelId) return true;
+    }
+    return false;
+  }
+
+  /**
    * 清理过期条目
    */
   cleanup(): void {

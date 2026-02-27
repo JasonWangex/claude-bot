@@ -20,6 +20,7 @@ export const EVENT_TYPES = [
   'review.phase_result',
   'merge.conflict',
   'review.conflict_result',
+  'review.failed_task',
   'replan.result',
 ] as const;
 
