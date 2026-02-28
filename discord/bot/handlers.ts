@@ -426,6 +426,7 @@ export class MessageHandler {
     let lastUserEventTime = Date.now();
     const toolStartTimes = new Map<string, number>();
     const toolMsgInfos = new Map<string, { threadId: string; msgId: string; header: string; body: string }>();
+    const pendingDurations = new Map<string, string>(); // tool_result 先于 Discord send 完成时暂存时长
     const toolCounts = new Map<string, number>();
 
     const buildThreadTitle = () => {
@@ -555,15 +556,22 @@ export class MessageHandler {
           for (const resBlock of event.message.content as any[]) {
             if (resBlock.type === 'tool_result' && resBlock.tool_use_id) {
               const toolStart = toolStartTimes.get(resBlock.tool_use_id);
-              const msgInfo = toolMsgInfos.get(resBlock.tool_use_id);
               toolStartTimes.delete(resBlock.tool_use_id);
-              if (toolStart !== undefined && msgInfo) {
-                const dur = ((lastUserEventTime - toolStart) / 1000).toFixed(1);
-                const updatedMsg = msgInfo.body
-                  ? `${msgInfo.header} (${dur}s)\n${msgInfo.body}`
-                  : `${msgInfo.header} (${dur}s)`;
-                mq.edit(msgInfo.threadId, msgInfo.msgId, updatedMsg);
-                toolMsgInfos.delete(resBlock.tool_use_id);
+              if (toolStart !== undefined) {
+                const durSec = Math.max(1, (lastUserEventTime - toolStart) / 1000);
+                const durStr = `${durSec >= 10 ? durSec.toFixed(0) : durSec.toFixed(1)}s`;
+                const msgInfo = toolMsgInfos.get(resBlock.tool_use_id);
+                if (msgInfo) {
+                  // Discord 消息已发送，直接编辑
+                  const updatedMsg = msgInfo.body
+                    ? `${msgInfo.header} (${durStr})\n${msgInfo.body}`
+                    : `${msgInfo.header} (${durStr})`;
+                  mq.edit(msgInfo.threadId, msgInfo.msgId, updatedMsg);
+                  toolMsgInfos.delete(resBlock.tool_use_id);
+                } else {
+                  // Discord 消息尚未发送完成（竞态），暂存时长待发送后再编辑
+                  pendingDurations.set(resBlock.tool_use_id, durStr);
+                }
               }
             }
           }
@@ -672,7 +680,18 @@ export class MessageHandler {
                 }
                 const msgId = await mq.send(currentToolThreadId, toolMsg);
                 if (capturedBlockId) {
-                  toolMsgInfos.set(capturedBlockId, { threadId: currentToolThreadId!, msgId, header: toolHeader, body: detailBody });
+                  const pendingDur = pendingDurations.get(capturedBlockId);
+                  if (pendingDur) {
+                    // tool_result 已先到，直接编辑消息加上时长
+                    pendingDurations.delete(capturedBlockId);
+                    const updatedMsg = detailBody
+                      ? `${toolHeader} (${pendingDur})\n${detailBody}`
+                      : `${toolHeader} (${pendingDur})`;
+                    mq.edit(currentToolThreadId!, msgId, updatedMsg);
+                  } else {
+                    // 等待 tool_result 到来后再编辑
+                    toolMsgInfos.set(capturedBlockId, { threadId: currentToolThreadId!, msgId, header: toolHeader, body: detailBody });
+                  }
                 }
               }).catch(e => logger.warn(`[${session.name}] Tool thread post failed:`, e));
               mq.trackAsync(() => sendChain);
