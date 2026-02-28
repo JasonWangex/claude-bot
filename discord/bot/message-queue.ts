@@ -145,6 +145,20 @@ export class MessageQueue {
   // --- 生产者 API ---
 
   /**
+   * 获取频道中最后一条消息的 ID（用于将 tool thread 挂载到触发消息上）
+   */
+  async getLastMessageId(channelId: string): Promise<string | null> {
+    const channel = await this.getChannel(channelId);
+    if (!channel || !('messages' in channel)) return null;
+    try {
+      const msgs = await (channel as any).messages.fetch({ limit: 1 });
+      return msgs.first()?.id ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * 发送消息，返回 messageId
    */
   send(channelId: string, text: string, options?: {

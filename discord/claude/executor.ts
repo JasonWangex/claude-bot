@@ -762,6 +762,9 @@ export class ClaudeExecutor {
   injectMessage(lockKey: string, content: string | Array<Record<string, unknown>>): boolean {
     const active = this.activeProcesses.get(lockKey);
     if (!active?.stdin || active.flags.killed || active.flags.aborted) return false;
+    // stdin.end() 已调用但进程尚未退出时，writableEnded=true，写入会被 error 事件静默吞掉
+    // 此时应视为注入失败，让调用方走新会话流程
+    if (active.stdin.writableEnded) return false;
 
     const input = JSON.stringify({
       type: 'user',
