@@ -349,7 +349,6 @@ export class MessageHandler {
 
     let queuedMsgId: string | null = null; // 排队等待时的提示消息
     let toolUseCount = 0;
-    const startTime = Date.now();
     let sentTextCount = 0;
     let compactPreTokens: number | null = null;
     let lastAssistantUsage: { input_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } | null = null;
@@ -403,7 +402,9 @@ export class MessageHandler {
       }
     };
 
-    const elapsed = () => `${Math.round((Date.now() - startTime) / 1000)}s`;
+    let lastUserEventTime = Date.now();
+    const toolStartTimes = new Map<string, number>();
+    const toolMsgInfos = new Map<string, { threadId: string; msgId: string; header: string; body: string }>();
 
     // 进度回调
     const onProgress = (event: StreamEvent) => {
@@ -459,6 +460,8 @@ export class MessageHandler {
         currentToolThreadId = null;
         threadAnchorMsgId = anchorMsgId ?? null; // 重置到初始触发消息
         failedAnchors.clear();
+        toolStartTimes.clear();
+        toolMsgInfos.clear();
         return;
       }
       // stdin 注入多轮时：上一轮 result 已到，下一轮即将开始
@@ -473,6 +476,8 @@ export class MessageHandler {
         currentToolThreadId = null;
         threadAnchorMsgId = null;
         failedAnchors.clear();
+        toolStartTimes.clear();
+        toolMsgInfos.clear();
 
         sendChain = sendChain
           .then(() => flushTextBuffer())
@@ -491,6 +496,28 @@ export class MessageHandler {
       }
       if (subtype === 'compact_boundary') {
         return;
+      }
+
+      // user event：更新思考计时基准，并处理 tool_result 计时更新
+      if (event.type === 'user') {
+        lastUserEventTime = Date.now();
+        if (!isHidden && event.message?.content) {
+          for (const resBlock of event.message.content as any[]) {
+            if (resBlock.type === 'tool_result' && resBlock.tool_use_id) {
+              const toolStart = toolStartTimes.get(resBlock.tool_use_id);
+              const msgInfo = toolMsgInfos.get(resBlock.tool_use_id);
+              if (toolStart !== undefined && msgInfo) {
+                const dur = ((lastUserEventTime - toolStart) / 1000).toFixed(1);
+                const updatedMsg = msgInfo.body
+                  ? `${msgInfo.header} (${dur}s)\n${msgInfo.body}`
+                  : `${msgInfo.header} (${dur}s)`;
+                mq.edit(msgInfo.threadId, msgInfo.msgId, updatedMsg);
+                toolStartTimes.delete(resBlock.tool_use_id);
+                toolMsgInfos.delete(resBlock.tool_use_id);
+              }
+            }
+          }
+        }
       }
 
       // 收集文件变更
@@ -572,9 +599,10 @@ export class MessageHandler {
               }
             }
 
-            const toolMsg = detailBody
-              ? `[${toolUseCount}] ${toolLabel}${detailHeader} (${elapsed()})\n${detailBody}`
-              : `[${toolUseCount}] ${toolLabel}${detailHeader} (${elapsed()})`;
+            const capturedBlockId = block.id;
+            if (capturedBlockId) toolStartTimes.set(capturedBlockId, Date.now());
+            const toolHeader = `[${toolUseCount}] ${toolLabel}${detailHeader}`;
+            const toolMsg = detailBody ? `${toolHeader}\n${detailBody}` : toolHeader;
 
             if (!isHidden) {
               sendChain = sendChain.then(async () => {
@@ -590,7 +618,10 @@ export class MessageHandler {
                     return;
                   }
                 }
-                mq.send(currentToolThreadId, toolMsg);
+                const msgId = await mq.send(currentToolThreadId, toolMsg);
+                if (capturedBlockId) {
+                  toolMsgInfos.set(capturedBlockId, { threadId: currentToolThreadId!, msgId, header: toolHeader, body: detailBody });
+                }
               }).catch(e => logger.warn(`[${session.name}] Tool thread post failed:`, e));
               mq.trackAsync(() => sendChain);
             }
@@ -600,7 +631,8 @@ export class MessageHandler {
             // thinking block：发到 tool thread（与工具调用同级，不影响正文）
             if (isHidden) continue;
 
-            const thinkingMsg = `💭 Thinking (${elapsed()})`;
+            const thinkingDur = ((Date.now() - lastUserEventTime) / 1000).toFixed(1);
+            const thinkingMsg = `💭 Thinking (${thinkingDur}s)`;
 
             sendChain = sendChain.then(async () => {
               const anchorId = threadAnchorMsgId;
