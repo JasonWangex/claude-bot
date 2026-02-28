@@ -771,12 +771,6 @@ export class MessageHandler {
             sendChain = sendChain.then(async () => {
               const anchorId = threadAnchorMsgId;
               if (!anchorId) return;
-              // 若上一轮有 tool_results，finalize 旧 thread，thinking 发到新 thread
-              if (hadToolResults && currentToolThreadId) {
-                mq.finalizeThread(currentToolThreadId, buildThreadTitle()).catch(e => logger.warn(`[${session.name}] finalizeThread (thinking) failed:`, e));
-                currentToolThreadId = null;
-                toolCounts.clear();
-              }
               hadToolResults = false;
               clearThinkingTimer();
               if (!currentToolThreadId) {
