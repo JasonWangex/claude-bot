@@ -1,6 +1,6 @@
 /**
  * Discord Bot 消息处理器
- * 流式输出：工具调用 → 编辑进度消息；文本输出 → 发新消息
+ * 流式输出：工具调用 → 记录到 text 消息的 Discord Thread；文本输出 → 发新消息（或 edit Thinking...）
  * 文件变更收集：Write/Edit 结果中提取 structuredPatch，任务结束后存入 session_changes 表
  */
 
@@ -357,7 +357,6 @@ export class MessageHandler {
 
     let lastProgressText = `Thinking${modeLabel}...`;
     let toolUseCount = 0;
-    let lastEditTime = Date.now();
     const startTime = Date.now();
     let sentTextCount = 0;
     let compactPreTokens: number | null = null;
@@ -381,42 +380,39 @@ export class MessageHandler {
     const allProgressMsgIds = new Set<string>(progressMsgId ? [progressMsgId] : []);
     let recreatingProgress = false;
 
-    let progressNeedsReposition = false;
-    let repositionTimer: NodeJS.Timeout | null = null;
+    // thread 相关状态
+    let currentToolThreadId: string | null = null; // 当前 tool 消息的 thread channel ID
+    let threadAnchorMsgId: string | null = progressMsgId; // 下一批 tools 挂载的 anchor 消息 ID
+    let textifiedProgressMsgId: string | null = null; // Thinking... 被 edit 为 text 后的消息 ID
+    let textifiedContent = ''; // textifiedProgressMsgId 当前显示的文本（用于 cleanup 时移除 Stop 按钮）
+    const failedAnchors = new Set<string>(); // 建 thread 失败的 anchor，不再重试
 
     const recreateProgress = async () => {
       if (isHidden) return;
       if (recreatingProgress) return;
       recreatingProgress = true;
       try {
-        if (progressMsgId) mq.delete(channelId, progressMsgId);
+        // textifiedProgressMsgId 已成为 text 内容，不删除；其余 Thinking... 消息正常删除
+        if (progressMsgId && progressMsgId !== textifiedProgressMsgId) {
+          mq.delete(channelId, progressMsgId);
+        }
         progressMsgId = await mq.send(channelId, lastProgressText, { components: [stopRow as any], silent: true, embedColor: EmbedColors.GRAY });
         allProgressMsgIds.add(progressMsgId);
-        progressNeedsReposition = false;
       } finally {
         recreatingProgress = false;
       }
     };
 
-    const repositionProgressIfNeeded = () => {
-      if (isHidden) return;
-      if (!progressNeedsReposition || repositionTimer) return;
-      repositionTimer = setTimeout(async () => {
-        repositionTimer = null;
-        if (!progressNeedsReposition) return;
-        try {
-          await recreateProgress();
-        } catch (e) {
-          logger.warn(`[${session.name}] repositionProgress failed:`, e);
-        }
-      }, 1000);
-    };
-
     const cleanupProgressMessages = async (excludeId?: string) => {
       if (isHidden) return;
-      if (repositionTimer) { clearTimeout(repositionTimer); repositionTimer = null; }
       for (const msgId of allProgressMsgIds) {
-        if (msgId !== excludeId) mq.delete(channelId, msgId);
+        if (msgId === excludeId) continue;
+        if (msgId === textifiedProgressMsgId) {
+          // 保留消息内容，但移除 Stop 按钮（response 已结束，按钮无意义）
+          mq.edit(channelId, msgId, textifiedContent, { components: [] });
+          continue;
+        }
+        mq.delete(channelId, msgId);
       }
       try {
         await mq.drain(5000);
@@ -436,7 +432,7 @@ export class MessageHandler {
       logger.debug(`[${session.name}] flushText: ${drained.length} chunks, ${newContent.length} chars, placeholder=${!!textPlaceholderMsgId}`);
 
       try {
-        // 尝试追加到现有占位消息（edit 仅支持 <= 2000 字符，超出会被截断）
+        // 1. 尝试追加到现有占位消息（edit，无需新消息，anchor 不变）
         if (textPlaceholderMsgId) {
           const combined = textFlushedContent
             ? textFlushedContent + '\n\n' + newContent
@@ -444,27 +440,46 @@ export class MessageHandler {
           if (combined.length <= 2000) {
             mq.edit(channelId, textPlaceholderMsgId, combined);
             textFlushedContent = combined;
+            // 若正在追加到 textified 消息，同步更新其内容（cleanup 用）
+            if (textPlaceholderMsgId === textifiedProgressMsgId) textifiedContent = combined;
             lastTextFlushTime = Date.now();
             logger.debug(`[${session.name}] flushText: edited placeholder (${combined.length} chars)`);
-            return;
+            return; // 没有新消息，thread anchor 和 currentToolThreadId 不变
           }
           // 超限：不合并历史内容，新发一条消息
         }
 
-        // 新发一条消息（sendLong 自动选格式：<2000 普通 / 2000-4096 embed / >4096 response.md）
-        if (newContent.length <= 2000) {
-          textPlaceholderMsgId = await mq.send(channelId, newContent, { priority: 'high', silent: true });
+        // 2. 第一条 text 且 <=2000：edit "Thinking..." 为 text 内容，保留其 thread
+        if (!textifiedProgressMsgId && progressMsgId && newContent.length <= 2000) {
+          mq.edit(channelId, progressMsgId, newContent, { components: [stopRow as any] });
+          textPlaceholderMsgId = progressMsgId;
           textFlushedContent = newContent;
-          logger.debug(`[${session.name}] flushText: sent new msg ${textPlaceholderMsgId?.slice(-6)}`);
+          textifiedProgressMsgId = progressMsgId;
+          textifiedContent = newContent; // 记录初始内容，cleanup 时用于移除 Stop 按钮
+          threadAnchorMsgId = progressMsgId; // anchor 不变，thread 继续附在此消息上
+          // currentToolThreadId 不变（已有 thread 继续使用）
+          logger.debug(`[${session.name}] flushText: edited Thinking... as text1 ${progressMsgId.slice(-6)}`);
+        } else if (newContent.length <= 2000) {
+          // 后续 text 消息（或首条 text >2000 的回退路径）
+          const msgId = await mq.send(channelId, newContent, { priority: 'high', silent: true });
+          textPlaceholderMsgId = msgId;
+          textFlushedContent = newContent;
+          threadAnchorMsgId = msgId; // 新 anchor
+          currentToolThreadId = null; // 新消息，新 thread
+          logger.debug(`[${session.name}] flushText: sent new msg ${msgId.slice(-6)}`);
         } else {
-          await mq.sendLong(channelId, newContent, { priority: 'high', silent: true });
+          // 长文本（sendLong 自动选格式）
+          const msgId = await mq.sendLong(channelId, newContent, { priority: 'high', silent: true });
           textPlaceholderMsgId = null;
           textFlushedContent = '';
+          threadAnchorMsgId = msgId; // 新 anchor
+          currentToolThreadId = null;
           logger.debug(`[${session.name}] flushText: sent long msg (${newContent.length} chars)`);
         }
-        progressNeedsReposition = true;
-        repositionProgressIfNeeded();
+
         lastTextFlushTime = Date.now();
+        // 发新 text 后，重建 Thinking... 到底部（始终在末端）
+        await recreateProgress();
       } catch (e) {
         logger.warn(`[${session.name}] flushText failed, restoring ${drained.length} chunks:`, e);
         textBuffer.unshift(...drained);
@@ -533,6 +548,11 @@ export class MessageHandler {
         textFlushedContent = '';
         textPlaceholderMsgId = null;
         lastTextFlushTime = 0;
+        currentToolThreadId = null;
+        threadAnchorMsgId = progressMsgId; // 重置到当前 Thinking... 消息
+        textifiedProgressMsgId = null;
+        textifiedContent = '';
+        failedAnchors.clear();
         return;
       }
       // stdin 注入多轮时：上一轮 result 已到，下一轮即将开始
@@ -540,7 +560,6 @@ export class MessageHandler {
       if (event.type === 'system' && subtype === 'turn_boundary') {
         sentTextCount = 0;
         toolUseCount = 0;
-        lastEditTime = 0;
         compactPreTokens = null;
         lastAssistantUsage = null;
         interactiveState.pending = null;
@@ -550,6 +569,12 @@ export class MessageHandler {
         textFlushedContent = '';
         // progressMsgId 置 null，防止下一轮 tool_use 事件编辑已过期的进度消息
         progressMsgId = null;
+        // 重置 thread 状态
+        currentToolThreadId = null;
+        threadAnchorMsgId = null;
+        textifiedProgressMsgId = null;
+        textifiedContent = '';
+        failedAnchors.clear();
 
         sendChain = sendChain
           .then(() => flushTextBuffer())   // flush 本轮残余文本（textPlaceholder 已 null，会新建消息）
@@ -563,9 +588,11 @@ export class MessageHandler {
               silent: true,
               embedColor: EmbedColors.GRAY,
             });
-            if (progressMsgId) allProgressMsgIds.add(progressMsgId);
+            if (progressMsgId) {
+              allProgressMsgIds.add(progressMsgId);
+              threadAnchorMsgId = progressMsgId; // 新轮的 anchor
+            }
             lastProgressText = 'Thinking...';
-            progressNeedsReposition = false;
           })
           .catch(e => logger.warn(`[${session.name}] Turn boundary cleanup failed:`, e));
         mq.trackAsync(() => sendChain);
@@ -653,27 +680,28 @@ export class MessageHandler {
               }
             }
 
-            const newText = `[${toolUseCount}] ${toolLabel}${detail} (${elapsed()})`;
+            const toolMsg = `[${toolUseCount}] ${toolLabel}${detail} (${elapsed()})`;
 
-            const now = Date.now();
-            if (newText !== lastProgressText && now - lastEditTime >= 5000) {
-              if (!isHidden && progressMsgId) {
-                // 如果 progress 消息需要重新定位，立即触发 recreate（替代 debounce）
-                if (progressNeedsReposition) {
-                  if (repositionTimer) { clearTimeout(repositionTimer); repositionTimer = null; }
-                  // fire-and-forget recreate，完成后再 edit 新消息
-                  recreateProgress().then(() => {
-                    if (progressMsgId) mq.edit(channelId, progressMsgId, newText, { components: [stopRow as any], embedColor: EmbedColors.GRAY });
-                  }).catch(e => logger.warn(`[${session.name}] recreateProgress in tool update failed:`, e));
-                } else {
-                  mq.edit(channelId, progressMsgId, newText, { components: [stopRow as any], embedColor: EmbedColors.GRAY });
+            if (!isHidden) {
+              sendChain = sendChain.then(async () => {
+                const anchorId = threadAnchorMsgId; // 读取当前最新 anchor（前序 flushText 完成后）
+                if (!anchorId) return;
+                if (!currentToolThreadId) {
+                  if (failedAnchors.has(anchorId)) return; // 已知失败的 anchor，跳过
+                  try {
+                    currentToolThreadId = await mq.createThread(channelId, anchorId, 'Tool calls');
+                  } catch (e) {
+                    logger.warn(`[${session.name}] Thread creation failed:`, e);
+                    failedAnchors.add(anchorId); // 标记，后续工具不再重试
+                    return;
+                  }
                 }
-              }
-              lastProgressText = newText;
-              lastEditTime = now;
-              // 回写进度到 executor，用于中断上下文保存
-              this.claudeClient.updateProgressInfo(lockKey, newText, toolUseCount);
+                mq.send(currentToolThreadId, toolMsg);
+              }).catch(e => logger.warn(`[${session.name}] Tool thread post failed:`, e));
+              mq.trackAsync(() => sendChain);
             }
+            // 回写进度到 executor，用于中断上下文保存
+            this.claudeClient.updateProgressInfo(lockKey, toolMsg, toolUseCount);
           } else if (block.type === 'text' && block.text) {
             if (interactiveState.pending) continue;
 
@@ -976,10 +1004,9 @@ export class MessageHandler {
         this.errorReporter(guildId, channelId, `${session.name}${sessionInfo}`, error);
       }
     } finally {
-      // 安全网：10 秒后清理可能遗留的 progress 消息
-      if (repositionTimer) { clearTimeout(repositionTimer); repositionTimer = null; }
+      // 安全网：10 秒后清理可能遗留的 progress 消息（跳过已成为 text 的消息）
       if (!isHidden) {
-        const remainingIds = [...allProgressMsgIds].filter(id => id !== progressMsgId);
+        const remainingIds = [...allProgressMsgIds].filter(id => id !== progressMsgId && id !== textifiedProgressMsgId);
         if (remainingIds.length > 0) {
           setTimeout(() => {
             for (const msgId of remainingIds) {

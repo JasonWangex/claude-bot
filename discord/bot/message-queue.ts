@@ -342,6 +342,35 @@ export class MessageQueue {
     }
   }
 
+  /**
+   * 在指定消息上创建 Discord Thread，返回 thread channel ID
+   * 带 retry/backoff，与 executeSend 等操作保持一致
+   */
+  async createThread(channelId: string, messageId: string, name: string): Promise<string> {
+    const channel = await this.getChannel(channelId);
+    if (!channel || !('messages' in channel)) {
+      throw new Error(`Channel ${channelId} is not a text channel`);
+    }
+    const message = await (channel as any).messages.fetch(messageId);
+
+    for (let attempt = 0; attempt <= this.MAX_RETRY; attempt++) {
+      try {
+        const thread = await message.startThread({
+          name: name.slice(0, 100),
+          autoArchiveDuration: 60,
+        });
+        return thread.id;
+      } catch (err: any) {
+        if (this.isRateLimit(err) && attempt < this.MAX_RETRY) {
+          await this.backoffRateLimit(err);
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new Error('createThread: all retries exhausted');
+  }
+
   // --- 生命周期 ---
 
   start(): void {
@@ -569,6 +598,7 @@ export class MessageQueue {
 
         await message.edit({
           content: op.text.slice(0, this.MAX_MESSAGE_LENGTH),
+          embeds: [],
           components: op.options?.components as any,
         });
         return;
