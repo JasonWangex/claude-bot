@@ -103,9 +103,10 @@ export interface StreamEvent {
   message?: {
     role: string;
     content: Array<{
-      type: 'text' | 'tool_use' | 'tool_result';
+      type: 'text' | 'tool_use' | 'tool_result' | 'thinking';
       id?: string;        // tool_use block ID
       text?: string;
+      thinking?: string;  // thinking block content
       name?: string;      // tool name
       input?: any;
     }>;

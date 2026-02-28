@@ -602,6 +602,34 @@ export class MessageHandler {
             }
             // 回写进度到 executor，用于中断上下文保存
             this.claudeClient.updateProgressInfo(lockKey, toolMsg, toolUseCount);
+          } else if (block.type === 'thinking' && block.thinking) {
+            // thinking block：发到 tool thread（与工具调用同级，不影响正文）
+            const thinkingText = block.thinking.trim();
+            if (!thinkingText || isHidden) continue;
+
+            const snippet = thinkingText.length > 300
+              ? thinkingText.slice(0, 300) + '…'
+              : thinkingText;
+            const thinkingMsg = `💭 Thinking (${elapsed()})\n${snippet}`;
+
+            sendChain = sendChain.then(async () => {
+              const anchorId = threadAnchorMsgId;
+              if (!anchorId) return;
+              if (!currentToolThreadId) {
+                if (failedAnchors.has(anchorId)) return;
+                try {
+                  currentToolThreadId = await mq.createThread(channelId, anchorId, 'Tool calls');
+                  createdThreadIds.add(currentToolThreadId);
+                  messagesWithThreads.add(anchorId);
+                } catch (e) {
+                  logger.warn(`[${session.name}] Thread creation failed (thinking):`, e);
+                  failedAnchors.add(anchorId);
+                  return;
+                }
+              }
+              mq.send(currentToolThreadId, thinkingMsg);
+            }).catch(e => logger.warn(`[${session.name}] Thinking thread post failed:`, e));
+            mq.trackAsync(() => sendChain);
           } else if (block.type === 'text' && block.text) {
             if (interactiveState.pending) continue;
 
