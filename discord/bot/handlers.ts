@@ -37,7 +37,7 @@ import { getNotifyMention } from '../utils/env.js';
 // 工具名称映射（icon + 标签）
 const TOOL_NAMES: Record<string, string> = {
   Read: '📄 Reading',
-  Write: '✏️ Writing',
+  Write: '📝 Writing',
   Edit: '✏️ Editing',
   Glob: '🔍 Searching files',
   Grep: '🔍 Searching content',
@@ -46,6 +46,19 @@ const TOOL_NAMES: Record<string, string> = {
   WebSearch: '🌐 Searching web',
   Task: '🤖 Launching subtask',
   NotebookEdit: '📓 Editing notebook',
+};
+
+const TOOL_ICONS: Record<string, string> = {
+  Read: '📄',
+  Write: '📝',
+  Edit: '✏️',
+  Glob: '🔍',
+  Grep: '🔍',
+  Bash: '⚡',
+  WebFetch: '🌐',
+  WebSearch: '🌐',
+  Task: '🤖',
+  NotebookEdit: '📓',
 };
 
 export class MessageHandler {
@@ -393,8 +406,9 @@ export class MessageHandler {
         const msgId = await mq.sendLong(channelId, newContent, { priority: 'high', silent: true });
         threadAnchorMsgId = msgId; // 新消息作为后续 tool calls 的 thread anchor
         if (currentToolThreadId) {
-          mq.archiveThread(currentToolThreadId).catch(e => logger.warn(`[${session.name}] archiveThread failed:`, e));
+          mq.finalizeThread(currentToolThreadId, buildThreadTitle()).catch(e => logger.warn(`[${session.name}] finalizeThread failed:`, e));
           currentToolThreadId = null; // 新 anchor，下次 tool 调用时建新 thread
+          toolCounts.clear();
         }
         lastTextFlushTime = Date.now();
         logger.debug(`[${session.name}] flushText: sent msg ${msgId.slice(-6)} (${newContent.length} chars)`);
@@ -408,6 +422,16 @@ export class MessageHandler {
     let lastUserEventTime = Date.now();
     const toolStartTimes = new Map<string, number>();
     const toolMsgInfos = new Map<string, { threadId: string; msgId: string; header: string; body: string }>();
+    const toolCounts = new Map<string, number>();
+
+    const buildThreadTitle = () => {
+      const base = '🔧 Tool calls';
+      if (toolCounts.size === 0) return base;
+      const parts = Array.from(toolCounts.entries())
+        .map(([name, count]) => `${TOOL_ICONS[name] ?? '🔧'} ${name}[${count}]`)
+        .join(' ');
+      return `${base}: ${parts}`.slice(0, 100);
+    };
 
     // 进度回调
     const onProgress = (event: StreamEvent) => {
@@ -446,7 +470,7 @@ export class MessageHandler {
             sendChain = sendChain.then(async () => {
               if (failedAnchors.has(anchorId) || currentToolThreadId) return;
               try {
-                currentToolThreadId = await mq.createThread(channelId, anchorId, 'Tool calls');
+                currentToolThreadId = await mq.createThread(channelId, anchorId, '🔧 Tool calls');
                 mq.send(currentToolThreadId, 'Starting...');
               } catch (e) {
                 logger.warn(`[${session.name}] Initial thread creation failed:`, e);
@@ -482,6 +506,7 @@ export class MessageHandler {
         failedAnchors.clear();
         toolStartTimes.clear();
         toolMsgInfos.clear();
+        toolCounts.clear();
         return;
       }
       // stdin 注入多轮时：上一轮 result 已到，下一轮即将开始
@@ -498,6 +523,7 @@ export class MessageHandler {
         failedAnchors.clear();
         toolStartTimes.clear();
         toolMsgInfos.clear();
+        toolCounts.clear();
 
         sendChain = sendChain
           .then(() => flushTextBuffer())
@@ -526,13 +552,13 @@ export class MessageHandler {
             if (resBlock.type === 'tool_result' && resBlock.tool_use_id) {
               const toolStart = toolStartTimes.get(resBlock.tool_use_id);
               const msgInfo = toolMsgInfos.get(resBlock.tool_use_id);
+              toolStartTimes.delete(resBlock.tool_use_id);
               if (toolStart !== undefined && msgInfo) {
                 const dur = ((lastUserEventTime - toolStart) / 1000).toFixed(1);
                 const updatedMsg = msgInfo.body
                   ? `${msgInfo.header} (${dur}s)\n${msgInfo.body}`
                   : `${msgInfo.header} (${dur}s)`;
                 mq.edit(msgInfo.threadId, msgInfo.msgId, updatedMsg);
-                toolStartTimes.delete(resBlock.tool_use_id);
                 toolMsgInfos.delete(resBlock.tool_use_id);
               }
             }
@@ -621,6 +647,7 @@ export class MessageHandler {
 
             const capturedBlockId = block.id;
             if (capturedBlockId) toolStartTimes.set(capturedBlockId, Date.now());
+            toolCounts.set(block.name, (toolCounts.get(block.name) ?? 0) + 1);
             const toolHeader = `[${toolUseCount}] ${toolLabel}${detailHeader}`;
             const toolMsg = detailBody ? `${toolHeader}\n${detailBody}` : toolHeader;
 
@@ -631,7 +658,7 @@ export class MessageHandler {
                 if (!currentToolThreadId) {
                   if (failedAnchors.has(anchorId)) return; // 已知失败的 anchor，跳过
                   try {
-                    currentToolThreadId = await mq.createThread(channelId, anchorId, 'Tool calls');
+                    currentToolThreadId = await mq.createThread(channelId, anchorId, '🔧 Tool calls');
                   } catch (e) {
                     logger.warn(`[${session.name}] Thread creation failed:`, e);
                     failedAnchors.add(anchorId); // 标记，后续工具不再重试
@@ -660,7 +687,7 @@ export class MessageHandler {
               if (!currentToolThreadId) {
                 if (failedAnchors.has(anchorId)) return;
                 try {
-                  currentToolThreadId = await mq.createThread(channelId, anchorId, 'Tool calls');
+                  currentToolThreadId = await mq.createThread(channelId, anchorId, '🔧 Tool calls');
                 } catch (e) {
                   logger.warn(`[${session.name}] Thread creation failed (thinking):`, e);
                   failedAnchors.add(anchorId);
@@ -806,7 +833,7 @@ export class MessageHandler {
           logger.warn(`[${session.name}] Completion flush error:`, e);
         }
         if (currentToolThreadId) {
-          mq.archiveThread(currentToolThreadId).catch(e => logger.warn(`[${session.name}] archiveThread (done) failed:`, e));
+          mq.finalizeThread(currentToolThreadId, buildThreadTitle()).catch(e => logger.warn(`[${session.name}] finalizeThread (done) failed:`, e));
           currentToolThreadId = null;
         }
 
@@ -892,7 +919,7 @@ export class MessageHandler {
       await flushTextBuffer().catch(() => {});
       if (!isHidden) await mq.drain(3000).catch(() => {});
       if (!isHidden && currentToolThreadId) {
-        mq.archiveThread(currentToolThreadId).catch(e => logger.warn(`[${session.name}] archiveThread (error) failed:`, e));
+        mq.finalizeThread(currentToolThreadId, buildThreadTitle()).catch(e => logger.warn(`[${session.name}] finalizeThread (error) failed:`, e));
         currentToolThreadId = null;
       }
 
@@ -969,7 +996,7 @@ export class MessageHandler {
         const sessionInfo = errorSessionId ? ` session=${errorSessionId.slice(0, 8)}` : '';
         this.errorReporter(guildId, channelId, `${session.name}${sessionInfo}`, error);
       }
-    } finally {}
+    }
 
     break;
     } // end for loop

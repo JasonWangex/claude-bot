@@ -360,13 +360,14 @@ export class MessageQueue {
    * 在指定消息上创建 Discord Thread，返回 thread channel ID
    * 带 retry/backoff，与 executeSend 等操作保持一致
    */
-  async archiveThread(threadId: string): Promise<void> {
+  async finalizeThread(threadId: string, name: string): Promise<void> {
     try {
       const thread = await this.client.channels.fetch(threadId);
-      if (!thread || !('setArchived' in thread)) return;
+      if (!thread || !('setName' in thread)) return;
+      await (thread as any).setName(name.slice(0, 100));
       await (thread as any).setArchived(true);
     } catch (err: any) {
-      logger.warn(`archiveThread ${threadId} failed:`, err);
+      logger.warn(`finalizeThread ${threadId} failed:`, err);
     }
   }
 
