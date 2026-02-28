@@ -7,16 +7,13 @@
  *  3. 调用 forkTaskCore 创建 worktree（可选）+ Discord channel + session
  *  4. 持久化到 TaskRepo
  *  5. 设置 model
- *  6. 发送描述 embed 到新频道
  *
  * 注意：后台触发 Claude（handleBackgroundChat）由调用方自行处理。
  */
 
-import { EmbedBuilder } from 'discord.js';
 import { generateBranchName } from './git-utils.js';
 import { generateTopicTitle } from './llm.js';
 import { forkTaskCore, type ForkTaskDeps, type ForkTaskResult } from './fork-task.js';
-import { EmbedColors } from '../bot/message-queue.js';
 import { TaskRepo } from '../db/repo/task-repo.js';
 import { getDb } from '../db/index.js';
 import { logger } from './logger.js';
@@ -119,19 +116,6 @@ export async function qdevCore(options: QdevOptions, deps: ForkTaskDeps): Promis
   // 5. 设置自定义 model（如果指定）
   if (model) {
     deps.stateManager.setSessionModel(guildId, forkResult.channelId, model);
-  }
-
-  // 6. 发送描述 embed 到新频道（非致命：send 失败不影响任务已建立的状态）
-  try {
-    const newChannel = await deps.client.channels.fetch(forkResult.channelId);
-    if (newChannel && newChannel.isTextBased() && 'send' in newChannel) {
-      const descEmbed = new EmbedBuilder()
-        .setColor(EmbedColors.PURPLE)
-        .setDescription(`[qdev] ${description}`.slice(0, 4096));
-      await (newChannel as any).send({ embeds: [descEmbed] });
-    }
-  } catch (err) {
-    logger.warn('[qdevCore] Failed to send description embed:', err);
   }
 
   return {

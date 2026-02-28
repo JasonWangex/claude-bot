@@ -4,7 +4,6 @@
 
 import {
   Client,
-  EmbedBuilder,
   GatewayIntentBits,
   Events,
   ChannelType,
@@ -708,15 +707,6 @@ export class DiscordBot {
             worktreesDir: this.config.worktreesDir,
             channelService: this.channelService ?? undefined,
           }, threadTitle);
-
-          // 发送任务描述到新 channel
-          const newChannel = await this.client.channels.fetch(forkResult.channelId);
-          if (newChannel && newChannel.isTextBased() && 'send' in newChannel) {
-            const descEmbed = new EmbedBuilder()
-              .setColor(EmbedColors.PURPLE)
-              .setDescription(`[idea→qdev] ${idea.name}`.slice(0, 4096));
-            await (newChannel as any).send({ embeds: [descEmbed] });
-          }
 
           // 触发 Claude 处理
           this.messageHandler.handleBackgroundChat(guildId, forkResult.channelId, idea.name, 'idea→qdev').catch((err) => {
