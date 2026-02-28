@@ -346,14 +346,7 @@ export class MessageHandler {
     const modeLabel = mode === 'plan' ? ' Plan' : '';
     const lockKey = StateManager.channelLockKey(guildId, channelId);
 
-    // 停止按钮（hidden session 无 Discord channel，跳过）
-    const stopButton = isHidden ? null : new ButtonBuilder()
-      .setCustomId(`stop:${lockKey}`)
-      .setLabel('Stop')
-      .setStyle(ButtonStyle.Danger);
-    const stopRow = stopButton ? new ActionRowBuilder<ButtonBuilder>().addComponents(stopButton) : null;
-
-    let progressMsgId: string | null = isHidden ? null : await this.mq.send(channelId, `Thinking${modeLabel}...`, { components: [stopRow as any], priority: 'high', silent: true, embedColor: EmbedColors.GRAY });
+    let progressMsgId: string | null = isHidden ? null : await this.mq.send(channelId, `Thinking${modeLabel}...`, { priority: 'high', silent: true, embedColor: EmbedColors.GRAY });
 
     let lastProgressText = `Thinking${modeLabel}...`;
     let toolUseCount = 0;
@@ -363,12 +356,10 @@ export class MessageHandler {
     let lastAssistantUsage: { input_tokens: number; cache_read_input_tokens?: number; cache_creation_input_tokens?: number } | null = null;
     let sendChain = Promise.resolve();
 
-    // Text 占位消息
-    let textPlaceholderMsgId: string | null = null;
+    // Text 缓冲
     let textBuffer: string[] = [];
-    let textFlushedContent = '';
     let lastTextFlushTime = 0;
-    const TEXT_FLUSH_INTERVAL = 10000;
+    const TEXT_FLUSH_INTERVAL = 1000;
 
     // 交互式工具拦截
     const interactiveState: { pending: { toolName: string; toolUseId: string; input: any } | null } = { pending: null };
@@ -383,20 +374,20 @@ export class MessageHandler {
     // thread 相关状态
     let currentToolThreadId: string | null = null; // 当前 tool 消息的 thread channel ID
     let threadAnchorMsgId: string | null = progressMsgId; // 下一批 tools 挂载的 anchor 消息 ID
-    let textifiedProgressMsgId: string | null = null; // Thinking... 被 edit 为 text 后的消息 ID
-    let textifiedContent = ''; // textifiedProgressMsgId 当前显示的文本（用于 cleanup 时移除 Stop 按钮）
     const failedAnchors = new Set<string>(); // 建 thread 失败的 anchor，不再重试
+    const createdThreadIds = new Set<string>(); // 本次 session 创建的所有 thread，session 结束时归档
+    const messagesWithThreads = new Set<string>(); // 已有 thread 的 anchor 消息，cleanup 时不删除
 
     const recreateProgress = async () => {
       if (isHidden) return;
       if (recreatingProgress) return;
       recreatingProgress = true;
       try {
-        // textifiedProgressMsgId 已成为 text 内容，不删除；其余 Thinking... 消息正常删除
-        if (progressMsgId && progressMsgId !== textifiedProgressMsgId) {
+        // 有 thread 的 anchor 不删除（删除会导致 thread 与消息脱锚）
+        if (progressMsgId && !messagesWithThreads.has(progressMsgId)) {
           mq.delete(channelId, progressMsgId);
         }
-        progressMsgId = await mq.send(channelId, lastProgressText, { components: [stopRow as any], silent: true, embedColor: EmbedColors.GRAY });
+        progressMsgId = await mq.send(channelId, lastProgressText, { silent: true, embedColor: EmbedColors.GRAY });
         allProgressMsgIds.add(progressMsgId);
       } finally {
         recreatingProgress = false;
@@ -407,11 +398,6 @@ export class MessageHandler {
       if (isHidden) return;
       for (const msgId of allProgressMsgIds) {
         if (msgId === excludeId) continue;
-        if (msgId === textifiedProgressMsgId) {
-          // 保留消息内容，但移除 Stop 按钮（response 已结束，按钮无意义）
-          mq.edit(channelId, msgId, textifiedContent, { components: [] });
-          continue;
-        }
         mq.delete(channelId, msgId);
       }
       try {
@@ -429,55 +415,15 @@ export class MessageHandler {
       // hidden session：只清缓冲区，不发 Discord 消息
       if (isHidden) return;
       const newContent = drained.join('\n\n');
-      logger.debug(`[${session.name}] flushText: ${drained.length} chunks, ${newContent.length} chars, placeholder=${!!textPlaceholderMsgId}`);
+      logger.debug(`[${session.name}] flushText: ${drained.length} chunks, ${newContent.length} chars`);
 
       try {
-        // 1. 尝试追加到现有占位消息（edit，无需新消息，anchor 不变）
-        if (textPlaceholderMsgId) {
-          const combined = textFlushedContent
-            ? textFlushedContent + '\n\n' + newContent
-            : newContent;
-          if (combined.length <= 2000) {
-            mq.edit(channelId, textPlaceholderMsgId, combined);
-            textFlushedContent = combined;
-            // 若正在追加到 textified 消息，同步更新其内容（cleanup 用）
-            if (textPlaceholderMsgId === textifiedProgressMsgId) textifiedContent = combined;
-            lastTextFlushTime = Date.now();
-            logger.debug(`[${session.name}] flushText: edited placeholder (${combined.length} chars)`);
-            return; // 没有新消息，thread anchor 和 currentToolThreadId 不变
-          }
-          // 超限：不合并历史内容，新发一条消息
-        }
-
-        // 2. 第一条 text 且 <=2000：edit "Thinking..." 为 text 内容，保留其 thread
-        if (!textifiedProgressMsgId && progressMsgId && newContent.length <= 2000) {
-          mq.edit(channelId, progressMsgId, newContent, { components: [stopRow as any] });
-          textPlaceholderMsgId = progressMsgId;
-          textFlushedContent = newContent;
-          textifiedProgressMsgId = progressMsgId;
-          textifiedContent = newContent; // 记录初始内容，cleanup 时用于移除 Stop 按钮
-          threadAnchorMsgId = progressMsgId; // anchor 不变，thread 继续附在此消息上
-          // currentToolThreadId 不变（已有 thread 继续使用）
-          logger.debug(`[${session.name}] flushText: edited Thinking... as text1 ${progressMsgId.slice(-6)}`);
-        } else if (newContent.length <= 2000) {
-          // 后续 text 消息（或首条 text >2000 的回退路径）
-          const msgId = await mq.send(channelId, newContent, { priority: 'high', silent: true });
-          textPlaceholderMsgId = msgId;
-          textFlushedContent = newContent;
-          threadAnchorMsgId = msgId; // 新 anchor
-          currentToolThreadId = null; // 新消息，新 thread
-          logger.debug(`[${session.name}] flushText: sent new msg ${msgId.slice(-6)}`);
-        } else {
-          // 长文本（sendLong 自动选格式）
-          const msgId = await mq.sendLong(channelId, newContent, { priority: 'high', silent: true });
-          textPlaceholderMsgId = null;
-          textFlushedContent = '';
-          threadAnchorMsgId = msgId; // 新 anchor
-          currentToolThreadId = null;
-          logger.debug(`[${session.name}] flushText: sent long msg (${newContent.length} chars)`);
-        }
-
+        // 始终发新消息，不 edit 已有消息
+        const msgId = await mq.sendLong(channelId, newContent, { priority: 'high', silent: true });
+        threadAnchorMsgId = msgId; // 新消息作为后续 tool calls 的 thread anchor
+        currentToolThreadId = null; // 新 anchor，下次 tool 调用时建新 thread
         lastTextFlushTime = Date.now();
+        logger.debug(`[${session.name}] flushText: sent msg ${msgId.slice(-6)} (${newContent.length} chars)`);
         // 发新 text 后，重建 Thinking... 到底部（始终在末端）
         await recreateProgress();
       } catch (e) {
@@ -517,23 +463,23 @@ export class MessageHandler {
           : 'Thinking';
         const newText = `${prefix}... (${elapsed()})`;
         lastProgressText = newText;
-        if (!isHidden && progressMsgId) mq.edit(channelId, progressMsgId, newText, { components: [stopRow as any], embedColor: EmbedColors.GRAY });
+        if (!isHidden && progressMsgId) mq.edit(channelId, progressMsgId, newText, { embedColor: EmbedColors.GRAY });
         return;
       }
       if (event.type === 'system' && subtype === 'session_reset') {
-        if (!isHidden && progressMsgId) mq.edit(channelId, progressMsgId, 'Context too long, auto-reset...', { components: [stopRow as any], embedColor: EmbedColors.YELLOW });
+        if (!isHidden && progressMsgId) mq.edit(channelId, progressMsgId, 'Context too long, auto-reset...', { embedColor: EmbedColors.YELLOW });
         this.stateManager.clearSessionClaudeId(guildId, channelId);
         return;
       }
       if (event.type === 'system' && subtype === 'retrying') {
-        if (!isHidden && progressMsgId) mq.edit(channelId, progressMsgId, 'Error, retrying...', { components: [stopRow as any], embedColor: EmbedColors.YELLOW });
+        if (!isHidden && progressMsgId) mq.edit(channelId, progressMsgId, 'Error, retrying...', { embedColor: EmbedColors.YELLOW });
         return;
       }
       if (event.type === 'system' && subtype === 'stall_warning') {
         if (!isHidden && progressMsgId) {
           const secs = (event as any).stallSeconds || '?';
           const newText = `${lastProgressText}\n> Stalled ${secs}s (${elapsed()})... may be deep-thinking\n> Use Stop to cancel`;
-          mq.edit(channelId, progressMsgId, newText, { components: [stopRow as any], embedColor: EmbedColors.YELLOW });
+          mq.edit(channelId, progressMsgId, newText, { embedColor: EmbedColors.YELLOW });
         }
         return;
       }
@@ -545,14 +491,11 @@ export class MessageHandler {
         lastAssistantUsage = null;
         interactiveState.pending = null;
         textBuffer.length = 0;
-        textFlushedContent = '';
-        textPlaceholderMsgId = null;
         lastTextFlushTime = 0;
         currentToolThreadId = null;
         threadAnchorMsgId = progressMsgId; // 重置到当前 Thinking... 消息
-        textifiedProgressMsgId = null;
-        textifiedContent = '';
         failedAnchors.clear();
+        messagesWithThreads.clear();
         return;
       }
       // stdin 注入多轮时：上一轮 result 已到，下一轮即将开始
@@ -564,17 +507,13 @@ export class MessageHandler {
         lastAssistantUsage = null;
         interactiveState.pending = null;
         lastTextFlushTime = 0;
-        // 同步重置文本占位符：防止下一轮文本事件在 flush 完成前 edit 到旧消息
-        textPlaceholderMsgId = null;
-        textFlushedContent = '';
         // progressMsgId 置 null，防止下一轮 tool_use 事件编辑已过期的进度消息
         progressMsgId = null;
         // 重置 thread 状态
         currentToolThreadId = null;
         threadAnchorMsgId = null;
-        textifiedProgressMsgId = null;
-        textifiedContent = '';
         failedAnchors.clear();
+        messagesWithThreads.clear();
 
         sendChain = sendChain
           .then(() => flushTextBuffer())   // flush 本轮残余文本（textPlaceholder 已 null，会新建消息）
@@ -583,7 +522,6 @@ export class MessageHandler {
             await cleanupProgressMessages();
             // 为下一轮创建新进度消息
             progressMsgId = await mq.send(channelId, 'Thinking...', {
-              components: [stopRow as any],
               priority: 'high',
               silent: true,
               embedColor: EmbedColors.GRAY,
@@ -601,7 +539,7 @@ export class MessageHandler {
 
       // 压缩状态事件: {type:"system", subtype:"status", status:"compacting"|null}
       if (event.type === 'system' && subtype === 'status' && event.status === 'compacting') {
-        if (!isHidden && progressMsgId) mq.edit(channelId, progressMsgId, `Compacting context... (${elapsed()})`, { components: [stopRow as any], embedColor: EmbedColors.GRAY });
+        if (!isHidden && progressMsgId) mq.edit(channelId, progressMsgId, `Compacting context... (${elapsed()})`, { embedColor: EmbedColors.GRAY });
         return;
       }
       // compact_boundary 携带 compact_metadata
@@ -609,7 +547,7 @@ export class MessageHandler {
         compactPreTokens = event.compact_metadata.pre_tokens;
       }
       if (subtype === 'compact_boundary') {
-        if (!isHidden && progressMsgId) mq.edit(channelId, progressMsgId, `Context compacted, thinking... (${elapsed()})`, { components: [stopRow as any], embedColor: EmbedColors.GRAY });
+        if (!isHidden && progressMsgId) mq.edit(channelId, progressMsgId, `Context compacted, thinking... (${elapsed()})`, { embedColor: EmbedColors.GRAY });
         return;
       }
 
@@ -665,22 +603,36 @@ export class MessageHandler {
             toolUseCount++;
             const toolLabel = TOOL_NAMES[block.name] || block.name;
 
-            let detail = '';
+            let detailHeader = '';
+            let detailBody = '';
             if (block.input) {
               if (block.name === 'Read' && block.input.file_path) {
-                detail = `: ${this.shortPath(block.input.file_path)}`;
+                detailHeader = `: ${this.shortPath(block.input.file_path)}`;
               } else if (block.name === 'Bash' && block.input.command) {
-                detail = `: ${block.input.command.slice(0, 40)}`;
+                detailHeader = `: ${block.input.command.slice(0, 60)}`;
               } else if (block.name === 'Grep' && block.input.pattern) {
-                detail = `: ${block.input.pattern}`;
+                detailHeader = `: ${block.input.pattern}`;
               } else if (block.name === 'Glob' && block.input.pattern) {
-                detail = `: ${block.input.pattern}`;
-              } else if ((block.name === 'Edit' || block.name === 'Write') && block.input.file_path) {
-                detail = `: ${this.shortPath(block.input.file_path)}`;
+                detailHeader = `: ${block.input.pattern}`;
+              } else if (block.name === 'Edit' && block.input.file_path) {
+                detailHeader = `: ${this.shortPath(block.input.file_path)}`;
+                const oldStr = (block.input.old_string || '').slice(0, 200);
+                const newStr = (block.input.new_string || '').slice(0, 200);
+                const diffLines = [
+                  ...oldStr.split('\n').map((l: string) => `- ${l}`),
+                  ...newStr.split('\n').map((l: string) => `+ ${l}`),
+                ].join('\n');
+                detailBody = `\`\`\`diff\n${diffLines}\n\`\`\``;
+              } else if (block.name === 'Write' && block.input.file_path) {
+                detailHeader = `: ${this.shortPath(block.input.file_path)}`;
+                const content = (block.input.content || '').slice(0, 500);
+                detailBody = `\`\`\`\n${content}\n\`\`\``;
               }
             }
 
-            const toolMsg = `[${toolUseCount}] ${toolLabel}${detail} (${elapsed()})`;
+            const toolMsg = detailBody
+              ? `[${toolUseCount}] ${toolLabel}${detailHeader} (${elapsed()})\n${detailBody}`
+              : `[${toolUseCount}] ${toolLabel}${detailHeader} (${elapsed()})`;
 
             if (!isHidden) {
               sendChain = sendChain.then(async () => {
@@ -690,6 +642,9 @@ export class MessageHandler {
                   if (failedAnchors.has(anchorId)) return; // 已知失败的 anchor，跳过
                   try {
                     currentToolThreadId = await mq.createThread(channelId, anchorId, 'Tool calls');
+                    createdThreadIds.add(currentToolThreadId);
+                    messagesWithThreads.add(anchorId);
+                    allProgressMsgIds.delete(anchorId); // anchor 已有 thread，不再视为纯进度消息
                   } catch (e) {
                     logger.warn(`[${session.name}] Thread creation failed:`, e);
                     failedAnchors.add(anchorId); // 标记，后续工具不再重试
@@ -712,7 +667,7 @@ export class MessageHandler {
 
             textBuffer.push(textContent);
             const now = Date.now();
-            if (!textPlaceholderMsgId || now - lastTextFlushTime >= TEXT_FLUSH_INTERVAL) {
+            if (now - lastTextFlushTime >= TEXT_FLUSH_INTERVAL) {
               sendChain = sendChain.then(() => flushTextBuffer()).catch(e => {
                 logger.warn('Flush text failed:', e);
               });
@@ -1004,9 +959,9 @@ export class MessageHandler {
         this.errorReporter(guildId, channelId, `${session.name}${sessionInfo}`, error);
       }
     } finally {
-      // 安全网：10 秒后清理可能遗留的 progress 消息（跳过已成为 text 的消息）
+      // 安全网：10 秒后清理可能遗留的 progress 消息
       if (!isHidden) {
-        const remainingIds = [...allProgressMsgIds].filter(id => id !== progressMsgId && id !== textifiedProgressMsgId);
+        const remainingIds = [...allProgressMsgIds].filter(id => id !== progressMsgId);
         if (remainingIds.length > 0) {
           setTimeout(() => {
             for (const msgId of remainingIds) {
@@ -1014,6 +969,10 @@ export class MessageHandler {
             }
           }, 10000);
         }
+      }
+      // 归档本次 session 创建的所有 thread，避免超出频道活跃 thread 数量上限
+      for (const threadId of createdThreadIds) {
+        mq.archiveThread(threadId).catch(e => logger.warn(`[${session.name}] archiveThread ${threadId} failed:`, e));
       }
     }
 

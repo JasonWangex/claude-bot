@@ -116,7 +116,7 @@ export class MessageQueue {
   private readonly FLUSH_INTERVAL = 100;
   private readonly MIN_OP_INTERVAL = 300;
   private readonly MAX_RETRY = 2;
-  private readonly THREAD_BUFFER_WINDOW = 3000;   // 3s 缓冲窗口
+  private readonly THREAD_BUFFER_WINDOW = 1000;   // 1s 缓冲窗口
   private readonly MERGE_SEPARATOR = '\n\n───\n\n';
   private readonly MAX_MERGE_LENGTH = 1800;        // Discord 2000 字符限制，留余量
   private readonly MAX_MESSAGE_LENGTH = 2000;
@@ -369,6 +369,16 @@ export class MessageQueue {
       }
     }
     throw new Error('createThread: all retries exhausted');
+  }
+
+  /**
+   * 归档指定 Thread（session 结束时调用，避免超出活跃 thread 数量上限）
+   */
+  async archiveThread(threadId: string): Promise<void> {
+    const thread = await this.getChannel(threadId);
+    if (thread && 'setArchived' in thread) {
+      await (thread as any).setArchived(true);
+    }
   }
 
   // --- 生命周期 ---
