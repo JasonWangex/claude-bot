@@ -750,9 +750,8 @@ export class MessageHandler {
         try {
           await sendChain;
           await flushTextBuffer();
-          await mq.drain();
         } catch (e) {
-          logger.warn(`[${session.name}] Completion drain error:`, e);
+          logger.warn(`[${session.name}] Completion flush error:`, e);
         }
 
         await cleanupProgressMessages();
@@ -808,6 +807,7 @@ export class MessageHandler {
           ? `[${modelName} | ${session.claudeSessionId?.slice(0, 8) ?? '?'}] `
           : '';
 
+        this.stateManager.setDoneSentAt(channelId);
         let doneMsgId: string;
         if (mode === 'plan') {
           this.stateManager.setSessionPlanMode(guildId, channelId, true);
@@ -820,7 +820,6 @@ export class MessageHandler {
         } else {
           doneMsgId = await mq.send(channelId, `✅ ${sessionPrefix}${getNotifyMention()} Done${summary}${changesLink}`, { priority: 'high' });
         }
-        this.stateManager.setDoneSentAt(channelId);
 
         // 记录最新 Discord 消息 ID 到 link（reply 路由用）
         // 通过 claudeSessionId 查找对应 link 的 UUID（兼容 reply 路由后 session.id 已被替换的情况）
