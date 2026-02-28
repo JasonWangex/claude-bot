@@ -38,7 +38,7 @@ import { ClaudeSessionRepository } from '../db/repo/claude-session-repo.js';
 import { ChannelSessionLinkRepository } from '../db/repo/channel-session-link-repo.js';
 import { SyncCursorRepository } from '../db/repo/sync-cursor-repo.js';
 import { ChannelService } from '../services/channel-service.js';
-import { getAuthorizedGuildId, getGeneralChannelId } from '../utils/env.js';
+import { getAuthorizedGuildId, getGeneralChannelId, getNotifyMention } from '../utils/env.js';
 import { AuthErrorInterceptor } from '../claude/auth-error-interceptor.js';
 import { ApiErrorInterceptor } from '../claude/api-error-interceptor.js';
 import { escapeMarkdown } from './message-utils.js';
@@ -1053,6 +1053,49 @@ export class DiscordBot {
       });
       await this.apiServer.start();
     }
+
+    // 重连上次 Bot 关闭时仍在运行的孤儿 Claude 进程
+    // 进程已完成：发送结果文本 + Done；进程仍在运行：启动后台监控直到完成
+    await this.claudeClient.reconnectAll(async (info) => {
+      if (!info.channelId) return;
+
+      // 跳过 hidden session（orchestrator 通过事件扫描器自行处理）
+      if (info.guildId) {
+        const s = this.stateManager.getSession(info.guildId, info.channelId);
+        if (s?.hidden) {
+          logger.debug(`[Reconnect] Skipping hidden channel ${info.channelId}`);
+          return;
+        }
+      }
+
+      logger.info(`[Reconnect] channel=${info.channelId} status=${info.status}`);
+
+      try {
+        if (info.status === 'completed') {
+          if (info.result?.trim()) {
+            await this.messageQueue.sendLong(info.channelId, info.result);
+          }
+          await this.messageQueue.send(
+            info.channelId,
+            `✅ ${getNotifyMention()} Done`,
+            { priority: 'high', embedColor: EmbedColors.GREEN },
+          );
+          // Done 发送成功后再设置 doneSentAt，防止 Stop hook 5s 后重复发送
+          this.stateManager.setDoneSentAt(info.channelId);
+          if (info.claudeSessionId) {
+            await this.sessionSyncService.syncSession(info.claudeSessionId, info.channelId);
+          }
+        } else {
+          await this.messageQueue.send(
+            info.channelId,
+            '⚠️ Bot 重启后检测到任务未能完成',
+            { priority: 'high', embedColor: EmbedColors.RED },
+          );
+        }
+      } catch (err: any) {
+        logger.warn(`[Reconnect] Failed to send result to channel ${info.channelId}:`, err.message);
+      }
+    });
 
     process.once('SIGINT', () => this.stop('SIGINT'));
     process.once('SIGTERM', () => this.stop('SIGTERM'));
