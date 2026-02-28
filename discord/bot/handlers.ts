@@ -392,7 +392,10 @@ export class MessageHandler {
         // 始终发新消息，不 edit 已有消息
         const msgId = await mq.sendLong(channelId, newContent, { priority: 'high', silent: true });
         threadAnchorMsgId = msgId; // 新消息作为后续 tool calls 的 thread anchor
-        currentToolThreadId = null; // 新 anchor，下次 tool 调用时建新 thread
+        if (currentToolThreadId) {
+          mq.archiveThread(currentToolThreadId).catch(e => logger.warn(`[${session.name}] archiveThread failed:`, e));
+          currentToolThreadId = null; // 新 anchor，下次 tool 调用时建新 thread
+        }
         lastTextFlushTime = Date.now();
         logger.debug(`[${session.name}] flushText: sent msg ${msgId.slice(-6)} (${newContent.length} chars)`);
       } catch (e) {
@@ -435,6 +438,23 @@ export class MessageHandler {
         if (!isHidden && queuedMsgId) {
           mq.delete(channelId, queuedMsgId);
           queuedMsgId = null;
+        }
+        // 立即创建 tool thread 并发送 Starting... 给用户即时反馈
+        if (!isHidden && threadAnchorMsgId && !currentToolThreadId) {
+          const anchorId = threadAnchorMsgId;
+          if (!failedAnchors.has(anchorId)) {
+            sendChain = sendChain.then(async () => {
+              if (failedAnchors.has(anchorId) || currentToolThreadId) return;
+              try {
+                currentToolThreadId = await mq.createThread(channelId, anchorId, 'Tool calls');
+                mq.send(currentToolThreadId, 'Starting...');
+              } catch (e) {
+                logger.warn(`[${session.name}] Initial thread creation failed:`, e);
+                failedAnchors.add(anchorId);
+              }
+            }).catch(e => logger.warn(`[${session.name}] Initial thread post failed:`, e));
+            mq.trackAsync(() => sendChain);
+          }
         }
         return;
       }
@@ -785,6 +805,10 @@ export class MessageHandler {
         } catch (e) {
           logger.warn(`[${session.name}] Completion flush error:`, e);
         }
+        if (currentToolThreadId) {
+          mq.archiveThread(currentToolThreadId).catch(e => logger.warn(`[${session.name}] archiveThread (done) failed:`, e));
+          currentToolThreadId = null;
+        }
 
         await cleanupProgressMessages();
 
@@ -867,6 +891,10 @@ export class MessageHandler {
       await sendChain.catch(() => {});
       await flushTextBuffer().catch(() => {});
       if (!isHidden) await mq.drain(3000).catch(() => {});
+      if (!isHidden && currentToolThreadId) {
+        mq.archiveThread(currentToolThreadId).catch(e => logger.warn(`[${session.name}] archiveThread (error) failed:`, e));
+        currentToolThreadId = null;
+      }
 
       await cleanupProgressMessages();
 
