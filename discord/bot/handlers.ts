@@ -424,6 +424,17 @@ export class MessageHandler {
     };
 
     let lastUserEventTime = Date.now();
+    let hadToolResults = false; // true after user event with tool_results, used to start new thread before next thinking
+    // 15s periodic thinking timer (runs between last tool_result and next assistant turn)
+    let thinkingTimerInterval: ReturnType<typeof setInterval> | null = null;
+    let thinkingTimerMsgId: string | null = null;
+    let thinkingTimerThreadId: string | null = null;
+    let thinkingTimerStart = 0;
+    const clearThinkingTimer = () => {
+      if (thinkingTimerInterval) { clearInterval(thinkingTimerInterval); thinkingTimerInterval = null; }
+      thinkingTimerMsgId = null;
+      thinkingTimerThreadId = null;
+    };
     const toolStartTimes = new Map<string, number>();
     const toolMsgInfos = new Map<string, { threadId: string; msgId: string; header: string; body: string }>();
     const pendingDurations = new Map<string, string>(); // tool_result 先于 Discord send 完成时暂存时长
@@ -507,6 +518,8 @@ export class MessageHandler {
         textBuffer.length = 0;
         lastTextFlushTime = 0;
         currentToolThreadId = null;
+        hadToolResults = false;
+        clearThinkingTimer();
         threadAnchorMsgId = anchorMsgId ?? null; // 重置到初始触发消息
         failedAnchors.clear();
         toolStartTimes.clear();
@@ -555,10 +568,17 @@ export class MessageHandler {
         if (!isHidden && event.message?.content) {
           for (const resBlock of event.message.content as any[]) {
             if (resBlock.type === 'tool_result' && resBlock.tool_use_id) {
+              hadToolResults = true;
               const toolStart = toolStartTimes.get(resBlock.tool_use_id);
               toolStartTimes.delete(resBlock.tool_use_id);
               if (toolStart !== undefined) {
-                const durSec = Math.max(1, (lastUserEventTime - toolStart) / 1000);
+                const actualMs = lastUserEventTime - toolStart;
+                if (actualMs < 1000) {
+                  toolMsgInfos.delete(resBlock.tool_use_id);
+                  pendingDurations.delete(resBlock.tool_use_id);
+                  continue;
+                }
+                const durSec = actualMs / 1000;
                 const durStr = `${durSec >= 10 ? durSec.toFixed(0) : durSec.toFixed(1)}s`;
                 const msgInfo = toolMsgInfos.get(resBlock.tool_use_id);
                 if (msgInfo) {
@@ -575,6 +595,26 @@ export class MessageHandler {
               }
             }
           }
+        }
+        // 所有 tool_results 处理完后启动 thinking 计时 timer
+        if (!isHidden && hadToolResults && !thinkingTimerInterval) {
+          thinkingTimerStart = Date.now();
+          thinkingTimerInterval = setInterval(async () => {
+            const elapsed = Math.round((Date.now() - thinkingTimerStart) / 1000);
+            const msg = `💭 Thinking... (${elapsed}s)`;
+            if (currentToolThreadId) {
+              if (thinkingTimerThreadId === currentToolThreadId && thinkingTimerMsgId) {
+                mq.edit(currentToolThreadId, thinkingTimerMsgId, msg);
+              } else {
+                const tid = currentToolThreadId;
+                mq.send(tid, msg).then(id => { thinkingTimerMsgId = id; thinkingTimerThreadId = tid; }).catch(() => {});
+              }
+            } else if (thinkingTimerMsgId) {
+              // thread 已 finalize，thinking 是最后一条 → 发到 text channel
+              mq.send(channelId, msg, { silent: true });
+              clearThinkingTimer();
+            }
+          }, 15000);
         }
       }
 
@@ -678,6 +718,7 @@ export class MessageHandler {
                     return;
                   }
                 }
+                clearThinkingTimer();
                 const msgId = await mq.send(currentToolThreadId, toolMsg);
                 if (capturedBlockId) {
                   const pendingDur = pendingDurations.get(capturedBlockId);
@@ -708,6 +749,14 @@ export class MessageHandler {
             sendChain = sendChain.then(async () => {
               const anchorId = threadAnchorMsgId;
               if (!anchorId) return;
+              // 若上一轮有 tool_results，finalize 旧 thread，thinking 发到新 thread
+              if (hadToolResults && currentToolThreadId) {
+                mq.finalizeThread(currentToolThreadId, buildThreadTitle()).catch(e => logger.warn(`[${session.name}] finalizeThread (thinking) failed:`, e));
+                currentToolThreadId = null;
+                toolCounts.clear();
+              }
+              hadToolResults = false;
+              clearThinkingTimer();
               if (!currentToolThreadId) {
                 if (failedAnchors.has(anchorId)) return;
                 try {
@@ -856,6 +905,7 @@ export class MessageHandler {
         } catch (e) {
           logger.warn(`[${session.name}] Completion flush error:`, e);
         }
+        clearThinkingTimer();
         if (currentToolThreadId) {
           mq.finalizeThread(currentToolThreadId, buildThreadTitle()).catch(e => logger.warn(`[${session.name}] finalizeThread (done) failed:`, e));
           currentToolThreadId = null;
@@ -942,6 +992,7 @@ export class MessageHandler {
       await sendChain.catch(() => {});
       await flushTextBuffer().catch(() => {});
       if (!isHidden) await mq.drain(3000).catch(() => {});
+      clearThinkingTimer();
       if (!isHidden && currentToolThreadId) {
         mq.finalizeThread(currentToolThreadId, buildThreadTitle()).catch(e => logger.warn(`[${session.name}] finalizeThread (error) failed:`, e));
         currentToolThreadId = null;
