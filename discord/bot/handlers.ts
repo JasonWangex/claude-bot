@@ -1111,12 +1111,12 @@ export class MessageHandler {
 
     // 向频道发送来源指示 embed（hidden session 无真实 Discord channel，跳过）
     // 等待发送完成以获取消息 ID，用于将 tool thread 挂载到该 indicator 消息上
+    // 超过 4096 字符自动走 response.md 文件附件路径
     let anchorMsgId: string | null = null;
     if (!session.hidden) {
       const label = source ?? 'BackgroundChat';
-      const preview = message.replace(/\n+/g, ' ');
-      const indicator = preview.length > 100 ? `${preview.slice(0, 100)}…` : preview;
-      anchorMsgId = await this.mq.send(channelId, `**[${label}]** ${indicator}`, {
+      const content = `**[${label}]**\n\n${message}`;
+      anchorMsgId = await this.mq.sendLong(channelId, content, {
         embedColor: EmbedColors.GRAY,
         priority: 'high',
         silent: true,
