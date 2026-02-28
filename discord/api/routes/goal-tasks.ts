@@ -21,7 +21,7 @@ interface SetTasksRequest {
   }>;
 }
 
-const VALID_TYPES = ['代码', '手动', '调研', '占位'] as const;
+const VALID_TYPES = ['代码', '手动', '调研', '占位', '测试'] as const;
 type ValidType = typeof VALID_TYPES[number];
 
 // POST /api/goals/:goalId/tasks

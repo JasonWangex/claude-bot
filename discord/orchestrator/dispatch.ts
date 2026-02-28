@@ -375,7 +375,7 @@ export function executeTaskPipeline(
       await ctx.updatePipelinePhase(goalId, taskId, 'execute');
 
       await ctx.notifyGoal(state,
-        `[GoalOrchestrator] ${taskId}: ${task.type === '调研' ? 'Opus' : 'Sonnet'} 执行`,
+        `[GoalOrchestrator] ${taskId}: ${task.type === '调研' ? 'Opus' : 'Sonnet'} 执行 (${task.type})`,
         'pipeline',
       );
 

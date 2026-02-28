@@ -44,9 +44,12 @@ export function triggerTaskReview(ctx: GoalOrchestrator, state: GoalDriveState, 
       }
     } catch { /* ignore */ }
 
-    // 2. 渲染 prompt
+    // 2. 渲染 prompt（测试型任务使用专用 prompt，只验证测试思路）
     const ps = ctx.deps.promptService;
-    const prompt = ps.render('orchestrator.task_review', {
+    const promptKey = task.type === '测试'
+      ? 'orchestrator.test_task_review'
+      : 'orchestrator.task_review';
+    const prompt = ps.render(promptKey, {
       TASK_LABEL: ctx.getTaskLabel(state, taskId),
       TASK_DESCRIPTION: task.description,
       BRANCH_NAME: task.branchName ?? '(unknown)',

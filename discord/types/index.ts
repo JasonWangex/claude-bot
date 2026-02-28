@@ -291,7 +291,7 @@ export interface DiscordBotConfig {
 
 export type GoalDriveStatus = 'running' | 'paused' | 'completed' | 'failed';
 export type TaskStatus = 'pending' | 'dispatched' | 'running' | 'completed' | 'failed' | 'blocked' | 'blocked_feedback' | 'paused' | 'cancelled' | 'skipped';
-export type TaskType = '代码' | '手动' | '调研' | '占位';
+export type TaskType = '代码' | '手动' | '调研' | '占位' | '测试';
 
 /** Feedback 文件内容结构（feedback/<taskId>.json） */
 export interface TaskFeedback {

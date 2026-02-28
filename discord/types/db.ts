@@ -104,7 +104,7 @@ export interface GoalTaskRow {
   /** 任务描述 */
   description: string;
   /** 任务类型 */
-  type: '代码' | '手动' | '调研' | '占位';
+  type: '代码' | '手动' | '调研' | '占位' | '测试';
   /** 阶段编号 */
   phase: number | null;
   /** 代码任务复杂度 */
@@ -383,7 +383,7 @@ export interface TaskRow {
   id: string;                    // 全局唯一 PK
   goal_id: string | null;       // nullable
   description: string;
-  type: '代码' | '手动' | '调研' | '占位';
+  type: '代码' | '手动' | '调研' | '占位' | '测试';
   phase: number | null;
   complexity: 'simple' | 'complex' | null;
   pipeline_phase: string | null;
