@@ -2,7 +2,12 @@
  * Discord 消息队列：生产者-消费者模型
  * 解耦 Claude 输出与 Discord API 调用，统一 rate limiting 和错误处理
  *
- * Per-Thread 节流：普通消息在 ThreadBuffer 中缓冲 3 秒后合并发送，
+ * 架构：Token Bucket (45 op/s) + Per-Channel 串行 + 跨 Channel 并发
+ * - 同一 channel 的 op 严格串行（保证消息顺序）
+ * - 不同 channel 的 op 可并发执行（提升整体吞吐）
+ * - 全局 token bucket 限制最大吞吐为 45 op/s，突发上限 10
+ *
+ * Per-Thread 节流：普通消息在 ThreadBuffer 中缓冲 1 秒后合并发送，
  * 高优先级消息和每个 thread 的第一条消息立即发送。
  *
  * 消息长度策略：
@@ -14,7 +19,6 @@
 import {
   type Client,
   type TextBasedChannel,
-  type Message,
   EmbedBuilder,
   AttachmentBuilder,
   MessageFlags,
@@ -82,7 +86,24 @@ interface DeleteOp {
   messageId: string;
 }
 
-type DiscordOp = SendOp | SendDocumentOp | EditOp | DeleteOp;
+interface CreateThreadOp {
+  type: 'createThread';
+  channelId: string;  // 父 channel（用于 in-flight 去重键）
+  messageId: string;
+  name: string;
+  resolve: (threadId: string) => void;
+  reject: (error: Error) => void;
+}
+
+interface FinalizeThreadOp {
+  type: 'finalizeThread';
+  channelId: string;  // = threadId（用作 in-flight 去重键）
+  name: string;
+  resolve: () => void;
+  reject: (error: Error) => void;
+}
+
+type DiscordOp = SendOp | SendDocumentOp | EditOp | DeleteOp | CreateThreadOp | FinalizeThreadOp;
 
 // --- ThreadBuffer ---
 
@@ -104,7 +125,6 @@ interface ThreadBuffer {
 export class MessageQueue {
   private queue: DiscordOp[] = [];
   private timer: NodeJS.Timeout | null = null;
-  private processing = false;
   private pendingAsyncOps = 0;
   private client: Client;
   private channelCache = new Map<string, TextBasedChannel>();
@@ -112,9 +132,17 @@ export class MessageQueue {
   // Per-thread 缓冲区
   private threadBuffers = new Map<string, ThreadBuffer>();
 
-  // 配置（Discord rate limit: 5 messages per 5 seconds per channel）
+  // Per-channel 并发控制（同一 channel 的 op 严格串行）
+  private channelInFlight = new Map<string, boolean>();
+
+  // Token Bucket 限流（全局 45 op/s，突发上限 10）
+  private tokens = 0;
+  private tokenFraction = 0;
+  private lastRefill = Date.now();
+
+  private readonly RATE_LIMIT = 45;
+  private readonly MAX_BURST = 10;
   private readonly FLUSH_INTERVAL = 100;
-  private readonly MIN_OP_INTERVAL = 300;
   private readonly MAX_RETRY = 2;
   private readonly THREAD_BUFFER_WINDOW = 1000;   // 1s 缓冲窗口
   private readonly MERGE_SEPARATOR = '\n\n───\n\n';
@@ -142,10 +170,22 @@ export class MessageQueue {
     return null;
   }
 
+  // --- Token Bucket ---
+
+  private refillTokens(): void {
+    const now = Date.now();
+    const elapsed = now - this.lastRefill;
+    this.lastRefill = now;
+    const generated = (elapsed / 1000) * this.RATE_LIMIT + this.tokenFraction;
+    const whole = Math.floor(generated);
+    this.tokenFraction = generated - whole;
+    this.tokens = Math.min(this.MAX_BURST, this.tokens + whole);
+  }
+
   // --- 生产者 API ---
 
   /**
-   * 获取频道中最后一条消息的 ID（用于将 tool thread 挂载到触发消息上）
+   * 获取频道中最后一条消息的 ID
    */
   async getLastMessageId(channelId: string): Promise<string | null> {
     const channel = await this.getChannel(channelId);
@@ -177,6 +217,7 @@ export class MessageQueue {
       this.ensureBuffer(channelId).firstSent = true;
       return new Promise((resolve, reject) => {
         this.queue.push({ type: 'send', channelId, text, options, resolve, reject });
+        this.flush();
       });
     }
 
@@ -189,6 +230,7 @@ export class MessageQueue {
   sendDocument(channelId: string, content: string, filename: string, caption?: string, options?: { silent?: boolean }): Promise<string> {
     return new Promise((resolve, reject) => {
       this.queue.push({ type: 'sendDocument', channelId, content, filename, caption, silent: options?.silent, resolve, reject });
+      this.flush();
     });
   }
 
@@ -225,7 +267,6 @@ export class MessageQueue {
     }
 
     if (text.length > this.MAX_MESSAGE_LENGTH) {
-      // 使用 Embed（embedColor 有自定义就用，否则默认 Discord Blurple）
       const embedColor = options?.embedColor ?? 0x5865F2;
       return this.send(channelId, text, { ...options, embedColor, priority: 'high' });
     }
@@ -238,6 +279,7 @@ export class MessageQueue {
       this.ensureBuffer(channelId).firstSent = true;
       return new Promise((resolve, reject) => {
         this.queue.push({ type: 'send', channelId, text, options, resolve, reject });
+        this.flush();
       });
     }
 
@@ -252,6 +294,7 @@ export class MessageQueue {
     embedColor?: EmbedColor;
   }): void {
     this.queue.push({ type: 'edit', channelId, messageId, text, options });
+    this.flush();
   }
 
   /**
@@ -259,6 +302,7 @@ export class MessageQueue {
    */
   delete(channelId: string, messageId: string): void {
     this.queue.push({ type: 'delete', channelId, messageId });
+    this.flush();
   }
 
   /**
@@ -267,6 +311,28 @@ export class MessageQueue {
   trackAsync<T>(fn: () => Promise<T>): Promise<T> {
     this.pendingAsyncOps++;
     return fn().finally(() => { this.pendingAsyncOps--; });
+  }
+
+  // --- Thread 操作（走队列）---
+
+  /**
+   * 在指定消息上创建 Discord Thread，返回 thread channel ID
+   */
+  createThread(channelId: string, messageId: string, name: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      this.queue.push({ type: 'createThread', channelId, messageId, name, resolve, reject });
+      this.flush();
+    });
+  }
+
+  /**
+   * 重命名并归档 Thread
+   */
+  finalizeThread(threadId: string, name: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      this.queue.push({ type: 'finalizeThread', channelId: threadId, name, resolve, reject });
+      this.flush();
+    });
   }
 
   // --- Thread 缓冲区管理 ---
@@ -354,46 +420,8 @@ export class MessageQueue {
         },
       });
     }
-  }
 
-  /**
-   * 在指定消息上创建 Discord Thread，返回 thread channel ID
-   * 带 retry/backoff，与 executeSend 等操作保持一致
-   */
-  async finalizeThread(threadId: string, name: string): Promise<void> {
-    try {
-      const thread = await this.client.channels.fetch(threadId);
-      if (!thread || !('setName' in thread)) return;
-      await (thread as any).setName(name.slice(0, 100));
-      await (thread as any).setArchived(true);
-    } catch (err: any) {
-      logger.warn(`finalizeThread ${threadId} failed:`, err);
-    }
-  }
-
-  async createThread(channelId: string, messageId: string, name: string): Promise<string> {
-    const channel = await this.getChannel(channelId);
-    if (!channel || !('messages' in channel)) {
-      throw new Error(`Channel ${channelId} is not a text channel`);
-    }
-    const message = await (channel as any).messages.fetch(messageId);
-
-    for (let attempt = 0; attempt <= this.MAX_RETRY; attempt++) {
-      try {
-        const thread = await message.startThread({
-          name: name.slice(0, 100),
-          autoArchiveDuration: 60,
-        });
-        return thread.id;
-      } catch (err: any) {
-        if (this.isRateLimit(err) && attempt < this.MAX_RETRY) {
-          await this.backoffRateLimit(err);
-          continue;
-        }
-        throw err;
-      }
-    }
-    throw new Error('createThread: all retries exhausted');
+    this.flush();
   }
 
   // --- 生命周期 ---
@@ -414,10 +442,11 @@ export class MessageQueue {
     this.flushAllThreadBuffers();
 
     const deadline = Date.now() + timeoutMs;
-    while ((this.queue.length > 0 || this.processing || this.pendingAsyncOps > 0) && Date.now() < deadline) {
-      if (this.queue.length > 0 && !this.processing) {
-        await this.flush();
-      }
+    while (
+      (this.queue.length > 0 || this.channelInFlight.size > 0 || this.pendingAsyncOps > 0) &&
+      Date.now() < deadline
+    ) {
+      if (this.queue.length > 0) this.flush();
       await new Promise(r => setTimeout(r, 50));
     }
 
@@ -431,59 +460,61 @@ export class MessageQueue {
 
   // --- 消费者 ---
 
-  private async flush(): Promise<void> {
-    if (this.processing || this.queue.length === 0) return;
-    this.processing = true;
+  private flush(): void {
+    this.mergeEditsInPlace();
+    this.refillTokens();
 
-    try {
-      const ops = this.mergeEdits(this.queue.splice(0));
+    let i = 0;
+    while (i < this.queue.length && this.tokens > 0) {
+      const op = this.queue[i];
 
-      for (const op of ops) {
-        await this.executeOp(op);
-        await this.sleep(this.MIN_OP_INTERVAL);
-      }
-    } finally {
-      this.processing = false;
-    }
-  }
-
-  private mergeEdits(ops: DiscordOp[]): DiscordOp[] {
-    const result: DiscordOp[] = [];
-
-    for (let i = 0; i < ops.length; i++) {
-      const op = ops[i];
-      if (op.type !== 'edit') {
-        result.push(op);
+      if (this.channelInFlight.get(op.channelId)) {
+        i++;
         continue;
       }
 
+      this.queue.splice(i, 1);
+      this.tokens--;
+      this.channelInFlight.set(op.channelId, true);
+
+      this.executeOp(op).finally(() => {
+        this.channelInFlight.delete(op.channelId);
+        if (this.queue.length > 0) this.flush();
+      });
+    }
+  }
+
+  private mergeEditsInPlace(): void {
+    let i = 0;
+    while (i < this.queue.length) {
+      const op = this.queue[i];
+      if (op.type !== 'edit') { i++; continue; }
+
       let j = i + 1;
-      while (j < ops.length && ops[j].type === 'edit' &&
-             (ops[j] as EditOp).channelId === op.channelId &&
-             (ops[j] as EditOp).messageId === op.messageId) {
+      while (
+        j < this.queue.length &&
+        this.queue[j].type === 'edit' &&
+        (this.queue[j] as EditOp).channelId === op.channelId &&
+        (this.queue[j] as EditOp).messageId === op.messageId
+      ) {
         j++;
       }
-      result.push(ops[j - 1]);
-      i = j - 1;
-    }
 
-    return result;
+      if (j > i + 1) {
+        this.queue.splice(i, j - i, this.queue[j - 1]);
+      }
+      i++;
+    }
   }
 
   private async executeOp(op: DiscordOp): Promise<void> {
     switch (op.type) {
-      case 'send':
-        await this.executeSend(op);
-        break;
-      case 'sendDocument':
-        await this.executeSendDocument(op);
-        break;
-      case 'edit':
-        await this.executeEdit(op);
-        break;
-      case 'delete':
-        await this.executeDelete(op);
-        break;
+      case 'send':           await this.executeSend(op); break;
+      case 'sendDocument':   await this.executeSendDocument(op); break;
+      case 'edit':           await this.executeEdit(op); break;
+      case 'delete':         await this.executeDelete(op); break;
+      case 'createThread':   await this.executeCreateThread(op); break;
+      case 'finalizeThread': await this.executeFinalizeThread(op); break;
     }
   }
 
@@ -496,7 +527,6 @@ export class MessageQueue {
 
     for (let attempt = 0; attempt <= this.MAX_RETRY; attempt++) {
       try {
-        // embedColor 参数 → Embed 消息
         const embedColor = op.options?.embedColor;
         if (embedColor !== undefined) {
           const embed = new EmbedBuilder()
@@ -512,7 +542,6 @@ export class MessageQueue {
           return;
         }
 
-        // 普通消息
         const msgOpts: MessageCreateOptions = {
           content: op.text.slice(0, this.MAX_MESSAGE_LENGTH),
           components: op.options?.components as any,
@@ -563,12 +592,11 @@ export class MessageQueue {
               await this.backoffRateLimit(sendError);
               continue;
             }
-            throw sendError; // 非 rate limit → 外层 catch → fall through
+            throw sendError;
           }
         }
       } catch (error: any) {
         logger.warn('OSS upload/send failed, falling back to attachment:', error.message);
-        // fall through 到原有附件逻辑
       }
     }
 
@@ -659,6 +687,47 @@ export class MessageQueue {
     }
   }
 
+  private async executeCreateThread(op: CreateThreadOp): Promise<void> {
+    const channel = await this.getChannel(op.channelId);
+    if (!channel || !('messages' in channel)) {
+      op.reject(new Error(`Channel ${op.channelId} is not a text channel`));
+      return;
+    }
+
+    for (let attempt = 0; attempt <= this.MAX_RETRY; attempt++) {
+      try {
+        const message = await (channel as any).messages.fetch(op.messageId);
+        const thread = await message.startThread({
+          name: op.name.slice(0, 100),
+          autoArchiveDuration: 60,
+        });
+        op.resolve(thread.id);
+        return;
+      } catch (err: any) {
+        if (this.isRateLimit(err) && attempt < this.MAX_RETRY) {
+          await this.backoffRateLimit(err);
+          continue;
+        }
+        op.reject(err);
+        return;
+      }
+    }
+    op.reject(new Error('createThread: all retries exhausted'));
+  }
+
+  private async executeFinalizeThread(op: FinalizeThreadOp): Promise<void> {
+    try {
+      const thread = await this.client.channels.fetch(op.channelId);
+      if (!thread || !('setName' in thread)) { op.resolve(); return; }
+      await (thread as any).setName(op.name.slice(0, 100));
+      await (thread as any).setArchived(true);
+      op.resolve();
+    } catch (err: any) {
+      logger.warn(`finalizeThread ${op.channelId} failed:`, err);
+      op.resolve(); // 不阻塞调用方
+    }
+  }
+
   // --- 错误处理 ---
 
   private isRateLimit(error: any): boolean {
@@ -670,10 +739,6 @@ export class MessageQueue {
     const retryAfter = error?.retryAfter || error?.retry_after || 1;
     const delayMs = retryAfter * 1000;
     logger.warn(`MessageQueue rate limited, backing off ${retryAfter}s`);
-    await this.sleep(delayMs);
-  }
-
-  private sleep(ms: number): Promise<void> {
-    return new Promise(r => setTimeout(r, ms));
+    await new Promise(r => setTimeout(r, delayMs));
   }
 }
