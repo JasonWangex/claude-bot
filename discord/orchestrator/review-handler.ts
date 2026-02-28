@@ -427,20 +427,98 @@ export async function handleFailedTaskReviewResult(
     if (!ok) {
       logger.warn(`[FailedTaskReview] retryTask returned false for ${taskId}`);
     }
+  } else if (verdict === 'replan') {
+    logger.info(`[FailedTaskReview] Tech lead decided to replan from task ${taskId}: ${reason}`);
+    let replanState: GoalDriveState | null = null;
+    await ctx.withStateLock(goalId, async () => {
+      const state = await ctx.getState(goalId);
+      if (!state) return;
+      const task = state.tasks.find(t => t.id === taskId);
+      if (!task) return;
+      task.status = 'completed';
+      task.completedAt = Date.now();
+      await ctx.saveState(state);
+      replanState = state;
+    });
+    if (replanState) {
+      await ctx.triggerReplan(replanState, taskId, { type: 'replan', reason: reason ?? 'Tech lead requested replan' });
+      const refreshed = await ctx.getState(goalId);
+      if (refreshed && refreshed.status === 'running') {
+        await ctx.reviewAndDispatch(refreshed, taskId);
+      }
+    }
+  } else if (verdict === 'escalate_user') {
+    // tech lead 确认需要人工干预
+    await ctx.withStateLock(goalId, async () => {
+      const state = await ctx.getState(goalId);
+      if (!state) return;
+      logger.info(`[FailedTaskReview] Tech lead escalates task ${taskId} to user: ${reason}`);
+      await ctx.notifyGoal(state,
+        `⚠️ Tech lead escalates **${ctx.getTaskLabel(state, taskId)}** to user.\n${reason ? `Reason: ${reason}\n` : ''}Manual intervention required.`,
+        'error',
+      );
+    });
   } else {
-    // skip — 需要人工干预
+    // skip — 标记完成，继续推进 goal
     await ctx.withStateLock(goalId, async () => {
       const state = await ctx.getState(goalId);
       if (!state) return;
       const task = state.tasks.find(t => t.id === taskId);
       if (!task) return;
       logger.info(`[FailedTaskReview] Tech lead decided to skip task ${taskId}: ${reason}`);
+      task.status = 'completed';
+      task.completedAt = Date.now();
+      await ctx.saveState(state);
       await ctx.notifyGoal(state,
-        `Tech lead reviewed **${ctx.getTaskLabel(state, taskId)}**: cannot auto-fix.\n${reason ? `Reason: ${reason}\n` : ''}Manual intervention required.`,
-        'error',
+        `Tech lead skipped **${ctx.getTaskLabel(state, taskId)}**.${reason ? ` Reason: ${reason}` : ''}`,
+        'warning',
       );
+      await ctx.reviewAndDispatch(state, taskId);
     });
   }
+}
+
+/**
+ * 当任务卡住或无法继续时，请求 tech lead 介入调解。
+ * 如果没有 tech lead，静默返回（调用方负责 fallback 通知）。
+ */
+export function triggerTechLeadConsultation(
+  ctx: GoalOrchestrator,
+  state: GoalDriveState,
+  guildId: string,
+  situation: string,
+  details?: string,
+): void {
+  if (!state.techLeadChannelId) return;
+
+  (async () => {
+    try {
+      ctx.ensureGoalChannelSession(state, guildId);
+      const techLeadChannelId = state.techLeadChannelId!;
+
+      const stuckTasks = state.tasks
+        .filter(t => ['failed', 'blocked_feedback', 'blocked'].includes(t.status))
+        .map(t =>
+          `- **${t.id}**: ${t.description} [${t.status}]` +
+          (t.error ? `\n  Error: ${t.error}` : '') +
+          (t.feedback ? `\n  Feedback: ${t.feedback.type} — ${t.feedback.reason}` : ''),
+        )
+        .join('\n') || '(none)';
+
+      const ps = ctx.deps.promptService;
+      const prompt = ps.render('orchestrator.tech_lead_consultation', {
+        GOAL_NAME: state.goalName,
+        GOAL_BRANCH: state.goalBranch,
+        SITUATION: situation,
+        CONTEXT: details ?? '',
+        STUCK_TASKS: stuckTasks,
+      });
+
+      await ctx.deps.messageHandler.handleBackgroundChat(guildId, techLeadChannelId, prompt, 'review');
+    } catch (err: any) {
+      logger.error(`[TechLeadConsultation] Failed to trigger consultation:`, err);
+    }
+  })();
 }
 
 export async function handlePhaseResult(

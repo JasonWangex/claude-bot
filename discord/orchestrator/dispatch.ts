@@ -24,6 +24,7 @@ import {
   isPhaseFullyMerged,
 } from './task-scheduler.js';
 import { triggerGoalAudit } from './goal-audit-handler.js';
+import { triggerTechLeadConsultation } from './review-handler.js';
 
 /**
  * Review completed task results and decide what to dispatch next.
@@ -200,12 +201,27 @@ export async function dispatchNext(
 
   if (isGoalStuck(state)) {
     await ctx.syncGoalMeta(state);
-    await ctx.notifyGoal(state,
-      `Goal "${state.goalName}" is stuck\n` +
-      `May have unresolved dependencies or failed tasks\n` +
-      `Progress: ${getProgressSummary(state)}`,
-      'warning'
-    );
+    const guildIdForStuck = ctx.getGuildId();
+    if (state.techLeadChannelId && guildIdForStuck) {
+      triggerTechLeadConsultation(
+        ctx,
+        state,
+        guildIdForStuck,
+        `Goal "${state.goalName}" is stuck — no tasks can proceed`,
+        `Progress: ${getProgressSummary(state)}`,
+      );
+      await ctx.notifyGoal(state,
+        `Goal "${state.goalName}" is stuck — consulting tech lead`,
+        'warning',
+      );
+    } else {
+      await ctx.notifyGoal(state,
+        `Goal "${state.goalName}" is stuck\n` +
+        `May have unresolved dependencies or failed tasks\n` +
+        `Progress: ${getProgressSummary(state)}`,
+        'warning',
+      );
+    }
     return;
   }
 

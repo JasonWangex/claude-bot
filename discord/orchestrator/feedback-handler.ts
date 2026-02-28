@@ -9,6 +9,7 @@
 import type { GoalDriveState, GoalTask } from '../types/index.js';
 import type { GoalOrchestrator } from './index.js';
 import { logger } from '../utils/logger.js';
+import { triggerTechLeadConsultation } from './review-handler.js';
 
 /**
  * 启动 feedback 调查流程（fire-and-forget async）
@@ -112,8 +113,9 @@ export function startFeedbackInvestigation(
         }
 
         case 'escalate':
-        default:
-          // 无法自动解决，交给用户
+        default: {
+          // AI 调查无法自动解决 → 先让 tech lead 介入
+          let escalateState: GoalDriveState | null = null;
           await ctx.withStateLock(goalId, async () => {
             const freshState = await ctx.getState(goalId);
             if (!freshState) return;
@@ -122,20 +124,41 @@ export function startFeedbackInvestigation(
             freshTask.status = 'blocked_feedback';
             freshTask.pipelinePhase = undefined;
             await ctx.saveState(freshState);
-            await ctx.notifyGoal(freshState,
+            escalateState = freshState;
+          });
+          if (!escalateState) break;
+          const guildId = ctx.getGuildId();
+          if ((escalateState as GoalDriveState).techLeadChannelId && guildId) {
+            triggerTechLeadConsultation(
+              ctx,
+              escalateState as GoalDriveState,
+              guildId,
+              `Task ${taskId} is blocked — AI investigation could not resolve it`,
+              `Original feedback: ${task.feedback?.type} — ${task.feedback?.reason}\n` +
+              `AI investigation conclusion: ${conclusion.reason}`,
+            );
+            await ctx.notifyGoal(escalateState as GoalDriveState,
+              `[GoalOrchestrator] ${taskId}: AI 调查无法自动解决，已上报 tech lead 介入`,
+              'warning',
+              { logOnly: true },
+            );
+          } else {
+            await ctx.notifyGoal(escalateState as GoalDriveState,
               `[GoalOrchestrator] ${taskId}: AI 调查无法自动解决\n原因: ${conclusion.reason}\n需要人工干预。`,
               'error',
               { logOnly: true },
             );
-          });
+          }
           break;
+        }
       }
     } catch (err: any) {
       const stillRunning = await ctx.isTaskStillRunning(goalId, taskId);
       if (!stillRunning) return;
       logger.error(`[Orchestrator] Feedback investigation failed for ${taskId}:`, err);
-      // 调查本身失败 → 回到 blocked_feedback 等用户处理
+      // 调查本身失败 → 先让 tech lead 介入，无 tech lead 则通知用户
       try {
+        let errorState: GoalDriveState | null = null;
         await ctx.withStateLock(goalId, async () => {
           const freshState = await ctx.getState(goalId);
           if (!freshState) return;
@@ -144,12 +167,30 @@ export function startFeedbackInvestigation(
           freshTask.status = 'blocked_feedback';
           freshTask.pipelinePhase = undefined;
           await ctx.saveState(freshState);
-          await ctx.notifyGoal(freshState,
+          errorState = freshState;
+        });
+        if (!errorState) return;
+        const guildId = ctx.getGuildId();
+        if ((errorState as GoalDriveState).techLeadChannelId && guildId) {
+          triggerTechLeadConsultation(
+            ctx,
+            errorState as GoalDriveState,
+            guildId,
+            `Task ${taskId} is blocked — AI investigation itself failed with an error`,
+            `Investigation error: ${err.message}`,
+          );
+          await ctx.notifyGoal(errorState as GoalDriveState,
+            `[GoalOrchestrator] ${taskId}: AI 调查出错，已上报 tech lead 介入`,
+            'warning',
+            { logOnly: true },
+          );
+        } else {
+          await ctx.notifyGoal(errorState as GoalDriveState,
             `[GoalOrchestrator] ${taskId}: AI 调查出错: ${err.message}\n已回退到 blocked_feedback，需要人工干预。`,
             'error',
             { logOnly: true },
           );
-        });
+        }
       } catch (cbErr: any) {
         logger.error(`[Orchestrator] startFeedbackInvestigation cleanup also failed:`, cbErr);
       }
