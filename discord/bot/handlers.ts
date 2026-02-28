@@ -535,6 +535,42 @@ export class MessageHandler {
         lastTextFlushTime = 0;
         return;
       }
+      // stdin 注入多轮时：上一轮 result 已到，下一轮即将开始
+      // 立即重置本轮 UI 状态，再异步清理进度消息、重建新进度
+      if (event.type === 'system' && subtype === 'turn_boundary') {
+        sentTextCount = 0;
+        toolUseCount = 0;
+        lastEditTime = 0;
+        compactPreTokens = null;
+        lastAssistantUsage = null;
+        interactiveState.pending = null;
+        lastTextFlushTime = 0;
+        // 同步重置文本占位符：防止下一轮文本事件在 flush 完成前 edit 到旧消息
+        textPlaceholderMsgId = null;
+        textFlushedContent = '';
+        // progressMsgId 置 null，防止下一轮 tool_use 事件编辑已过期的进度消息
+        progressMsgId = null;
+
+        sendChain = sendChain
+          .then(() => flushTextBuffer())   // flush 本轮残余文本（textPlaceholder 已 null，会新建消息）
+          .then(async () => {
+            if (isHidden) return;
+            await cleanupProgressMessages();
+            // 为下一轮创建新进度消息
+            progressMsgId = await mq.send(channelId, 'Thinking...', {
+              components: [stopRow as any],
+              priority: 'high',
+              silent: true,
+              embedColor: EmbedColors.GRAY,
+            });
+            if (progressMsgId) allProgressMsgIds.add(progressMsgId);
+            lastProgressText = 'Thinking...';
+            progressNeedsReposition = false;
+          })
+          .catch(e => logger.warn(`[${session.name}] Turn boundary cleanup failed:`, e));
+        mq.trackAsync(() => sendChain);
+        return;
+      }
 
       // 压缩状态事件: {type:"system", subtype:"status", status:"compacting"|null}
       if (event.type === 'system' && subtype === 'status' && event.status === 'compacting') {

@@ -413,6 +413,11 @@ export class ClaudeExecutor {
                       try { active.stdin?.end(); } catch {}
                     }
                   });
+                } else {
+                  // 还有 pending turn：通知 handler 重置当前轮次的 UI 状态
+                  if (onProgress) {
+                    try { onProgress({ type: 'system', subtype: 'turn_boundary' } as any); } catch {}
+                  }
                 }
               }
             }
