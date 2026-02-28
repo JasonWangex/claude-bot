@@ -604,13 +604,9 @@ export class MessageHandler {
             this.claudeClient.updateProgressInfo(lockKey, toolMsg, toolUseCount);
           } else if (block.type === 'thinking' && block.thinking) {
             // thinking block：发到 tool thread（与工具调用同级，不影响正文）
-            const thinkingText = block.thinking.trim();
-            if (!thinkingText || isHidden) continue;
+            if (isHidden) continue;
 
-            const snippet = thinkingText.length > 300
-              ? thinkingText.slice(0, 300) + '…'
-              : thinkingText;
-            const thinkingMsg = `💭 Thinking (${elapsed()})\n${snippet}`;
+            const thinkingMsg = `💭 Thinking (${elapsed()})`;
 
             sendChain = sendChain.then(async () => {
               const anchorId = threadAnchorMsgId;
