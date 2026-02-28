@@ -385,16 +385,6 @@ export class MessageQueue {
     throw new Error('createThread: all retries exhausted');
   }
 
-  /**
-   * 归档指定 Thread（session 结束时调用，避免超出活跃 thread 数量上限）
-   */
-  async archiveThread(threadId: string): Promise<void> {
-    const thread = await this.getChannel(threadId);
-    if (thread && 'setArchived' in thread) {
-      await (thread as any).setArchived(true);
-    }
-  }
-
   // --- 生命周期 ---
 
   start(): void {

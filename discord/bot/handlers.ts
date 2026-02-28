@@ -34,18 +34,18 @@ import { logger } from '../utils/logger.js';
 import { downloadAndProcessImage } from '../utils/image-processor.js';
 import { getNotifyMention } from '../utils/env.js';
 
-// 工具名称映射
+// 工具名称映射（icon + 标签）
 const TOOL_NAMES: Record<string, string> = {
-  Read: 'Reading',
-  Write: 'Writing',
-  Edit: 'Editing',
-  Glob: 'Searching files',
-  Grep: 'Searching content',
-  Bash: 'Running command',
-  WebFetch: 'Fetching web',
-  WebSearch: 'Searching web',
-  Task: 'Launching subtask',
-  NotebookEdit: 'Editing notebook',
+  Read: '📄 Reading',
+  Write: '✏️ Writing',
+  Edit: '✏️ Editing',
+  Glob: '🔍 Searching files',
+  Grep: '🔍 Searching content',
+  Bash: '⚡ Running command',
+  WebFetch: '🌐 Fetching web',
+  WebSearch: '🌐 Searching web',
+  Task: '🤖 Launching subtask',
+  NotebookEdit: '📓 Editing notebook',
 };
 
 export class MessageHandler {
@@ -372,8 +372,6 @@ export class MessageHandler {
     let currentToolThreadId: string | null = null; // 当前 tool 消息的 thread channel ID
     let threadAnchorMsgId: string | null = anchorMsgId ?? null; // 下一批 tools 挂载的 anchor 消息 ID
     const failedAnchors = new Set<string>(); // 建 thread 失败的 anchor，不再重试
-    const createdThreadIds = new Set<string>(); // 本次 session 创建的所有 thread，session 结束时归档
-    const messagesWithThreads = new Set<string>(); // 已有 thread 的 anchor 消息，cleanup 时不删除
 
     const cleanupProgressMessages = async () => {
       try {
@@ -461,7 +459,6 @@ export class MessageHandler {
         currentToolThreadId = null;
         threadAnchorMsgId = anchorMsgId ?? null; // 重置到初始触发消息
         failedAnchors.clear();
-        messagesWithThreads.clear();
         return;
       }
       // stdin 注入多轮时：上一轮 result 已到，下一轮即将开始
@@ -476,7 +473,6 @@ export class MessageHandler {
         currentToolThreadId = null;
         threadAnchorMsgId = null;
         failedAnchors.clear();
-        messagesWithThreads.clear();
 
         sendChain = sendChain
           .then(() => flushTextBuffer())
@@ -588,8 +584,6 @@ export class MessageHandler {
                   if (failedAnchors.has(anchorId)) return; // 已知失败的 anchor，跳过
                   try {
                     currentToolThreadId = await mq.createThread(channelId, anchorId, 'Tool calls');
-                    createdThreadIds.add(currentToolThreadId);
-                    messagesWithThreads.add(anchorId);
                   } catch (e) {
                     logger.warn(`[${session.name}] Thread creation failed:`, e);
                     failedAnchors.add(anchorId); // 标记，后续工具不再重试
@@ -615,8 +609,6 @@ export class MessageHandler {
                 if (failedAnchors.has(anchorId)) return;
                 try {
                   currentToolThreadId = await mq.createThread(channelId, anchorId, 'Tool calls');
-                  createdThreadIds.add(currentToolThreadId);
-                  messagesWithThreads.add(anchorId);
                 } catch (e) {
                   logger.warn(`[${session.name}] Thread creation failed (thinking):`, e);
                   failedAnchors.add(anchorId);
@@ -918,12 +910,7 @@ export class MessageHandler {
         const sessionInfo = errorSessionId ? ` session=${errorSessionId.slice(0, 8)}` : '';
         this.errorReporter(guildId, channelId, `${session.name}${sessionInfo}`, error);
       }
-    } finally {
-      // 归档本次 session 创建的所有 thread，避免超出频道活跃 thread 数量上限
-      for (const threadId of createdThreadIds) {
-        mq.archiveThread(threadId).catch(e => logger.warn(`[${session.name}] archiveThread ${threadId} failed:`, e));
-      }
-    }
+    } finally {}
 
     break;
     } // end for loop
