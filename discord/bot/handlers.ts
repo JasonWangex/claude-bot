@@ -46,6 +46,7 @@ const TOOL_NAMES: Record<string, string> = {
   WebSearch: '🌐 Searching web',
   Task: '🤖 Launching subtask',
   NotebookEdit: '📓 Editing notebook',
+  Skill: '🎯 Running skill',
 };
 
 const TOOL_ICONS: Record<string, string> = {
@@ -59,6 +60,7 @@ const TOOL_ICONS: Record<string, string> = {
   WebSearch: '🌐',
   Task: '🤖',
   NotebookEdit: '📓',
+  Skill: '🎯',
   mcp: '🔌',
 };
 
@@ -694,15 +696,15 @@ export class MessageHandler {
               if (block.name === 'Read' && block.input.file_path) {
                 detailHeader = `: ${this.shortPath(block.input.file_path)}`;
               } else if (block.name === 'Bash' && block.input.command) {
-                detailHeader = `: ${block.input.command.slice(0, 60)}`;
+                detailHeader = `: ${block.input.command}`;
               } else if (block.name === 'Grep' && block.input.pattern) {
                 detailHeader = `: ${block.input.pattern}`;
               } else if (block.name === 'Glob' && block.input.pattern) {
                 detailHeader = `: ${block.input.pattern}`;
               } else if (block.name === 'Edit' && block.input.file_path) {
                 detailHeader = `: ${this.shortPath(block.input.file_path)}`;
-                const oldStr = (block.input.old_string || '').slice(0, 200);
-                const newStr = (block.input.new_string || '').slice(0, 200);
+                const oldStr = block.input.old_string || '';
+                const newStr = block.input.new_string || '';
                 const diffLines = [
                   ...oldStr.split('\n').map((l: string) => `- ${l}`),
                   ...newStr.split('\n').map((l: string) => `+ ${l}`),
@@ -710,8 +712,10 @@ export class MessageHandler {
                 detailBody = `\`\`\`diff\n${diffLines}\n\`\`\``;
               } else if (block.name === 'Write' && block.input.file_path) {
                 detailHeader = `: ${this.shortPath(block.input.file_path)}`;
-                const content = (block.input.content || '').slice(0, 500);
+                const content = block.input.content || '';
                 detailBody = `\`\`\`\n${content}\n\`\`\``;
+              } else if (block.name === 'Skill' && block.input.skill) {
+                detailHeader = `: ${block.input.skill}`;
               }
             }
 
