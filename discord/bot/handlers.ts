@@ -365,6 +365,7 @@ export class MessageHandler {
     const lockKey = StateManager.channelLockKey(guildId, channelId);
 
     let queuedMsgId: string | null = null; // 排队等待时的提示消息
+    let compactingMsgId: string | null = null; // 自动压缩进行中的提示消息
     let toolUseCount = 0;
     let sentTextCount = 0;
     let compactPreTokens: number | null = null;
@@ -513,6 +514,7 @@ export class MessageHandler {
         fileChanges.length = 0;
         toolUseCount = 0;
         compactPreTokens = null;
+        compactingMsgId = null;
         lastAssistantUsage = null;
         interactiveState.pending = null;
         textBuffer.length = 0;
@@ -533,6 +535,7 @@ export class MessageHandler {
         sentTextCount = 0;
         toolUseCount = 0;
         compactPreTokens = null;
+        compactingMsgId = null;
         lastAssistantUsage = null;
         interactiveState.pending = null;
         lastTextFlushTime = 0;
@@ -552,6 +555,11 @@ export class MessageHandler {
 
       // 压缩状态事件: {type:"system", subtype:"status", status:"compacting"|null}
       if (event.type === 'system' && subtype === 'status' && event.status === 'compacting') {
+        if (!isHidden && !compactingMsgId) {
+          mq.send(channelId, '⚡ Context auto-compacting...', { silent: true })
+            .then(id => { compactingMsgId = id; })
+            .catch(() => {});
+        }
         return;
       }
       // compact_boundary 携带 compact_metadata
@@ -559,6 +567,16 @@ export class MessageHandler {
         compactPreTokens = event.compact_metadata.pre_tokens;
       }
       if (subtype === 'compact_boundary') {
+        if (!isHidden) {
+          const preK = compactPreTokens !== null ? ` (${Math.round(compactPreTokens / 1000)}K tokens → compressed)` : '';
+          const msg = `⚡ Context auto-compacted${preK}. Continuing...`;
+          if (compactingMsgId) {
+            mq.edit(channelId, compactingMsgId, msg);
+            compactingMsgId = null;
+          } else {
+            mq.send(channelId, msg, { silent: true }).catch(() => {});
+          }
+        }
         return;
       }
 
