@@ -59,6 +59,7 @@ const TOOL_ICONS: Record<string, string> = {
   WebSearch: '🌐',
   Task: '🤖',
   NotebookEdit: '📓',
+  mcp: '🔌',
 };
 
 export class MessageHandler {
@@ -647,7 +648,8 @@ export class MessageHandler {
 
             const capturedBlockId = block.id;
             if (capturedBlockId) toolStartTimes.set(capturedBlockId, Date.now());
-            toolCounts.set(block.name, (toolCounts.get(block.name) ?? 0) + 1);
+            const countKey = block.name.startsWith('mcp__') ? 'mcp' : block.name;
+            toolCounts.set(countKey, (toolCounts.get(countKey) ?? 0) + 1);
             const toolHeader = `[${toolUseCount}] ${toolLabel}${detailHeader}`;
             const toolMsg = detailBody ? `${toolHeader}\n${detailBody}` : toolHeader;
 
