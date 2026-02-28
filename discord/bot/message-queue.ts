@@ -104,18 +104,22 @@ interface ThreadBuffer {
 export class MessageQueue {
   private queue: DiscordOp[] = [];
   private timer: NodeJS.Timeout | null = null;
-  private processing = false;
   private pendingAsyncOps = 0;
+  private activeDispatches = 0;
   private client: Client;
   private channelCache = new Map<string, TextBasedChannel>();
 
   // Per-thread 缓冲区
   private threadBuffers = new Map<string, ThreadBuffer>();
 
-  // 配置（Discord rate limit: 5 messages per 5 seconds per channel）
-  private readonly FLUSH_INTERVAL = 100;
-  private readonly MIN_OP_INTERVAL = 300;
+  // 配置（Discord global rate limit: 50 req/s，目标 45 op/s）
+  private readonly FLUSH_INTERVAL = 20;
+  private readonly DISPATCH_INTERVAL = 22;   // ~45 op/s（1000ms / 45 ≈ 22ms/op）
   private readonly MAX_RETRY = 2;
+
+  // Promise 链式调度器：串行分配时间槽，各 op 并发执行
+  private rateLimiterChain: Promise<void> = Promise.resolve();
+  private lastDispatchAt = 0;
   private readonly THREAD_BUFFER_WINDOW = 1000;   // 1s 缓冲窗口
   private readonly MERGE_SEPARATOR = '\n\n───\n\n';
   private readonly MAX_MERGE_LENGTH = 1800;        // Discord 2000 字符限制，留余量
@@ -362,9 +366,12 @@ export class MessageQueue {
    */
   async finalizeThread(threadId: string, name: string): Promise<void> {
     try {
+      await this.acquireSlot();
       const thread = await this.client.channels.fetch(threadId);
       if (!thread || !('setName' in thread)) return;
+      await this.acquireSlot();
       await (thread as any).setName(name.slice(0, 100));
+      await this.acquireSlot();
       await (thread as any).setArchived(true);
     } catch (err: any) {
       logger.warn(`finalizeThread ${threadId} failed:`, err);
@@ -380,6 +387,7 @@ export class MessageQueue {
 
     for (let attempt = 0; attempt <= this.MAX_RETRY; attempt++) {
       try {
+        await this.acquireSlot();
         const thread = await message.startThread({
           name: name.slice(0, 100),
           autoArchiveDuration: 60,
@@ -412,12 +420,11 @@ export class MessageQueue {
 
   async drain(timeoutMs = 30000): Promise<void> {
     this.flushAllThreadBuffers();
+    await this.flush();
 
     const deadline = Date.now() + timeoutMs;
-    while ((this.queue.length > 0 || this.processing || this.pendingAsyncOps > 0) && Date.now() < deadline) {
-      if (this.queue.length > 0 && !this.processing) {
-        await this.flush();
-      }
+    while ((this.queue.length > 0 || this.activeDispatches > 0 || this.pendingAsyncOps > 0) && Date.now() < deadline) {
+      if (this.queue.length > 0) await this.flush();
       await new Promise(r => setTimeout(r, 50));
     }
 
@@ -429,21 +436,36 @@ export class MessageQueue {
     }
   }
 
+  // --- 调度器 ---
+
+  /**
+   * 获取一个调度时间槽。
+   * 内部通过 Promise 链确保各槽之间至少间隔 DISPATCH_INTERVAL ms，
+   * 从而将全局吞吐量限制在 ~45 op/s。
+   * 各 op 拿到槽后可并发执行，不互相等待。
+   */
+  private acquireSlot(): Promise<void> {
+    const slot = this.rateLimiterChain.then(async () => {
+      const wait = this.DISPATCH_INTERVAL - (Date.now() - this.lastDispatchAt);
+      if (wait > 0) await this.sleep(wait);
+      this.lastDispatchAt = Date.now();
+    });
+    this.rateLimiterChain = slot;
+    return slot;
+  }
+
   // --- 消费者 ---
 
   private async flush(): Promise<void> {
-    if (this.processing || this.queue.length === 0) return;
-    this.processing = true;
+    if (this.queue.length === 0) return;
+    const ops = this.mergeEdits(this.queue.splice(0));
 
-    try {
-      const ops = this.mergeEdits(this.queue.splice(0));
-
-      for (const op of ops) {
-        await this.executeOp(op);
-        await this.sleep(this.MIN_OP_INTERVAL);
-      }
-    } finally {
-      this.processing = false;
+    for (const op of ops) {
+      await this.acquireSlot();
+      this.activeDispatches++;
+      void this.executeOp(op)
+        .catch(err => logger.error('executeOp unexpected error:', err))
+        .finally(() => { this.activeDispatches--; });
     }
   }
 

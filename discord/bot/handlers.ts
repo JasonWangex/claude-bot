@@ -231,12 +231,12 @@ export class MessageHandler {
         await this.executePlanApproval(guildId, channelId, session);
         return;
       }
-      const ackMsgId = session.hidden ? null : await this.mq.send(channelId, '⏳', { silent: true, priority: 'high' });
+      const ackMsgId = session.hidden ? null : await this.mq.send(channelId, 'Thinking...', { silent: true, priority: 'high' });
       await this.sendChatInternal(guildId, session, text, 'plan', undefined, ackMsgId);
       return;
     }
 
-    const ackMsgId = session.hidden ? null : await this.mq.send(channelId, '⏳', { silent: true, priority: 'high' });
+    const ackMsgId = session.hidden ? null : await this.mq.send(channelId, 'Thinking...', { silent: true, priority: 'high' });
     await this.sendChatInternal(guildId, session, text, undefined, undefined, ackMsgId);
   }
 
@@ -281,7 +281,7 @@ export class MessageHandler {
         }
       }
 
-      const ackMsgId = session.hidden ? null : await this.mq.send(channelId, '⏳', { silent: true, priority: 'high' });
+      const ackMsgId = session.hidden ? null : await this.mq.send(channelId, 'Thinking...', { silent: true, priority: 'high' });
       await this.sendChatInternal(guildId, session, caption, undefined, [image], ackMsgId);
     } catch (error: any) {
       logger.error(`[${session.name}] Photo processing error:`, error);
