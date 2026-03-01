@@ -25,6 +25,7 @@ import {
 } from './task-scheduler.js';
 import { triggerGoalAudit } from './goal-audit-handler.js';
 import { triggerTechLeadConsultation } from './review-handler.js';
+import { getNotifyMention } from '../utils/env.js';
 
 /**
  * Review completed task results and decide what to dispatch next.
@@ -184,10 +185,11 @@ export async function dispatchNext(
     }
 
     await ctx.notifyGoal(state,
-      `**Goal "${state.goalName}" completed!**\n` +
+      `${getNotifyMention()} **Goal "${state.goalName}" completed!**\n` +
       `Review branch \`${state.goalBranch}\` and merge to main.` +
       todoWarning,
-      'success'
+      'success',
+      { driveChannel: true },
     );
 
     // 自动触发代码审查报告（fire-and-forget）

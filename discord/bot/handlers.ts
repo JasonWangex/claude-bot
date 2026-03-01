@@ -347,6 +347,7 @@ export class MessageHandler {
     mode?: 'plan',
     images?: ImageAttachment[],
     anchorMsgId?: string | null,
+    opts?: { suppressMention?: boolean },
   ): Promise<ChatUsageResult> {
     const channelId = session.channelId;
     const isHidden = session.hidden ?? false;
@@ -981,17 +982,18 @@ export class MessageHandler {
           : '';
 
         this.stateManager.setDoneSentAt(channelId);
+        const notifyPart = opts?.suppressMention ? '' : `${getNotifyMention()} `;
         let doneMsgId: string;
         if (mode === 'plan') {
           this.stateManager.setSessionPlanMode(guildId, channelId, true);
           doneMsgId = await mq.send(channelId,
-            `✅ ${sessionPrefix}${getNotifyMention()} Plan generated${summary}\n\n` +
+            `✅ ${sessionPrefix}${notifyPart}Plan generated${summary}\n\n` +
             `Reply "ok" to compact context and execute.\n` +
             `Reply with anything else to continue discussing.`,
             { priority: 'high' }
           );
         } else {
-          doneMsgId = await mq.send(channelId, `✅ ${sessionPrefix}${getNotifyMention()} Done${summary}${changesLink}`, { priority: 'high' });
+          doneMsgId = await mq.send(channelId, `✅ ${sessionPrefix}${notifyPart}Done${summary}${changesLink}`, { priority: 'high' });
         }
 
         // 记录最新 Discord 消息 ID 到 link（reply 路由用）
@@ -1126,7 +1128,7 @@ export class MessageHandler {
       });
     }
 
-    return this.sendChatInternal(guildId, session, message, undefined, undefined, anchorMsgId);
+    return this.sendChatInternal(guildId, session, message, undefined, undefined, anchorMsgId, { suppressMention: true });
   }
 
   /**
