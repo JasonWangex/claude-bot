@@ -135,6 +135,32 @@ export async function handleTaskReviewResult(
       // 非 phase 边界 → 继续调度
       const refreshed = await ctx.getState(goalId);
       if (refreshed && refreshed.status === 'running') await ctx.reviewAndDispatch(refreshed, taskId);
+    } else if (result.verdict === 'replan' && task.type === '测试') {
+      // 测试设计正确，但发现了实现 bug → 合并测试分支，触发修复 replan
+      const issueTexts = normalizeIssues(result.issues);
+      const bugDetails = issueTexts.join('\n- ') || result.summary || 'Tests reveal implementation bug';
+      logger.info(`[PhaseReview] Test task ${taskId} found bug, triggering replan: ${bugDetails}`);
+      await ctx.notifyGoal(state,
+        `🐛 Test task ${ctx.getTaskLabel(state, taskId)} found bug — merging tests and replanning fix\n${bugDetails}`,
+        'warning',
+      );
+
+      // 先 merge 测试分支（测试是正确的）
+      if (task.branchName) await ctx.mergeAndCleanup(state, task);
+
+      // 以测试失败详情触发 replan，让 tech lead 创建修复任务
+      const refreshed = await ctx.getState(goalId);
+      if (refreshed && refreshed.status === 'running') {
+        await ctx.triggerReplan(refreshed, taskId, {
+          type: 'replan',
+          reason: `Test task ${ctx.getTaskLabel(state, taskId)} revealed implementation bug`,
+          details: bugDetails,
+        });
+        const afterReplan = await ctx.getState(goalId);
+        if (afterReplan && afterReplan.status === 'running') {
+          await ctx.reviewAndDispatch(afterReplan, taskId);
+        }
+      }
     } else {
       // fail → 打回 subtask 修复
       // normalizeIssues 容忍 AI 返回的各种非标准格式（对象、字符串、混合数组等）

@@ -60,6 +60,7 @@ import migration044 from './migrations/044_add_failed_task_review_prompt.js';
 import migration045 from './migrations/045_add_test_task_review_prompt.js';
 import migration046 from './migrations/046_add_tech_lead_consultation_prompt.js';
 import migration047 from './migrations/047_update_test_task_prompts.js';
+import migration048 from './migrations/048_test_review_three_verdicts.js';
 
 const allMigrations: Migration[] = [
   migration001,
@@ -109,6 +110,7 @@ const allMigrations: Migration[] = [
   migration045,
   migration046,
   migration047,
+  migration048,
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
