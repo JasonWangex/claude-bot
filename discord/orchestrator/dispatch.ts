@@ -5,7 +5,7 @@
  * creating worktrees + Discord channels, and launching the execution pipeline.
  */
 
-import { ChannelType, EmbedBuilder } from 'discord.js';
+import { ChannelType, DiscordAPIError, EmbedBuilder } from 'discord.js';
 import { StateManager } from '../bot/state.js';
 import { EmbedColors } from '../bot/message-queue.js';
 import type { GoalDriveState, GoalTask } from '../types/index.js';
@@ -257,7 +257,8 @@ export async function dispatchTask(
   state: GoalDriveState,
   task: GoalTask,
 ): Promise<void> {
-  const branchName = await ctx.generateBranchName(task, state);
+  // 优先复用已有分支名（上次 dispatch 中途失败时已保存），避免 AI 翻译产生不同名字
+  const branchName = task.branchName ?? await ctx.generateBranchName(task, state);
   task.branchName = branchName;
   task.status = 'dispatched';
   task.dispatchedAt = Date.now();
@@ -284,32 +285,48 @@ export async function dispatchTask(
     const guildId = ctx.getGuildId();
     if (!guildId) throw new Error('Bot not authorized');
 
+    const guild = await ctx.deps.client.guilds.fetch(guildId);
     const taskLabel = ctx.getTaskLabel(state, task.id);
 
-    // 分支已存在且 task 持有 channelId → 直接 resume，跳过创建 channel
+    // 分支已存在且 task 持有 channelId → 验证 channel 是否仍存在后决定是否 resume
     if (isExisting && task.channelId) {
       const channelId = task.channelId;
-      task.status = 'running';
-      await ctx.saveState(state);
+      let existingChannel = null;
+      try {
+        existingChannel = await guild.channels.fetch(channelId);
+      } catch (err) {
+        if (!(err instanceof DiscordAPIError && err.code === 10003)) throw err;
+        // code 10003 = Unknown Channel → channel 已删除，fall through 创建新 channel
+      }
 
-      // 确保 session 存在（bot 重启后可能丢失）
-      ctx.deps.stateManager.getOrCreateSession(guildId, channelId, {
-        name: taskLabel,
-        cwd: subtaskDir,
-      });
-      ctx.deps.stateManager.setSessionForkInfo(guildId, channelId, state.goalChannelId, branchName);
+      if (existingChannel) {
+        // channel 存在 → 直接 resume，跳过创建
+        task.status = 'running';
+        await ctx.saveState(state);
 
-      await ctx.notifyGoal(state,
-        `Resumed (branch existed): ${taskLabel} - ${task.description} → \`${branchName}\``,
-        'info'
-      );
-      // 用轻量 continuation prompt 而非完整 buildTaskPrompt，
-      // 避免向已有 channel 重复发送初始任务描述
-      ctx.executeTaskInBackground(
-        state.goalId, task.id, guildId, channelId,
-        `[Resumed] 分支 \`${branchName}\` 已存在，请检查工作区现有进度并继续完成任务。`
-      );
-      return;
+        // 确保 session 存在（bot 重启后可能丢失）
+        ctx.deps.stateManager.getOrCreateSession(guildId, channelId, {
+          name: taskLabel,
+          cwd: subtaskDir,
+        });
+        ctx.deps.stateManager.setSessionForkInfo(guildId, channelId, state.goalChannelId, branchName);
+
+        await ctx.notifyGoal(state,
+          `Resumed (branch existed): ${taskLabel} - ${task.description} → \`${branchName}\``,
+          'info'
+        );
+        // 用轻量 continuation prompt 而非完整 buildTaskPrompt，
+        // 避免向已有 channel 重复发送初始任务描述
+        ctx.executeTaskInBackground(
+          state.goalId, task.id, guildId, channelId,
+          `[Resumed] 分支 \`${branchName}\` 已存在，请检查工作区现有进度并继续完成任务。`
+        );
+        return;
+      }
+
+      // channel 已删除 → 清空 channelId，继续为已有分支创建新 channel（不重建分支）
+      logger.warn(`[Orchestrator] dispatchTask: channel ${channelId} not found for task ${task.id}, will create new channel`);
+      task.channelId = undefined;
     }
 
     const categoryId = await ctx.findCategoryId(state.goalChannelId);
@@ -317,8 +334,6 @@ export async function dispatchTask(
     if (!categoryId) {
       throw new Error('Cannot find Category for goal channel');
     }
-
-    const guild = await ctx.deps.client.guilds.fetch(guildId);
     const title = await generateTopicTitle(task.description);
     const channelName = `${taskLabel} ${title}`.slice(0, 100);
 

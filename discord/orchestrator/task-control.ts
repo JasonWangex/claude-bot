@@ -6,6 +6,7 @@
  * to state, deps, or helper methods.
  */
 
+import { DiscordAPIError } from 'discord.js';
 import type { GoalOrchestrator } from './index.js';
 import type { GoalTask } from '../types/index.js';
 import { StateManager } from '../bot/state.js';
@@ -63,32 +64,48 @@ export async function retryTask(ctx: GoalOrchestrator, goalId: string, taskId: s
   const guildId = ctx.getGuildId();
   if (!guildId) return false;
 
-  // 有 channel 上下文 → 保留 branch/thread，在原 channel 中 resume
+  // 有 channel 上下文 → 先验证 channel 是否仍存在
   if (task.channelId) {
-    const lockKey = StateManager.channelLockKey(guildId, task.channelId);
-    ctx.deps.claudeClient.abort(lockKey);
+    const guild = await ctx.deps.client.guilds.fetch(guildId);
+    let channel = null;
+    try {
+      channel = await guild.channels.fetch(task.channelId);
+    } catch (err) {
+      if (!(err instanceof DiscordAPIError && err.code === 10003)) throw err;
+      // code 10003 = Unknown Channel → channel 已删除，fall through 重新派发
+    }
 
-    const savedError = task.error;
-    task.status = 'running';
-    task.error = undefined;
-    task.pipelinePhase = 'execute';
-    task.feedback = undefined;
-    task.auditRetries = 0;
-    await ctx.saveState(state);
-    await ctx.notifyGoal(state,
-      `Retrying task (resume): ${ctx.getTaskLabel(state, task.id)} - ${task.description}`,
-      'warning',
-    );
-    const errorHint = savedError ? `\n上次错误：${savedError}` : '';
-    const prompt = `[Retry] 任务${errorHint ? '因以下原因失败，请修正后继续' : '恢复执行'}。${errorHint}\n请检查工作区现有进度并继续完成任务。`;
-    ctx.executeTaskInBackground(goalId, taskId, guildId, task.channelId, prompt);
-    return true;
+    if (channel) {
+      // channel 存在 → 保留 branch/thread，在原 channel 中 resume
+      const lockKey = StateManager.channelLockKey(guildId, task.channelId);
+      ctx.deps.claudeClient.abort(lockKey);
+
+      const savedError = task.error;
+      task.status = 'running';
+      task.error = undefined;
+      task.pipelinePhase = 'execute';
+      task.feedback = undefined;
+      task.auditRetries = 0;
+      await ctx.saveState(state);
+      await ctx.notifyGoal(state,
+        `Retrying task (resume): ${ctx.getTaskLabel(state, task.id)} - ${task.description}`,
+        'warning',
+      );
+      const errorHint = savedError ? `\n上次错误：${savedError}` : '';
+      const prompt = `[Retry] 任务${errorHint ? '因以下原因失败，请修正后继续' : '恢复执行'}。${errorHint}\n请检查工作区现有进度并继续完成任务。`;
+      ctx.executeTaskInBackground(goalId, taskId, guildId, task.channelId, prompt);
+      return true;
+    }
+
+    // channel 已不存在 → 清空 channelId，保留 branchName，走重新派发
+    logger.warn(`[Orchestrator] retryTask: channel ${task.channelId} not found for task ${taskId}, will create new channel`);
+    task.channelId = undefined;
   }
 
-  // 无 channel 上下文 → 轻量重置后重新派发（不清除统计数据）
+  // 无有效 channel → 轻量重置后重新派发（不清除统计数据）
+  // 注意：branchName 保留，dispatchTask 会独立检查分支是否存在，缺什么补什么
   task.status = 'pending';
   task.error = undefined;
-  task.branchName = undefined;
   task.channelId = undefined;
   task.dispatchedAt = undefined;
   task.feedback = undefined;
