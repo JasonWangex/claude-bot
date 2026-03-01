@@ -415,6 +415,10 @@ export class GoalOrchestrator {
       const s = ps.tryRender('orchestrator.task.placeholder_rules', {});
       if (s) parts.push(s);
     }
+    if (task.type === '测试') {
+      const s = ps.tryRender('orchestrator.task.test_rules', {});
+      if (s) parts.push(s);
+    }
 
     return parts.join('\n\n');
   }
