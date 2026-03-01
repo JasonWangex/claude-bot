@@ -297,6 +297,7 @@ export class GoalOrchestrator {
 
   /** 获取 goal channel 所在的 Category ID */
   async findCategoryId(goalChannelId: string): Promise<string | null> {
+    // Try Discord API chain first
     try {
       let channel = await this.deps.client.channels.fetch(goalChannelId);
       for (let i = 0; i < 3 && channel; i++) {
@@ -308,6 +309,21 @@ export class GoalOrchestrator {
         }
       }
     } catch { /* ignore */ }
+
+    // Fall back to DB traversal (handles archived/unfetchable threads)
+    try {
+      let channelId: string | null = goalChannelId;
+      for (let i = 0; i < 4 && channelId; i++) {
+        const row = await this.deps.channelRepo.get(channelId);
+        if (!row?.parentChannelId) break;
+        channelId = row.parentChannelId;
+        try {
+          const parent = await this.deps.client.channels.fetch(channelId);
+          if (parent?.type === ChannelType.GuildCategory) return channelId;
+        } catch { /* continue traversal */ }
+      }
+    } catch { /* ignore */ }
+
     return null;
   }
 

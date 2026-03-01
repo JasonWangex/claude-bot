@@ -958,6 +958,7 @@ export class DiscordBot {
     const taskRepo = new TaskRepo(db);
     const checkpointRepo = new CheckpointRepo(db);
     const goalTodoRepo = new GoalTodoRepository(db);
+    const orchestratorChannelRepo = new ChannelRepository(db);
     const taskEventRepo = new TaskEventRepo(db);
     const goalTimelineRepo = new GoalTimelineRepo(db);
     const goalEventRepo = new GoalEventRepo(db);
@@ -973,6 +974,7 @@ export class DiscordBot {
       taskRepo,
       checkpointRepo,
       goalTodoRepo,
+      channelRepo: orchestratorChannelRepo,
       taskEventRepo,
       goalTimelineRepo,
       goalEventRepo,
