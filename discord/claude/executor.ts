@@ -401,23 +401,15 @@ export class ClaudeExecutor {
               logger.debug(`Result: ${event.num_turns} turns, ${event.duration_ms}ms${compactInfo}`);
 
               // 每收到一个 result，对应一条用户消息处理完毕
-              // pendingTurns 归零时关闭 stdin → Claude 收到 EOF → 进程退出
+              // stdin 关闭由 Stop hook 负责（tryCloseStdinForSession）
+              // 此处仅维护 pendingTurns 计数，供 Stop hook 判断是否还有待处理消息
               if (active?.stdin && !flags.killed && !flags.aborted) {
                 const remaining = (active.pendingTurns ?? 1) - 1;
                 active.pendingTurns = remaining;
                 logger.debug(`pendingTurns → ${remaining}`);
-                if (remaining <= 0) {
-                  // setImmediate：让同一 tick 内可能到来的 injectMessage() 先执行
-                  setImmediate(() => {
-                    if ((active.pendingTurns ?? 0) <= 0) {
-                      try { active.stdin?.end(); } catch {}
-                    }
-                  });
-                } else {
+                if (remaining > 0 && onProgress) {
                   // 还有 pending turn：通知 handler 重置当前轮次的 UI 状态
-                  if (onProgress) {
-                    try { onProgress({ type: 'system', subtype: 'turn_boundary' } as any); } catch {}
-                  }
+                  try { onProgress({ type: 'system', subtype: 'turn_boundary' } as any); } catch {}
                 }
               }
             }
@@ -757,7 +749,7 @@ export class ClaudeExecutor {
   /**
    * 向正在运行的 Claude 进程注入新消息（写入 stdin）
    * 无需排队，Claude 处理完当前消息后立即读取下一条
-   * pendingTurns++ 确保收到对应 result 后才关闭 stdin
+   * pendingTurns++ 确保 Stop hook 知道还有待处理消息，不提前关闭 stdin
    */
   injectMessage(lockKey: string, content: string | Array<Record<string, unknown>>): boolean {
     const active = this.activeProcesses.get(lockKey);
@@ -795,6 +787,33 @@ export class ClaudeExecutor {
       active.lastProgressText = text;
       active.toolUseCount = toolUseCount;
     }
+  }
+
+  /**
+   * Stop hook 触发：当前轮次完成，尝试关闭 stdin
+   * 若 pendingTurns > 0 说明还有注入消息待处理，不关闭
+   * 若 pendingTurns <= 0 则关闭 stdin → Claude 收到 EOF → 进程退出
+   *
+   * 使用 setImmediate 延迟一个事件循环，给本轮 poll 阶段中可能到来的
+   * injectMessage() 调用一次增加 pendingTurns 的机会
+   */
+  tryCloseStdinForSession(claudeSessionId: string): void {
+    for (const [lockKey, active] of this.activeProcesses) {
+      if (active.claudeSessionId !== claudeSessionId) continue;
+      if (!active.stdin || active.flags.killed || active.flags.aborted) return;
+      if (active.stdin.writableEnded) return;
+
+      setImmediate(() => {
+        if ((active.pendingTurns ?? 0) <= 0 && !active.stdin?.writableEnded) {
+          logger.debug(`[${lockKey}] Stop hook: closing stdin (pendingTurns=0)`);
+          try { active.stdin?.end(); } catch {}
+        } else {
+          logger.debug(`[${lockKey}] Stop hook: pendingTurns=${active.pendingTurns}, stdin stays open`);
+        }
+      });
+      return;
+    }
+    logger.debug(`[tryCloseStdinForSession] No active process for session ${claudeSessionId?.slice(0, 8)}`);
   }
 
   /**

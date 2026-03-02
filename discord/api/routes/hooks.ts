@@ -268,6 +268,11 @@ async function handleStop(
 
   const now = Date.now();
 
+  // 尝试关闭 stdin：每次 Stop 都执行，不受幂等窗口限制
+  // 必须在幂等检查之前：多轮注入时两次 Stop 可能在 10s 内到达，
+  // 若在幂等检查之后，第二次 Stop 会被跳过，stdin 永远不关闭
+  deps.claudeClient.tryCloseStdinForSession(session.claudeSessionId);
+
   // 幂等检查：10秒内不重复发送（从数据库读取）
   const lastStopTime = session.lastStopAt;
   if (lastStopTime && (now - lastStopTime) < 10000) {

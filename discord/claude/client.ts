@@ -212,6 +212,13 @@ export class ClaudeClient {
     return this.executor.injectMessage(lockKey, content);
   }
 
+  /**
+   * Stop hook 触发：尝试关闭指定 session 的 stdin
+   */
+  tryCloseStdinForSession(claudeSessionId: string): void {
+    this.executor.tryCloseStdinForSession(claudeSessionId);
+  }
+
   updateProgressInfo(lockKey: string, text: string, toolUseCount: number): void {
     this.executor.updateProgressInfo(lockKey, text, toolUseCount);
   }
