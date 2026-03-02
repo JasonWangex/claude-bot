@@ -400,14 +400,13 @@ export class ClaudeExecutor {
               const compactInfo = compactPreTokens ? `, compact: ${compactPreTokens} → ${postTokens}` : '';
               logger.debug(`Result: ${event.num_turns} turns, ${event.duration_ms}ms${compactInfo}`);
 
-              // 每收到一个 result，对应一条用户消息处理完毕
-              // stdin 关闭由 Stop hook 负责（tryCloseStdinForSession）
-              // 此处仅维护 pendingTurns 计数，供 Stop hook 判断是否还有待处理消息
+              // pendingTurns 由 Stop hook（tryCloseStdinForSession）负责递减
+              // Stop hook 在 result 写入后立即触发，通常早于此处 300ms 轮询读取
+              // 此处仅读取当前值判断是否还有更多消息待处理
               if (active?.stdin && !flags.killed && !flags.aborted) {
-                const remaining = (active.pendingTurns ?? 1) - 1;
-                active.pendingTurns = remaining;
-                logger.debug(`pendingTurns → ${remaining}`);
-                if (remaining > 0 && onProgress) {
+                const pendingRemaining = active.pendingTurns ?? 0;
+                logger.debug(`result received, pendingTurns=${pendingRemaining}`);
+                if (pendingRemaining > 0 && onProgress) {
                   // 还有 pending turn：通知 handler 重置当前轮次的 UI 状态
                   try { onProgress({ type: 'system', subtype: 'turn_boundary' } as any); } catch {}
                 }
@@ -803,9 +802,17 @@ export class ClaudeExecutor {
       if (!active.stdin || active.flags.killed || active.flags.aborted) return;
       if (active.stdin.writableEnded) return;
 
+      // Stop hook 触发即代表一轮处理完毕：同步递减 pendingTurns
+      // 在 setImmediate 之前递减，确保计数准确，不依赖 300ms 轮询读到 result
+      const remaining = (active.pendingTurns ?? 1) - 1;
+      active.pendingTurns = remaining;
+      logger.debug(`[${lockKey}] Stop hook: pendingTurns → ${remaining}`);
+
+      // setImmediate 延迟一个事件循环：给同一 I/O 批次中可能到来的
+      // injectMessage() 调用一次增加 pendingTurns 的机会
       setImmediate(() => {
         if ((active.pendingTurns ?? 0) <= 0 && !active.stdin?.writableEnded) {
-          logger.debug(`[${lockKey}] Stop hook: closing stdin (pendingTurns=0)`);
+          logger.debug(`[${lockKey}] Stop hook: closing stdin`);
           try { active.stdin?.end(); } catch {}
         } else {
           logger.debug(`[${lockKey}] Stop hook: pendingTurns=${active.pendingTurns}, stdin stays open`);
