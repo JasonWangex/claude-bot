@@ -30,8 +30,7 @@ interface ActiveProcess {
   cwd?: string;
   lastProgressText?: string;
   toolUseCount?: number;
-  stdin?: import('stream').Writable;  // kept open for multi-turn injection
-  pendingTurns?: number;              // msgs written to stdin - results received
+  stdin?: import('stream').Writable;  // kept open until done signal (result or Stop hook)
 }
 
 function isProcessAlive(pid: number): boolean {
@@ -175,7 +174,6 @@ export class ClaudeExecutor {
         guildId: options.guildId, channelId: options.channelId,
         cwd: options.cwd,
         stdin: child.stdin ?? undefined,
-        pendingTurns: 1,
       });
 
       // 通过 stdin 写入 stream-json 格式的用户消息
@@ -199,7 +197,7 @@ export class ClaudeExecutor {
       if (!child.stdin) {
         throw new ClaudeExecutionError('CLI stdin 不可用', ClaudeErrorType.FATAL);
       }
-      // stdin 保持开放，等所有 pendingTurns 都收到 result 后再关闭
+      // stdin 保持开放，直到 result 事件或 Stop hook 触发关闭
       child.stdin.write(input + '\n', 'utf8');
       child.stdin.on('error', () => {}); // 进程提前退出时忽略 pipe 错误
 
@@ -400,16 +398,15 @@ export class ClaudeExecutor {
               const compactInfo = compactPreTokens ? `, compact: ${compactPreTokens} → ${postTokens}` : '';
               logger.debug(`Result: ${event.num_turns} turns, ${event.duration_ms}ms${compactInfo}`);
 
-              // pendingTurns 由 Stop hook（tryCloseStdinForSession）负责递减
-              // Stop hook 在 result 写入后立即触发，通常早于此处 300ms 轮询读取
-              // 此处仅读取当前值判断是否还有更多消息待处理
-              if (active?.stdin && !flags.killed && !flags.aborted) {
-                const pendingRemaining = active.pendingTurns ?? 0;
-                logger.debug(`result received, pendingTurns=${pendingRemaining}`);
-                if (pendingRemaining > 0 && onProgress) {
-                  // 还有 pending turn：通知 handler 重置当前轮次的 UI 状态
-                  try { onProgress({ type: 'system', subtype: 'turn_boundary' } as any); } catch {}
-                }
+              // result 事件 = done 信号之一：尝试关闭 stdin
+              // 与 Stop hook 的 tryCloseStdinForSession 逻辑相同，两者都幂等
+              if (active?.stdin && !flags.killed && !flags.aborted && !active.stdin.writableEnded) {
+                setImmediate(() => {
+                  if (!active.stdin?.writableEnded) {
+                    logger.debug(`[${lockKey}] result event: closing stdin`);
+                    try { active.stdin?.end(); } catch {}
+                  }
+                });
               }
             }
           }
@@ -691,7 +688,6 @@ export class ClaudeExecutor {
       const active = this.activeProcesses.get(lockKey);
       if (active) {
         active.flags.aborted = true;
-        active.pendingTurns = 0;
         if (active.timeoutHandle) clearTimeout(active.timeoutHandle);
         if (active.stdin) { try { active.stdin.destroy(); } catch {} }
         active.child.kill('SIGTERM');
@@ -731,7 +727,6 @@ export class ClaudeExecutor {
         }
 
         active.flags.aborted = true;
-        active.pendingTurns = 0;
         if (active.timeoutHandle) clearTimeout(active.timeoutHandle);
         if (active.stdin) { try { active.stdin.destroy(); } catch {} }
         active.child.kill('SIGTERM');
@@ -748,13 +743,12 @@ export class ClaudeExecutor {
   /**
    * 向正在运行的 Claude 进程注入新消息（写入 stdin）
    * 无需排队，Claude 处理完当前消息后立即读取下一条
-   * pendingTurns++ 确保 Stop hook 知道还有待处理消息，不提前关闭 stdin
+   * writableEnded=true 时注入失败，由调用方走新会话流程
    */
   injectMessage(lockKey: string, content: string | Array<Record<string, unknown>>): boolean {
     const active = this.activeProcesses.get(lockKey);
     if (!active?.stdin || active.flags.killed || active.flags.aborted) return false;
-    // stdin.end() 已调用但进程尚未退出时，writableEnded=true，写入会被 error 事件静默吞掉
-    // 此时应视为注入失败，让调用方走新会话流程
+    // stdin.end() 已调用时，writableEnded=true，写入无效
     if (active.stdin.writableEnded) return false;
 
     const input = JSON.stringify({
@@ -765,13 +759,10 @@ export class ClaudeExecutor {
     });
 
     try {
-      active.pendingTurns = (active.pendingTurns ?? 0) + 1;
       active.stdin.write(input + '\n', 'utf8');
-      logger.debug(`[${lockKey}] Message injected, pendingTurns=${active.pendingTurns}`);
+      logger.debug(`[${lockKey}] Message injected`);
       return true;
     } catch (e: any) {
-      // 写入失败说明 stdin 已关闭，回滚计数
-      active.pendingTurns = (active.pendingTurns ?? 1) - 1;
       logger.warn(`[${lockKey}] injectMessage failed: ${e.message}`);
       return false;
     }
@@ -789,12 +780,12 @@ export class ClaudeExecutor {
   }
 
   /**
-   * Stop hook 触发：当前轮次完成，尝试关闭 stdin
-   * 若 pendingTurns > 0 说明还有注入消息待处理，不关闭
-   * 若 pendingTurns <= 0 则关闭 stdin → Claude 收到 EOF → 进程退出
+   * done 信号触发（result 事件或 Stop hook）：关闭 stdin
+   * stdin.end() 是幂等的：若已有注入消息在 buffer 中，Claude 会读完再 EOF；
+   * 若注入发生在 end() 之后，injectMessage 会检测到 writableEnded 并返回 false，
+   * 由调用方走新 session 流程。
    *
-   * 使用 setImmediate 延迟一个事件循环，给本轮 poll 阶段中可能到来的
-   * injectMessage() 调用一次增加 pendingTurns 的机会
+   * setImmediate：给同一 I/O 批次中可能到来的 injectMessage() 先写入 buffer 的机会
    */
   tryCloseStdinForSession(claudeSessionId: string): void {
     for (const [lockKey, active] of this.activeProcesses) {
@@ -802,20 +793,10 @@ export class ClaudeExecutor {
       if (!active.stdin || active.flags.killed || active.flags.aborted) return;
       if (active.stdin.writableEnded) return;
 
-      // Stop hook 触发即代表一轮处理完毕：同步递减 pendingTurns
-      // 在 setImmediate 之前递减，确保计数准确，不依赖 300ms 轮询读到 result
-      const remaining = (active.pendingTurns ?? 1) - 1;
-      active.pendingTurns = remaining;
-      logger.debug(`[${lockKey}] Stop hook: pendingTurns → ${remaining}`);
-
-      // setImmediate 延迟一个事件循环：给同一 I/O 批次中可能到来的
-      // injectMessage() 调用一次增加 pendingTurns 的机会
       setImmediate(() => {
-        if ((active.pendingTurns ?? 0) <= 0 && !active.stdin?.writableEnded) {
-          logger.debug(`[${lockKey}] Stop hook: closing stdin`);
+        if (!active.stdin?.writableEnded) {
+          logger.debug(`[${lockKey}] done signal: closing stdin`);
           try { active.stdin?.end(); } catch {}
-        } else {
-          logger.debug(`[${lockKey}] Stop hook: pendingTurns=${active.pendingTurns}, stdin stays open`);
         }
       });
       return;
