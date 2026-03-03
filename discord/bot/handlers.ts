@@ -461,11 +461,11 @@ export class MessageHandler {
           const pos = (event as any).queue_position || '?';
           // 显示 Interrupt & Send Now 按钮，让用户可以中断当前任务
           const interruptButton = new ButtonBuilder()
-            .setCustomId(`interrupt:${lockKey.slice(0, 20)}`)
+            .setCustomId(`interrupt:${lockKey}`)
             .setLabel('Interrupt & Send Now')
             .setStyle(ButtonStyle.Primary);
           const cancelButton = new ButtonBuilder()
-            .setCustomId(`cancel:${lockKey.slice(0, 20)}`)
+            .setCustomId(`cancel:${lockKey}`)
             .setLabel('Cancel')
             .setStyle(ButtonStyle.Secondary);
           const queuedRow = new ActionRowBuilder<ButtonBuilder>().addComponents(interruptButton, cancelButton);
