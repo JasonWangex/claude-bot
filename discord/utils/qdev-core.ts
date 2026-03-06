@@ -39,9 +39,9 @@ export interface QdevOptions {
   /** 从哪个分支 fork worktree；不传则基于当前 channel 的分支 */
   baseBranch?: string;
   /**
-   * 是否创建新的 worktree（默认 true）。
-   * - true（默认）：从当前 channel 的分支 fork 出新 branch + worktree + Discord channel
-   * - false：仅创建新 Discord channel + session，复用当前 channel 的 worktree
+   * 是否创建新的 worktree（默认 false）。
+   * - false（默认）：仅创建新 Discord channel + session，复用当前 channel 的 worktree
+   * - true：从当前 channel 的分支 fork 出新 branch + worktree + Discord channel
    */
   worktree?: boolean;
 }
@@ -52,7 +52,7 @@ export interface QdevResult extends ForkTaskResult {
 
 export async function qdevCore(options: QdevOptions, deps: ForkTaskDeps): Promise<QdevResult> {
   const { guildId, channelId, description, model, categoryId, baseBranch } = options;
-  const shouldCreateWorktree = options.worktree !== false;  // 默认 true
+  const shouldCreateWorktree = options.worktree === true;  // 默认 false
 
   // 0. 入参校验
   if (options.baseBranch?.startsWith('-')) {

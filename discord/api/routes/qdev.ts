@@ -71,7 +71,7 @@ export const qdev: RouteHandler = async (req, res, params, deps) => {
       branchName: body.branch_name?.trim() || undefined,
       channelName: body.channel_name?.trim() || undefined,
       baseBranch: body.base_branch?.trim() || undefined,
-      worktree: body.worktree !== false,  // 默认 true
+      worktree: body.worktree === true,  // 默认 false
     }, {
       stateManager: deps.stateManager,
       client: deps.client,
