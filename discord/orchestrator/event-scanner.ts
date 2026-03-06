@@ -266,6 +266,10 @@ export async function checkOrphanedTasks(ctx: GoalOrchestrator): Promise<void> {
       const hasFeedbackEvent = ctx.deps.taskEventRepo.read(task.id, 'task.feedback') !== null;
       if (hasCompletedEvent || hasFeedbackEvent) continue;
 
+      // 检查 Claude 进程是否还在运行（比 session 状态更可靠，防止状态滞后导致误触发）
+      const lockKey = StateManager.channelLockKey(guildId, task.channelId);
+      if (ctx.deps.claudeClient.isRunning(lockKey)) continue;
+
       // 检查 session 状态
       const sessionStatus = ctx.deps.stateManager.getChannelSessionStatus(task.channelId);
       // 只在 session idle 或 closed 时触发 check-in（active/waiting 说明 AI 还在工作）
@@ -287,9 +291,8 @@ export async function checkOrphanedTasks(ctx: GoalOrchestrator): Promise<void> {
       }
 
       // 发送 check-in（若有 review 遗留的 issues，继续携带上下文）
+      // 注意：tracking 更新已移入 sendCheckIn，此处无需手动 set
       sendCheckIn(ctx, state, task, guildId, count + 1, task.metadata?.lastReviewIssues as string | undefined);
-      ctx.checkInCounts.set(task.id, count + 1);
-      ctx.lastCheckInAt.set(task.id, now);
     }
 
     // ── Reviewer 监工：completed + unmerged 任务 ──
@@ -353,6 +356,11 @@ export function sendCheckIn(
 ): void {
   const taskId = task.id;
   const channelId = task.channelId!;
+
+  // 立即更新 tracking，防止 scanner 在 check-in 期间重复触发
+  // （review-handler 等非 scanner 路径调用时同样需要维护冷却状态）
+  ctx.checkInCounts.set(taskId, attempt);
+  ctx.lastCheckInAt.set(taskId, Date.now());
 
   (async () => {
     try {
