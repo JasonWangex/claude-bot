@@ -71,7 +71,7 @@ export function registerChannelTools(server: McpServer) {
       branch_name: z.string().optional().describe('Custom git branch name (e.g. feat/my-feature). LLM-generated from description if omitted.'),
       channel_name: z.string().optional().describe('Custom Discord channel name. LLM-generated from description if omitted.'),
       base_branch: z.string().optional().describe('Git branch or commit to fork the worktree from. Defaults to current branch of the parent channel.'),
-      worktree: z.boolean().optional().describe('Create a new worktree (default: false). Set true to fork a new branch + worktree + Discord channel; false (default) reuses current worktree, only creating a new session and Discord channel.'),
+      worktree: z.boolean().optional().describe('Create a new worktree. Set true to fork a new branch + worktree + Discord channel; false reuses current worktree, only creating a new session and Discord channel.'),
     },
   }, async ({ channel_id, description, model, category_id, branch_name, channel_name, base_branch, worktree }) => {
     const r = await apiPost(`/api/channels/${channel_id}/qdev`, {

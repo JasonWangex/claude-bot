@@ -36,7 +36,7 @@ export const devCommands = [
     )
     .addBooleanOption(opt =>
       opt.setName('worktree')
-        .setDescription('Create new worktree (default: true). False to reuse current worktree.')
+        .setDescription('Create new worktree (default: false). True to fork a new branch + worktree.')
         .setRequired(false)
     ),
 
@@ -102,7 +102,7 @@ async function handleQdev(
   const channelId = interaction.channelId;
   const description = interaction.options.getString('description', true);
   const model = interaction.options.getString('model') || undefined;
-  const worktree = interaction.options.getBoolean('worktree') ?? true;
+  const worktree = interaction.options.getBoolean('worktree') ?? false;
   const { stateManager, client, config, messageHandler } = deps;
 
   const session = stateManager.getSession(guildId, channelId);
