@@ -154,6 +154,13 @@ setup_discord() {
   echo ""
   prompt_value GOAL_LOG_CHANNEL_ID "Goal Log Channel ID" ""
 
+  echo ""
+  echo -e "  ${CYAN}Notify User ID${NC} (可选)"
+  echo "  通知 @mention 目标用户 ID。配置后 Done/等待消息用 <@userId> 替代 @everyone。"
+  echo "  获取: 同上开发者模式 → 右键用户名 → 复制用户 ID"
+  echo ""
+  prompt_value DISCORD_NOTIFY_USER_ID "Discord Notify User ID" ""
+
   ok "Discord configuration done"
 }
 
@@ -211,6 +218,20 @@ setup_optional() {
   echo ""
   prompt_value MAX_TURNS "Max execution turns" "500"
 
+  echo ""
+  echo -e "  ${CYAN}API Listen Address${NC}"
+  echo "  本地 HTTP API 监听地址。默认 127.0.0.1（仅本机）。"
+  echo "  如需通过 Tailscale 远程访问，设为 0.0.0.0（远程请求会验证 BOT_ACCESS_TOKEN）。"
+  echo ""
+  prompt_value API_LISTEN "API listen address" "127.0.0.1"
+
+  echo ""
+  echo -e "  ${CYAN}Web Dashboard URL${NC} (可选)"
+  echo "  Web 看板地址。配置后 Done 消息会附带 changes 查看链接。"
+  echo "  示例: http://your-server:4173"
+  echo ""
+  prompt_value WEB_URL "Web dashboard URL" ""
+
   ok "Optional configuration done"
 }
 
@@ -236,21 +257,32 @@ BOT_ACCESS_TOKEN=${BOT_ACCESS_TOKEN}
 AUTHORIZED_GUILD_ID=${AUTHORIZED_GUILD_ID:-}
 GENERAL_CHANNEL_ID=${GENERAL_CHANNEL_ID:-}
 GOAL_LOG_CHANNEL_ID=${GOAL_LOG_CHANNEL_ID:-}
+DISCORD_NOTIFY_USER_ID=${DISCORD_NOTIFY_USER_ID:-}
+
+# --- Paths ---
 DEFAULT_WORK_DIR=${DEFAULT_WORK_DIR}
 PROJECTS_ROOT=${PROJECTS_ROOT}
 WORKTREES_DIR=${WORKTREES_DIR}
 
-# Claude CLI
+# --- Claude CLI ---
 COMMAND_TIMEOUT=${COMMAND_TIMEOUT:-3600000}
 MAX_TURNS=${MAX_TURNS:-500}
+STALL_TIMEOUT=60000
 
-# DeepSeek API
+# --- Claude Models (Orchestrator pipeline) ---
+PIPELINE_SONNET_MODEL=claude-sonnet-4-6
+PIPELINE_OPUS_MODEL=claude-opus-4-6
+
+# --- DeepSeek API (optional: branch name generation) ---
 DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
 
-# Local HTTP API
+# --- Local HTTP API ---
 API_PORT=${API_PORT:-3456}
+API_LISTEN=${API_LISTEN:-127.0.0.1}
+${WEB_URL:+WEB_URL=${WEB_URL}}
+# WEB_URL=http://your-server:4173
 
-# Monitor
+# --- Process Monitor ---
 MONITOR_CHECK_INTERVAL=5000
 MONITOR_COOLDOWN=180000
 MONITOR_MIN_RUNTIME=2
@@ -306,6 +338,42 @@ install_skills() {
     done
 
     ok "Skills installed: $count"
+  fi
+}
+
+# ========== install_hooks ==========
+install_hooks() {
+  echo -e "\n${BOLD}==> Installing Claude hooks${NC}"
+
+  local HOOKS_SRC="$PROJECT_DIR/hooks"
+  local HOOKS_DST="$HOME/.claude/hooks"
+
+  if [ ! -d "$HOOKS_SRC" ]; then
+    info "No hooks/ directory found, skipping"
+    return
+  fi
+
+  mkdir -p "$HOOKS_DST"
+
+  local count=0
+  for hook_file in "$HOOKS_SRC"/*.sh; do
+    [ -f "$hook_file" ] || continue
+    local hook_name
+    hook_name="$(basename "$hook_file")"
+    local target="$HOOKS_DST/$hook_name"
+    cp "$hook_file" "$target"
+    chmod +x "$target"
+    ok "$hook_name → $target"
+    count=$((count + 1))
+  done
+
+  if [ "$count" -gt 0 ]; then
+    info "To activate hooks, merge the following into ~/.claude/settings.json:"
+    echo '  { "hooks": { "Stop": [{"hooks":[{"type":"command","command":"~/.claude/hooks/stop.sh"}]}],'
+    echo '               "SessionEnd": [{"hooks":[{"type":"command","command":"~/.claude/hooks/session-end.sh"}]}] } }'
+    ok "Hooks installed: $count"
+  else
+    info "No .sh hook files found in hooks/"
   fi
 }
 
@@ -499,6 +567,7 @@ do_init() {
   generate_env
   install_deps
   install_skills
+  install_hooks
   setup_service
   do_verify
 
@@ -519,11 +588,14 @@ case "${1:-init}" in
     AUTHORIZED_GUILD_ID="${AUTHORIZED_GUILD_ID:-}"
     GENERAL_CHANNEL_ID="${GENERAL_CHANNEL_ID:-}"
     GOAL_LOG_CHANNEL_ID="${GOAL_LOG_CHANNEL_ID:-}"
+    DISCORD_NOTIFY_USER_ID="${DISCORD_NOTIFY_USER_ID:-}"
     DEFAULT_WORK_DIR="${DEFAULT_WORK_DIR:-$HOME/assistant}"
     PROJECTS_ROOT="${PROJECTS_ROOT:-$HOME/projects}"
     WORKTREES_DIR="${WORKTREES_DIR:-$HOME/projects/worktrees}"
     DEEPSEEK_API_KEY="${DEEPSEEK_API_KEY:-}"
     API_PORT="${API_PORT:-3456}"
+    API_LISTEN="${API_LISTEN:-127.0.0.1}"
+    WEB_URL="${WEB_URL:-}"
     COMMAND_TIMEOUT="${COMMAND_TIMEOUT:-3600000}"
     MAX_TURNS="${MAX_TURNS:-500}"
     if [ -z "$DISCORD_TOKEN" ] || [ -z "$BOT_ACCESS_TOKEN" ]; then
@@ -536,6 +608,7 @@ case "${1:-init}" in
     ;;
   deps)     install_deps ;;
   skills)   install_skills ;;
+  hooks)    install_hooks ;;
   service)  setup_service ;;
   verify)   do_verify ;;
   *)
@@ -546,7 +619,8 @@ case "${1:-init}" in
     echo "  discord   Configure Discord Token and Application ID"
     echo "  env       Generate/update .env file"
     echo "  deps      Install npm dependencies"
-    echo "  skills    Install skill symlinks"
+    echo "  skills    Install skill symlinks to ~/.claude/skills/"
+    echo "  hooks     Install Claude hook scripts to ~/.claude/hooks/"
     echo "  service   Configure systemd services"
     echo "  verify    Verify configuration completeness"
     exit 1

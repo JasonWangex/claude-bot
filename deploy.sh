@@ -37,13 +37,30 @@ install_hooks() {
     done
   fi
 
-  # 更新 Claude settings.json 中的 hooks 配置
+  # 自动合并 hooks 配置到 ~/.claude/settings.json
   local settings_file="$HOME/.claude/settings.json"
-  if [ -f "$settings_file" ]; then
-    echo "  Claude settings.json: hooks already configured (manual merge required)"
-  else
-    echo "  Claude settings.json: not found, skipping hooks configuration"
+  if [ ! -f "$settings_file" ]; then
+    echo '{}' > "$settings_file"
   fi
+
+  python3 - "$settings_file" "$hook_dir" <<'PYEOF'
+import json, sys, os
+settings_file, hook_dir = sys.argv[1], sys.argv[2]
+with open(settings_file) as f:
+    config = json.load(f)
+config.setdefault("hooks", {})
+for event, script in [("Stop", "stop.sh"), ("SessionEnd", "session-end.sh")]:
+    path = os.path.join(hook_dir, script)
+    if not os.path.exists(path): continue
+    entries = config["hooks"].setdefault(event, [])
+    already = any(h.get("command") == path for e in entries for h in e.get("hooks", []))
+    if not already:
+        entries.append({"hooks": [{"type": "command", "command": path}]})
+with open(settings_file, "w") as f:
+    json.dump(config, f, indent=2); f.write("\n")
+PYEOF
+
+  echo "  Claude settings.json: hooks merged"
 }
 
 stamp_deploy_time() {
