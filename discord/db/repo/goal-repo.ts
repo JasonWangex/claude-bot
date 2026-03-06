@@ -199,9 +199,8 @@ export class GoalRepo implements IGoalRepo {
 // ==================== 转换函数 ====================
 
 function goalDriveStateToGoalRow(state: GoalDriveState): Record<string, unknown> {
-  // 序列化 pendingReplan + pendingRollback + techLeadChannelId 为 JSON
+  // 序列化 pendingRollback + techLeadChannelId 为 JSON
   const pending: Record<string, unknown> = {};
-  if (state.pendingReplan) pending.pendingReplan = state.pendingReplan;
   if (state.pendingRollback) pending.pendingRollback = state.pendingRollback;
   if (state.techLeadChannelId) pending.techLeadChannelId = state.techLeadChannelId;
   const pendingJson = Object.keys(pending).length > 0 ? JSON.stringify(pending) : null;
@@ -224,14 +223,12 @@ function rowsToGoalDriveState(
   goal: GoalRow,
   tasks: TaskRow[],
 ): GoalDriveState {
-  // 反序列化 pendingReplan / pendingRollback / techLeadChannelId
-  let pendingReplan: GoalDriveState['pendingReplan'];
+  // 反序列化 pendingRollback / techLeadChannelId
   let pendingRollback: GoalDriveState['pendingRollback'];
   let techLeadChannelId: string | undefined;
   if (goal.drive_pending_json) {
     try {
       const pending = JSON.parse(goal.drive_pending_json);
-      pendingReplan = pending.pendingReplan;
       pendingRollback = pending.pendingRollback;
       // 兼容旧字段名 reviewerChannelId
       techLeadChannelId = pending.techLeadChannelId ?? pending.reviewerChannelId;
@@ -250,7 +247,6 @@ function rowsToGoalDriveState(
     createdAt: goal.drive_created_at ?? 0,
     updatedAt: goal.drive_updated_at ?? 0,
     maxConcurrent: goal.drive_max_concurrent ?? 2,
-    pendingReplan,
     pendingRollback,
     tasks: tasks.map((t) => ({
       id: t.id,

@@ -12,7 +12,7 @@ import { logger } from '../utils/logger.js';
 import { execGit } from './git-ops.js';
 import { cleanupSubtask } from './goal-branch.js';
 import { buildRollbackConfirmButtons } from './goal-buttons.js';
-import { updateGoalBodyWithTasks } from './replanner.js';
+import { updateGoalBodyWithTasks } from './goal-body-utils.js';
 
 /**
  * 第一阶段：评估回滚成本，暂停受影响任务，等待用户确认

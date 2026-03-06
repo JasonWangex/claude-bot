@@ -157,74 +157,6 @@ This is a **placeholder task**. It exists as a structural marker in the task gra
     sortOrder: 7,
   });
 
-  // ---- orchestrator.replan (单模板) ----
-  entries.push({
-    key: 'orchestrator.replan',
-    category: 'orchestrator',
-    name: '任务重规划',
-    description: '分析 feedback 并通过 bot_task_event 上报结构化计划更新',
-    template: `You are a task replanner for a software development goal orchestrator.
-Your job is to analyze feedback from a subtask and produce a structured plan update.
-
-## Goal
-Name: {{GOAL_NAME}}
-{{GOAL_BODY}}
-{{COMPLETION_CRITERIA}}
-
-## Current Tasks
-{{CURRENT_TASKS}}
-
-## Replan Trigger
-Task: {{TRIGGER_TASK_ID}}
-Feedback type: {{FEEDBACK_TYPE}}
-Reason: {{FEEDBACK_REASON}}
-{{FEEDBACK_DETAILS}}
-{{COMPLETED_DIFF_STATS}}
-## Constraints
-1. **NEVER modify completed or skipped tasks** — their IDs: {{IMMUTABLE_COMPLETED}}
-2. **NEVER modify running or dispatched tasks** — their IDs: {{IMMUTABLE_RUNNING}}
-3. New task IDs MUST use \`g{{GOAL_SEQ}}t<N>\` format (e.g. \`g{{GOAL_SEQ}}t8\`) — never bare \`t<N>\`
-4. New task IDs must not collide with existing IDs
-5. Tasks are ordered by phase (phase 1 runs first, then phase 2, etc.). Tasks in the same phase run in parallel.
-6. Keep changes minimal — only modify what the feedback necessitates
-7. Preserve the overall goal direction
-
-## Output
-Call \`bot_task_event\` with:
-- \`task_id\`: "{{TASK_ID}}"
-- \`event_type\`: "replan.result"
-- \`payload\`:
-\`\`\`json
-{
-  "changes": [
-    { "action": "add", "task": { "id": "g{{GOAL_SEQ}}t8", "description": "...", "type": "代码", "phase": 3, "complexity": "simple" } },
-    { "action": "modify", "taskId": "g{{GOAL_SEQ}}t5", "updates": { "description": "new desc", "phase": 2, "complexity": "complex" } },
-    { "action": "remove", "taskId": "g{{GOAL_SEQ}}t7", "reason": "superseded by g{{GOAL_SEQ}}t8" }
-  ],
-  "reasoning": "Explanation of why these changes are needed",
-  "impactLevel": "low" | "medium" | "high"
-}
-\`\`\`
-
-Impact levels (assessed by affected pending tasks):
-- low: affects ≤1 pending task (description tweaks, phase adjustment)
-- medium: affects 2-3 pending tasks (task additions/removals, but overall direction unchanged)
-- high: affects ≥4 pending tasks, OR significant restructuring with both add+remove that changes direction
-Note: low/medium changes are auto-applied; high requires user approval.
-
-Valid task types: 代码, 手动, 调研, 占位
-Task granularity: split by **feature/functionality**, NOT by technical layer. One feature = one task, even if it touches frontend + backend + API.
-Valid complexity (for 代码 tasks): "simple" (straightforward logic, has patterns to follow) or "complex" (needs architecture design or cross-module coordination). Default: "simple"
-Valid actions: add, modify, remove
-
-If no changes are needed, call \`bot_task_event\` with: \`{ "changes": [], "reasoning": "...", "impactLevel": "low" }\``,
-    variables: ['GOAL_NAME', 'GOAL_BODY', 'COMPLETION_CRITERIA', 'CURRENT_TASKS', 'TRIGGER_TASK_ID', 'FEEDBACK_TYPE', 'FEEDBACK_REASON', 'FEEDBACK_DETAILS', 'COMPLETED_DIFF_STATS', 'IMMUTABLE_COMPLETED', 'IMMUTABLE_RUNNING', 'TASK_ID', 'GOAL_SEQ'],
-    parentKey: null,
-    sortOrder: 0,
-  });
-
-
-
   // ---- orchestrator.phase_review (Phase 全局评估) ----
   entries.push({
     key: 'orchestrator.phase_review',
@@ -283,11 +215,26 @@ Responsibilities:
 - Review completed task changes via \`/code-audit\` when requested
 - Resolve merge conflicts when tasks cannot be merged automatically
 - Evaluate phase quality and decide continue/replan after each phase completes
+- **Directly modify tasks** when needed (add/update/remove/skip/stop tasks)
 - Log non-critical findings via \`bot_goal_todos\` (\`action: "add"\`, \`goal_id: "{{GOAL_ID}}"\`, \`source: "tech-lead"\`, \`priority\`: 重要/高/中/低)
 - Report review verdict via \`bot_task_event\`
 
+Task modification tools (\`bot_goal_tasks\`):
+- \`add\` — add a new task (requires task_id + description; optional: type, phase, complexity)
+- \`update\` — modify task fields (description, type, phase, complexity)
+- \`remove\` — cancel a task (sets status=cancelled)
+- \`skip\` — skip a task
+- \`stop\` — hard stop a running task (kill session, mark failed)
+- \`pause\` — soft pause (session continues but won't advance)
+- \`retry\` — resume in existing channel
+- \`reset\` — full reset, start fresh
+- \`nudge\` — light-push to let agent self-assess
+
+Task ID format: \`g{{GOAL_SEQ}}t<N>\` (e.g. \`g{{GOAL_SEQ}}t8\`)
+Valid types: 代码, 手动, 调研, 占位, 测试
+
 **No action needed now — reply \`Ready\` when you are ready.**`,
-    variables: ['GOAL_NAME', 'GOAL_BRANCH', 'GOAL_ID'],
+    variables: ['GOAL_NAME', 'GOAL_BRANCH', 'GOAL_ID', 'GOAL_SEQ'],
     parentKey: null,
     sortOrder: 0,
   });

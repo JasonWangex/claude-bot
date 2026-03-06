@@ -137,7 +137,7 @@ export const skipTask: RouteHandler = async (_req, res, params, deps) => {
 
   const ok = await deps.orchestrator.skipTask(params.goalId, params.taskId);
   if (!ok) {
-    sendJson(res, 400, { ok: false, error: 'Task not found or cannot be skipped' });
+    sendJson(res, 400, { ok: false, error: 'Task not found' });
     return;
   }
 
@@ -156,7 +156,7 @@ export const markTaskDone: RouteHandler = async (_req, res, params, deps) => {
 
   const ok = await deps.orchestrator.markTaskDone(params.goalId, params.taskId);
   if (!ok) {
-    sendJson(res, 400, { ok: false, error: 'Task not found or not blocked' });
+    sendJson(res, 400, { ok: false, error: 'Task not found' });
     return;
   }
 
@@ -175,7 +175,7 @@ export const retryTask: RouteHandler = async (_req, res, params, deps) => {
 
   const ok = await deps.orchestrator.retryTask(params.goalId, params.taskId);
   if (!ok) {
-    sendJson(res, 400, { ok: false, error: 'Task not found or not in retryable state (failed/blocked_feedback/paused)' });
+    sendJson(res, 400, { ok: false, error: 'Task not found' });
     return;
   }
 
@@ -194,7 +194,7 @@ export const resetAndStartTask: RouteHandler = async (_req, res, params, deps) =
 
   const ok = await deps.orchestrator.resetAndStart(params.goalId, params.taskId);
   if (!ok) {
-    sendJson(res, 400, { ok: false, error: 'Task not found or not in resettable state (failed/blocked_feedback/paused)' });
+    sendJson(res, 400, { ok: false, error: 'Task not found' });
     return;
   }
 
@@ -213,11 +213,30 @@ export const pauseTask: RouteHandler = async (_req, res, params, deps) => {
 
   const ok = await deps.orchestrator.pauseTask(params.goalId, params.taskId);
   if (!ok) {
-    sendJson(res, 400, { ok: false, error: 'Task not found or not running' });
+    sendJson(res, 400, { ok: false, error: 'Task not found' });
     return;
   }
 
   sendJson(res, 200, { ok: true, data: { status: 'paused' } });
+};
+
+// POST /api/goals/:goalId/tasks/:taskId/stop
+export const stopTask: RouteHandler = async (_req, res, params, deps) => {
+  const guildId = requireAuth(res);
+  if (!guildId) return;
+
+  if (!deps.orchestrator) {
+    sendJson(res, 503, { ok: false, error: 'Orchestrator not available' });
+    return;
+  }
+
+  const ok = await deps.orchestrator.stopTask(params.goalId, params.taskId);
+  if (!ok) {
+    sendJson(res, 400, { ok: false, error: 'Task not found' });
+    return;
+  }
+
+  sendJson(res, 200, { ok: true, data: { status: 'failed' } });
 };
 
 // POST /api/goals/:goalId/tasks/:taskId/nudge

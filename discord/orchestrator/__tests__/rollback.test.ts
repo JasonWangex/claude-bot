@@ -383,14 +383,8 @@ describe('rollback: GoalDriveState pendingRollback field', () => {
     expect(state.pendingRollback).toBeUndefined();
   });
 
-  it('should coexist with pendingReplan', () => {
+  it('should set pendingRollback independently', () => {
     const state = makeState({
-      pendingReplan: {
-        changes: [],
-        reasoning: 'test',
-        impactLevel: 'high',
-        checkpointId: 'cp-1',
-      },
       pendingRollback: {
         checkpointId: 'cp-2',
         pausedTaskIds: [],
@@ -400,9 +394,8 @@ describe('rollback: GoalDriveState pendingRollback field', () => {
       },
     });
 
-    expect(state.pendingReplan).toBeDefined();
     expect(state.pendingRollback).toBeDefined();
-    expect(state.pendingReplan!.checkpointId).not.toBe(state.pendingRollback!.checkpointId);
+    expect(state.pendingRollback!.checkpointId).toBe('cp-2');
   });
 });
 

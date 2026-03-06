@@ -4,6 +4,8 @@
  * Each function takes `ctx: GoalOrchestrator` as its first parameter
  * so the orchestrator instance can delegate here without losing access
  * to state, deps, or helper methods.
+ *
+ * 所有 action 从任意状态均可调用，无状态守卫。
  */
 
 import { DiscordAPIError } from 'discord.js';
@@ -12,21 +14,24 @@ import type { GoalTask } from '../types/index.js';
 import { StateManager } from '../bot/state.js';
 import { logger } from '../utils/logger.js';
 
+/**
+ * 公共 helper：如果任务有 running session，abort 它。
+ */
+function abortTaskSession(ctx: GoalOrchestrator, task: GoalTask): void {
+  if (!task.channelId) return;
+  const guildId = ctx.getGuildId();
+  if (!guildId) return;
+  const lockKey = StateManager.channelLockKey(guildId, task.channelId);
+  ctx.deps.claudeClient.abort(lockKey);
+}
+
 export async function skipTask(ctx: GoalOrchestrator, goalId: string, taskId: string): Promise<boolean> {
   const state = await ctx.getState(goalId);
   if (!state) return false;
   const task = state.tasks.find(t => t.id === taskId);
   if (!task) return false;
-  if (task.status !== 'pending' && task.status !== 'blocked' && task.status !== 'failed' && task.status !== 'paused') return false;
 
-  // paused 任务可能有关联的进程，先清理
-  if (task.status === 'paused' && task.channelId) {
-    const guildId = ctx.getGuildId();
-    if (guildId) {
-      const lockKey = StateManager.channelLockKey(guildId, task.channelId);
-      ctx.deps.claudeClient.abort(lockKey);
-    }
-  }
+  if (task.status === 'running') abortTaskSession(ctx, task);
 
   task.status = 'skipped';
   await ctx.saveState(state);
@@ -39,7 +44,10 @@ export async function markTaskDone(ctx: GoalOrchestrator, goalId: string, taskId
   const state = await ctx.getState(goalId);
   if (!state) return false;
   const task = state.tasks.find(t => t.id === taskId);
-  if (!task || task.status !== 'blocked') return false;
+  if (!task) return false;
+
+  if (task.status === 'running') abortTaskSession(ctx, task);
+
   task.status = 'completed';
   task.completedAt = Date.now();
   await ctx.saveState(state);
@@ -59,10 +67,12 @@ export async function retryTask(ctx: GoalOrchestrator, goalId: string, taskId: s
   if (!state) return false;
   const task = state.tasks.find(t => t.id === taskId);
   if (!task) return false;
-  if (task.status !== 'failed' && task.status !== 'blocked_feedback' && task.status !== 'paused') return false;
 
   const guildId = ctx.getGuildId();
   if (!guildId) return false;
+
+  // 如果任务正在运行，先 abort
+  if (task.status === 'running') abortTaskSession(ctx, task);
 
   // 有 channel 上下文 → 先验证 channel 是否仍存在
   if (task.channelId) {
@@ -77,9 +87,6 @@ export async function retryTask(ctx: GoalOrchestrator, goalId: string, taskId: s
 
     if (channel) {
       // channel 存在 → 保留 branch/thread，在原 channel 中 resume
-      const lockKey = StateManager.channelLockKey(guildId, task.channelId);
-      ctx.deps.claudeClient.abort(lockKey);
-
       const savedError = task.error;
       task.status = 'running';
       task.error = undefined;
@@ -128,15 +135,8 @@ export async function resetAndStart(ctx: GoalOrchestrator, goalId: string, taskI
   if (!state) return false;
   const task = state.tasks.find(t => t.id === taskId);
   if (!task) return false;
-  if (task.status !== 'failed' && task.status !== 'blocked_feedback' && task.status !== 'paused') return false;
 
-  if (task.channelId) {
-    const guildId = ctx.getGuildId();
-    if (guildId) {
-      const lockKey = StateManager.channelLockKey(guildId, task.channelId);
-      ctx.deps.claudeClient.abort(lockKey);
-    }
-  }
+  if (task.status === 'running') abortTaskSession(ctx, task);
 
   task.status = 'pending';
   task.error = undefined;
@@ -166,55 +166,47 @@ export async function resetAndStart(ctx: GoalOrchestrator, goalId: string, taskI
 }
 
 /**
- * 从失败任务触发重规划
+ * Soft pause：标记任务为 paused，但不杀 session。
+ * 正在运行的 session 会继续直到完成，但 onTaskCompleted 的
+ * `if (task.status !== 'running') return` 守卫会阻止后续推进。
+ * Resume 时需重新启动 session（通过 retry/nudge）。
  */
-export async function replanFromTask(ctx: GoalOrchestrator, goalId: string, taskId: string): Promise<boolean> {
-  const state = await ctx.getState(goalId);
-  if (!state) return false;
-  const task = state.tasks.find(t => t.id === taskId);
-  if (!task || task.status !== 'failed') return false;
-
-  await ctx.notifyGoal(state,
-    `Triggering replan from task ${ctx.getTaskLabel(state, task.id)}...`,
-    'info',
-  );
-
-  // 跳过失败任务
-  task.status = 'skipped';
-  await ctx.saveState(state);
-
-  await ctx.triggerReplan(state, taskId, {
-    type: 'replan',
-    reason: `User requested replan after task ${task.id} failed: ${task.error ?? 'unknown error'}`,
-  });
-
-  const refreshed = await ctx.getState(goalId);
-  if (refreshed?.status === 'running') await ctx.reviewAndDispatch(refreshed, taskId);
-  return true;
-}
-
 export async function pauseTask(ctx: GoalOrchestrator, goalId: string, taskId: string): Promise<boolean> {
   const state = await ctx.getState(goalId);
   if (!state) return false;
   const task = state.tasks.find(t => t.id === taskId);
-  if (!task || task.status !== 'running') return false;
-
-  // 中止运行中的 Claude 进程（保留队列，但任务暂停后不需要队列）
-  if (task.channelId) {
-    const guildId = ctx.getGuildId();
-    if (guildId) {
-      const lockKey = StateManager.channelLockKey(guildId, task.channelId);
-      ctx.deps.claudeClient.abort(lockKey);
-    }
-  }
+  if (!task) return false;
 
   task.status = 'paused';
-  // 保留 branchName, threadId, dispatchedAt — 恢复时复用
+  // 保留 branchName, channelId, dispatchedAt — 恢复时复用
   await ctx.saveState(state);
   await ctx.notifyGoal(state,
     `Paused task: ${ctx.getTaskLabel(state, task.id)} - ${task.description}\nBranch/thread preserved for resume.`,
     'warning'
   );
+  return true;
+}
+
+/**
+ * Hard stop：杀 session + 标记 failed。
+ * 用于需要立即终止任务的场景。
+ */
+export async function stopTask(ctx: GoalOrchestrator, goalId: string, taskId: string): Promise<boolean> {
+  const state = await ctx.getState(goalId);
+  if (!state) return false;
+  const task = state.tasks.find(t => t.id === taskId);
+  if (!task) return false;
+
+  abortTaskSession(ctx, task);
+
+  task.status = 'failed';
+  task.error = 'Stopped by user';
+  await ctx.saveState(state);
+  await ctx.notifyGoal(state,
+    `Stopped task: ${ctx.getTaskLabel(state, task.id)} - ${task.description}`,
+    'error'
+  );
+  if (state.status === 'running') await ctx.reviewAndDispatch(state);
   return true;
 }
 
@@ -259,8 +251,7 @@ export async function nudgeTask(ctx: GoalOrchestrator, goalId: string, taskId: s
 
     // running 任务：先 abort 当前进程，再轻推，防止并发执行器竞争
     if (task.status === 'running') {
-      const lockKey = StateManager.channelLockKey(guildId, channelId);
-      ctx.deps.claudeClient.abort(lockKey);
+      abortTaskSession(ctx, task);
     }
 
     if (needsStatusChange) {

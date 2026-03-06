@@ -14,7 +14,7 @@ import { MAX_REVIEW_RETRIES } from './orchestrator-types.js';
 import { logger } from '../utils/logger.js';
 import { execGit } from './git-ops.js';
 import { cleanupSubtask } from './goal-branch.js';
-import { getPhaseNumber, isPhaseFullyMerged, getCurrentPhase, getProgressSummary } from './task-scheduler.js';
+import { getPhaseNumber, isPhaseFullyMerged, getProgressSummary } from './task-scheduler.js';
 import { cleanupTaskChannel } from './merge-handler.js';
 
 export function triggerTaskReview(ctx: GoalOrchestrator, state: GoalDriveState, task: GoalTask, guildId: string): void {
@@ -139,27 +139,27 @@ export async function handleTaskReviewResult(
       // 测试设计正确，但发现了实现 bug → 合并测试分支，触发修复 replan
       const issueTexts = normalizeIssues(result.issues);
       const bugDetails = issueTexts.join('\n- ') || result.summary || 'Tests reveal implementation bug';
-      logger.info(`[PhaseReview] Test task ${taskId} found bug, triggering replan: ${bugDetails}`);
+      logger.info(`[PhaseReview] Test task ${taskId} found bug, notifying tech lead: ${bugDetails}`);
       await ctx.notifyGoal(state,
-        `🐛 Test task ${ctx.getTaskLabel(state, taskId)} found bug — merging tests and replanning fix\n${bugDetails}`,
+        `🐛 Test task ${ctx.getTaskLabel(state, taskId)} found bug — merging tests, notifying tech lead\n${bugDetails}`,
         'warning',
       );
 
       // 先 merge 测试分支（测试是正确的）
       if (task.branchName) await ctx.mergeAndCleanup(state, task);
 
-      // 以测试失败详情触发 replan，让 tech lead 创建修复任务
+      // 通知 tech lead 创建修复任务
+      const guildIdForBug = ctx.getGuildId();
+      if (state.techLeadChannelId && guildIdForBug) {
+        triggerTechLeadConsultation(ctx, state, guildIdForBug,
+          `测试任务 ${ctx.getTaskLabel(state, taskId)} 发现 bug，请创建修复任务`,
+          bugDetails,
+        );
+      }
+
       const refreshed = await ctx.getState(goalId);
       if (refreshed && refreshed.status === 'running') {
-        await ctx.triggerReplan(refreshed, taskId, {
-          type: 'replan',
-          reason: `Test task ${ctx.getTaskLabel(state, taskId)} revealed implementation bug`,
-          details: bugDetails,
-        });
-        const afterReplan = await ctx.getState(goalId);
-        if (afterReplan && afterReplan.status === 'running') {
-          await ctx.reviewAndDispatch(afterReplan, taskId);
-        }
+        await ctx.reviewAndDispatch(refreshed, taskId);
       }
     } else {
       // fail → 打回 subtask 修复
@@ -454,24 +454,23 @@ export async function handleFailedTaskReviewResult(
       logger.warn(`[FailedTaskReview] retryTask returned false for ${taskId}`);
     }
   } else if (verdict === 'replan') {
-    logger.info(`[FailedTaskReview] Tech lead decided to replan from task ${taskId}: ${reason}`);
-    let replanState: GoalDriveState | null = null;
+    // Tech lead 已通过 MCP 工具直接修改任务图，这里只需 skip 失败任务并继续调度
+    logger.info(`[FailedTaskReview] Tech lead decided to skip failed task ${taskId} and adjust tasks: ${reason}`);
     await ctx.withStateLock(goalId, async () => {
       const state = await ctx.getState(goalId);
       if (!state) return;
       const task = state.tasks.find(t => t.id === taskId);
       if (!task) return;
-      task.status = 'completed';
-      task.completedAt = Date.now();
+      task.status = 'skipped';
       await ctx.saveState(state);
-      replanState = state;
+      await ctx.notifyGoal(state,
+        `Tech lead skipped failed task ${ctx.getTaskLabel(state, taskId)} and adjusted plan.\n${reason ? `Reason: ${reason}` : ''}`,
+        'info',
+      );
     });
-    if (replanState) {
-      await ctx.triggerReplan(replanState, taskId, { type: 'replan', reason: reason ?? 'Tech lead requested replan' });
-      const refreshed = await ctx.getState(goalId);
-      if (refreshed && refreshed.status === 'running') {
-        await ctx.reviewAndDispatch(refreshed, taskId);
-      }
+    const refreshed = await ctx.getState(goalId);
+    if (refreshed && refreshed.status === 'running') {
+      await ctx.reviewAndDispatch(refreshed, taskId);
     }
   } else if (verdict === 'escalate_user') {
     // tech lead 确认需要人工干预
@@ -558,22 +557,19 @@ export async function handlePhaseResult(
     if (!state || state.status !== 'running') return;
 
     if (result.decision === 'replan') {
-      logger.info(`[PhaseReview] Phase evaluation recommends replan: ${result.summary}`);
+      logger.info(`[PhaseReview] Phase evaluation recommends task adjustment: ${result.summary}`);
       await ctx.notifyGoal(state,
-        `**Phase evaluation → replan:** ${result.summary}`,
+        `**Phase evaluation → needs adjustment:** ${result.summary}`,
         'warning',
       );
 
-      // 使用 current phase 最后一个任务触发 replan
-      const currentPhase = getCurrentPhase(state);
-      const phaseTasks = state.tasks.filter(t => getPhaseNumber(t) === currentPhase);
-      const triggerTask = phaseTasks[phaseTasks.length - 1];
-      if (triggerTask) {
-        await ctx.triggerReplan(state, triggerTask.id, {
-          type: 'replan',
-          reason: result.summary || 'Phase evaluation recommended replan',
-          details: result.issues?.join('; '),
-        });
+      // 通知 tech lead 修改任务
+      const guildId = ctx.getGuildId();
+      if (state.techLeadChannelId && guildId) {
+        triggerTechLeadConsultation(ctx, state, guildId,
+          `Phase 评估建议修改任务计划`,
+          `${result.summary || 'Phase evaluation recommended task adjustment'}${result.issues ? '\nIssues: ' + result.issues.join('; ') : ''}`,
+        );
       }
 
       const refreshed = await ctx.getState(goalId);
