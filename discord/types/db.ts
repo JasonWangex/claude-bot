@@ -85,7 +85,7 @@ export interface GoalRow {
   drive_created_at: number | null;
   /** Drive 最近更新时间 (Unix ms) */
   drive_updated_at: number | null;
-  /** JSON: pendingReplan + pendingRollback（重启恢复用） */
+  /** JSON: pendingRollback + techLeadChannelId（重启恢复用） */
   drive_pending_json: string | null;
 }
 

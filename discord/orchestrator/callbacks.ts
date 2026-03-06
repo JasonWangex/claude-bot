@@ -9,7 +9,8 @@
 import type { ChatUsageResult } from '../types/index.js';
 import type { GoalOrchestrator } from './index.js';
 import { buildTaskFailedButtons } from './goal-buttons.js';
-import { triggerFailedTaskReview } from './review-handler.js';
+import { triggerFailedTaskReview, triggerTechLeadConsultation } from './review-handler.js';
+import { logger } from '../utils/logger.js';
 
 export async function onTaskCompleted(
   ctx: GoalOrchestrator,
@@ -43,7 +44,7 @@ export async function onTaskCompleted(
     if (feedback) {
       task.feedback = feedback;
 
-      // replan 类型的 feedback → 自动触发重规划 + 分级自治
+      // replan 类型的 feedback → 标记完成，merge，通知 tech lead
       if (feedback.type === 'replan') {
         task.status = 'completed';
         task.completedAt = Date.now();
@@ -55,13 +56,21 @@ export async function onTaskCompleted(
           'info'
         );
 
-        // 先 merge 分支，再 replan（replan 需要基于已合并的代码状态）
+        // 先 merge 分支
         if (task.branchName) await ctx.mergeAndCleanup(state, task);
 
-        // 触发重规划 + 分级自治
-        await ctx.triggerReplan(state, task.id, feedback);
+        // 通知 tech lead 评估是否需要修改后续任务
+        const guildId = ctx.getGuildId();
+        if (state.techLeadChannelId && guildId) {
+          triggerTechLeadConsultation(ctx, state, guildId,
+            `任务 ${ctx.getTaskLabel(state, task.id)} 提交了 replan feedback`,
+            `Reason: ${feedback.reason}${feedback.details ? `\nDetails: ${feedback.details}` : ''}`,
+          );
+        } else {
+          logger.warn(`[Orchestrator] Replan feedback from ${task.id} but no tech lead channel`);
+        }
 
-        // replan 后刷新 state 再继续调度
+        // 继续调度
         const refreshed = await ctx.getState(goalId);
         if (refreshed && refreshed.status === 'running') await ctx.reviewAndDispatch(refreshed, taskId);
         return;

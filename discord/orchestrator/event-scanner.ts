@@ -12,7 +12,6 @@ import type { GoalDriveState, GoalTask } from '../types/index.js';
 import type { GoalOrchestrator } from './index.js';
 import { logger } from '../utils/logger.js';
 import { StateManager } from '../bot/state.js';
-import { handleReplanByImpact, type ReplanResult } from './replanner.js';
 import type { MergeConflictPayload } from './orchestrator-types.js';
 import { CHECK_IN_COOLDOWN, MAX_CHECK_INS } from './orchestrator-types.js';
 
@@ -202,28 +201,6 @@ export async function processPendingEvents(ctx: GoalOrchestrator): Promise<void>
             verdict: typeof fp.verdict === 'string' ? fp.verdict : undefined,
             reason: typeof fp.reason === 'string' ? fp.reason : undefined,
           });
-          break;
-        }
-
-        case 'replan.result': {
-          // Replan 结果兜底（正常由 triggerReplan 内联读取处理）
-          // 只对 completed 状态的任务处理（replan 仅由 completed 任务触发）
-          if (task.status !== 'completed') {
-            ctx.deps.taskEventRepo.markProcessed(ev.id);
-            continue;
-          }
-          logger.info(`[Scanner] Processing replan.result for task ${ev.taskId}`);
-          const replanResult = ev.payload as ReplanResult;
-          if (replanResult && Array.isArray(replanResult.changes) && typeof replanResult.reasoning === 'string') {
-            await handleReplanByImpact(state, replanResult, {
-              taskRepo: ctx.deps.taskRepo,
-              goalMetaRepo: ctx.deps.goalMetaRepo,
-              checkpointRepo: ctx.deps.checkpointRepo,
-              notify: (threadId, message, type, options) => ctx.notify(threadId, message, type, options),
-            });
-          } else {
-            logger.warn(`[Scanner] Skipping invalid replan.result payload for task ${ev.taskId}`);
-          }
           break;
         }
 

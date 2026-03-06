@@ -131,6 +131,7 @@ export async function startDrive(ctx: GoalOrchestrator, params: StartDriveParams
       GOAL_NAME: goalName,
       GOAL_BRANCH: goalBranch,
       GOAL_ID: goalId,
+      GOAL_SEQ: String(state.goalSeq),
     });
     try {
       await ctx.deps.messageHandler.handleBackgroundChat(guildId, techLeadChannelId, initPrompt, 'drive');

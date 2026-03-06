@@ -38,8 +38,8 @@ import {
   markTaskDone as _markTaskDone,
   retryTask as _retryTask,
   resetAndStart as _resetAndStart,
-  replanFromTask as _replanFromTask,
   pauseTask as _pauseTask,
+  stopTask as _stopTask,
   nudgeTask as _nudgeTask,
   buildNudgePrompt as _buildNudgePrompt,
 } from './task-control.js';
@@ -53,13 +53,6 @@ import {
   onTaskCompleted as _onTaskCompleted,
   onTaskFailed as _onTaskFailed,
 } from './callbacks.js';
-import {
-  triggerReplan as _triggerReplan,
-  approveReplan as _approveReplan,
-  getPendingReplanChangesJson as _getPendingReplanChangesJson,
-  approveReplanWithModifications as _approveReplanWithModifications,
-  rejectReplan as _rejectReplan,
-} from './replan-handler.js';
 import {
   rollback as _rollback,
   confirmRollback as _confirmRollback,
@@ -547,8 +540,8 @@ export class GoalOrchestrator {
   async markTaskDone(goalId: string, taskId: string) { return _markTaskDone(this, goalId, taskId); }
   async retryTask(goalId: string, taskId: string) { return _retryTask(this, goalId, taskId); }
   async resetAndStart(goalId: string, taskId: string) { return _resetAndStart(this, goalId, taskId); }
-  async replanFromTask(goalId: string, taskId: string) { return _replanFromTask(this, goalId, taskId); }
   async pauseTask(goalId: string, taskId: string) { return _pauseTask(this, goalId, taskId); }
+  async stopTask(goalId: string, taskId: string) { return _stopTask(this, goalId, taskId); }
   async nudgeTask(goalId: string, taskId: string) { return _nudgeTask(this, goalId, taskId); }
   buildNudgePrompt(task: GoalTask, label: string) { return _buildNudgePrompt(task, label); }
 
@@ -563,13 +556,6 @@ export class GoalOrchestrator {
   // -- Callbacks --
   async onTaskCompleted(goalId: string, taskId: string, usage?: ChatUsageResult) { return _onTaskCompleted(this, goalId, taskId, usage); }
   async onTaskFailed(goalId: string, taskId: string, error: string, usage?: ChatUsageResult) { return _onTaskFailed(this, goalId, taskId, error, usage); }
-
-  // -- Replan --
-  async triggerReplan(state: GoalDriveState, triggerTaskId: string, feedback: GoalTaskFeedback) { return _triggerReplan(this, state, triggerTaskId, feedback); }
-  async approveReplan(goalId: string) { return _approveReplan(this, goalId); }
-  async getPendingReplanChangesJson(goalId: string) { return _getPendingReplanChangesJson(this, goalId); }
-  async approveReplanWithModifications(goalId: string, modifiedChangesJson: string) { return _approveReplanWithModifications(this, goalId, modifiedChangesJson); }
-  async rejectReplan(goalId: string) { return _rejectReplan(this, goalId); }
 
   // -- Rollback --
   async rollback(goalId: string, checkpointId: string) { return _rollback(this, goalId, checkpointId); }

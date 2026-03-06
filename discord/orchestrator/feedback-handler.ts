@@ -80,14 +80,12 @@ export function startFeedbackInvestigation(
           break;
 
         case 'replan': {
-          // 需要重新规划
+          // 调查结论需要修改任务 → 标记完成，通知 tech lead
           await ctx.notifyGoal(state,
-            `[GoalOrchestrator] ${taskId}: 调查结论 — 需要重新规划\n原因: ${conclusion.reason}`,
+            `[GoalOrchestrator] ${taskId}: 调查结论 — 需要修改任务\n原因: ${conclusion.reason}`,
             'info',
             { logOnly: true },
           );
-          // 最小化持锁范围：只做状态变更，triggerReplan（长耗时）在锁外执行
-          let replanState: GoalDriveState | null = null;
           await ctx.withStateLock(goalId, async () => {
             const freshState = await ctx.getState(goalId);
             if (!freshState) return;
@@ -96,18 +94,19 @@ export function startFeedbackInvestigation(
             freshTask.status = 'completed';
             freshTask.completedAt = Date.now();
             await ctx.saveState(freshState);
-            replanState = freshState;
           });
-          if (replanState) {
-            await ctx.triggerReplan(replanState, taskId, {
-              type: 'replan',
-              reason: conclusion.reason,
-              details: conclusion.details,
-            });
-            const refreshed = await ctx.getState(goalId);
-            if (refreshed && refreshed.status === 'running') {
-              await ctx.reviewAndDispatch(refreshed, taskId);
-            }
+
+          const guildId = ctx.getGuildId();
+          if (state.techLeadChannelId && guildId) {
+            triggerTechLeadConsultation(ctx, state, guildId,
+              `调查任务 ${taskId} 结论：需要修改后续任务`,
+              `Reason: ${conclusion.reason}${conclusion.details ? `\nDetails: ${conclusion.details}` : ''}`,
+            );
+          }
+
+          const refreshed = await ctx.getState(goalId);
+          if (refreshed && refreshed.status === 'running') {
+            await ctx.reviewAndDispatch(refreshed, taskId);
           }
           break;
         }

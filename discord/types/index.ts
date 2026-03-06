@@ -356,14 +356,6 @@ export type GoalPipelinePhase = PipelinePhase;
 /** @deprecated Use Task */
 export type GoalTask = Task;
 
-/** 待审批的 Replan 变更 */
-export interface PendingReplan {
-  changes: Array<Record<string, any>>;  // ReplanChange[] — 避免循环依赖用 Record
-  reasoning: string;
-  impactLevel: 'low' | 'medium' | 'high';
-  checkpointId: string;
-}
-
 /** 待用户确认的回滚操作 */
 export interface PendingRollback {
   checkpointId: string;
@@ -396,9 +388,6 @@ export interface GoalDriveState {
   maxConcurrent: number;
 
   tasks: Task[];
-
-  /** 待用户审批的高影响 replan 变更（仅 impactLevel=high 时有值） */
-  pendingReplan?: PendingReplan;
 
   /** 待用户确认的回滚操作 */
   pendingRollback?: PendingRollback;

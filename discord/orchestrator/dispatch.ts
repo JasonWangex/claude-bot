@@ -51,26 +51,31 @@ export async function reviewAndDispatch(
   });
   if (pendingPlaceholders.length > 0) {
     const placeholderIds = pendingPlaceholders.map(t => t.id).join(', ');
-    logger.info(`[Orchestrator] Placeholder tasks ready: ${placeholderIds} — forcing replan`);
+    logger.info(`[Orchestrator] Placeholder tasks ready: ${placeholderIds} — skipping and notifying tech lead`);
+
+    // skip 所有占位任务
+    for (const ph of pendingPlaceholders) {
+      ph.status = 'skipped';
+    }
+    await ctx.saveState(state);
+
     await ctx.notifyGoal(state,
-      `**占位任务触发重规划:** ${placeholderIds}\n` +
-      `占位任务的依赖已满足，需要重新规划将其替换为具体任务。`,
-      'info',
+      `**占位任务需替换:** ${placeholderIds}\n` +
+      `占位任务的依赖已满足，已自动跳过。请通过 bot_goal_tasks 添加具体任务替换。`,
+      'warning',
     );
 
-    // 用第一个占位任务触发 replan
-    const trigger = pendingPlaceholders[0];
-    await ctx.triggerReplan(state, trigger.id, {
-      type: 'replan',
-      reason: `占位任务 ${placeholderIds} 的依赖已满足，需要将占位任务替换为具体可执行任务`,
-      details: `placeholder_ids: ${placeholderIds}`,
-    });
-
-    // replan 后刷新 state 再继续调度（replan 可能改变了任务图）
-    const refreshed = await ctx.getState(state.goalId);
-    if (refreshed && refreshed.status === 'running') {
-      await dispatchNext(ctx, refreshed);
+    // 通知 tech lead
+    const guildId = ctx.getGuildId();
+    if (state.techLeadChannelId && guildId) {
+      triggerTechLeadConsultation(ctx, state, guildId,
+        `占位任务 ${placeholderIds} 的依赖已满足，需要添加具体可执行任务替换`,
+        `使用 bot_goal_tasks(action="add") 添加新任务`,
+      );
     }
+
+    // 继续调度其他可用任务
+    await dispatchNext(ctx, state);
     return;
   }
 
@@ -85,23 +90,25 @@ export async function reviewAndDispatch(
       (!completedTask.feedback || completedTask.feedback.type !== 'replan')
     ) {
       logger.info(
-        `[Orchestrator] Research task ${completedTaskId} completed without replan feedback — triggering deep review`,
+        `[Orchestrator] Research task ${completedTaskId} completed without replan feedback — notifying tech lead`,
       );
       await ctx.notifyGoal(state,
-        `**调研任务深度审查:** ${completedTask.id} - ${completedTask.description}\n` +
-        `调研任务完成但未提交 replan feedback，自动触发深度审查。`,
+        `**调研任务完成:** ${completedTask.id} - ${completedTask.description}\n` +
+        `调研任务完成但未提交 replan feedback，已通知 tech lead 评估。`,
         'info',
       );
 
-      await ctx.triggerReplan(state, completedTask.id, {
-        type: 'replan',
-        reason: `调研任务 ${completedTask.id} 已完成，自动触发深度审查以评估调研结果对后续任务的影响`,
-      });
-
-      const refreshed = await ctx.getState(state.goalId);
-      if (refreshed && refreshed.status === 'running') {
-        await dispatchNext(ctx, refreshed);
+      // 通知 tech lead 评估调研结果
+      const guildId = ctx.getGuildId();
+      if (state.techLeadChannelId && guildId) {
+        triggerTechLeadConsultation(ctx, state, guildId,
+          `调研任务 ${completedTask.id} 已完成，请评估调研结果对后续任务的影响`,
+          `调研内容: ${completedTask.description}`,
+        );
       }
+
+      // 继续正常调度
+      await dispatchNext(ctx, state);
       return;
     }
   }
@@ -130,19 +137,26 @@ export async function reviewAndDispatch(
         break;
       }
 
-      case 'replan':
+      case 'replan': {
         // replan 类型正常应该在 onTaskCompleted 中已处理
-        // 这里作为兜底：如果意外到达此状态，触发 replan
+        // 这里作为兜底：标记完成，通知 tech lead
         logger.warn(`[Orchestrator] Unexpected replan feedback in blocked_feedback state: ${task.id}`);
         task.status = 'completed';
         task.completedAt = Date.now();
         await ctx.saveState(state);
-        await ctx.triggerReplan(state, task.id, fb);
-        const refreshed = await ctx.getState(state.goalId);
-        if (refreshed && refreshed.status === 'running') {
-          await dispatchNext(ctx, refreshed);
+
+        const guildIdForReplan = ctx.getGuildId();
+        if (state.techLeadChannelId && guildIdForReplan) {
+          triggerTechLeadConsultation(ctx, state, guildIdForReplan,
+            `任务 ${task.id} 提交了 replan feedback，请评估是否需要修改后续任务`,
+            `Reason: ${fb.reason}${fb.details ? `\nDetails: ${fb.details}` : ''}`,
+          );
         }
+
+        // 继续调度
+        await dispatchNext(ctx, state);
         return;
+      }
 
       default:
         // 未知 feedback 类型：记录日志，不阻塞调度

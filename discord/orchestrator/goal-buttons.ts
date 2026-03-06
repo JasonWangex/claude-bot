@@ -11,52 +11,11 @@ import {
   ActionRowBuilder,
   ButtonBuilder,
   ButtonStyle,
-  ModalBuilder,
-  TextInputBuilder,
-  TextInputStyle,
 } from 'discord.js';
 
 // ==================== 按钮 customId 前缀 ====================
 
 export const GOAL_BUTTON_PREFIX = 'goal:';
-
-// ==================== Replan 审批按钮（高影响） ====================
-
-/**
- * 生成高影响 replan 审批按钮组：批准 / 修改后批准 / 回滚
- */
-export function buildReplanApprovalButtons(goalId: string, checkpointId: string): ActionRowBuilder<ButtonBuilder>[] {
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`goal:approve_replan:${goalId}`)
-      .setLabel('✅ 批准执行')
-      .setStyle(ButtonStyle.Success),
-    new ButtonBuilder()
-      .setCustomId(`goal:approve_with_mods:${goalId}`)
-      .setLabel('✏️ 修改后批准')
-      .setStyle(ButtonStyle.Primary),
-    new ButtonBuilder()
-      .setCustomId(`goal:rollback:${goalId}:${checkpointId}`)
-      .setLabel('⏪ 回滚')
-      .setStyle(ButtonStyle.Secondary),
-  );
-  return [row];
-}
-
-// ==================== Replan 自动执行后的回滚按钮（低/中影响） ====================
-
-/**
- * 生成低/中影响自动变更后的回滚按钮
- */
-export function buildReplanRollbackButton(goalId: string, checkpointId: string): ActionRowBuilder<ButtonBuilder>[] {
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`goal:rollback:${goalId}:${checkpointId}`)
-      .setLabel('⏪ 回滚此变更')
-      .setStyle(ButtonStyle.Secondary),
-  );
-  return [row];
-}
 
 // ==================== 回滚确认按钮 ====================
 
@@ -90,45 +49,6 @@ export function buildTaskFailedButtons(goalId: string, taskId: string): ActionRo
       .setStyle(ButtonStyle.Primary),
   );
   return [row];
-}
-
-// ==================== 修改后批准 Modal ====================
-
-/** Modal customId 前缀（与 goal button 区分） */
-export const GOAL_MODAL_PREFIX = 'goal_modal:';
-
-/**
- * 生成「修改后批准」Modal
- *
- * 预填当前 pendingReplan 的变更 JSON，用户修改后提交。
- * Discord Modal TextInput 最大 4000 字符，超长时截断并提示用户精简。
- */
-export function buildApproveWithModsModal(
-  goalId: string,
-  currentChangesJson: string,
-): ModalBuilder {
-  // 确保不超 4000 字符
-  const truncated = currentChangesJson.length > 3900
-    ? currentChangesJson.slice(0, 3900) + '\n// ... 已截断，请精简后提交'
-    : currentChangesJson;
-
-  const modal = new ModalBuilder()
-    .setCustomId(`${GOAL_MODAL_PREFIX}approve_with_mods:${goalId}`)
-    .setTitle('修改计划变更');
-
-  const changesInput = new TextInputBuilder()
-    .setCustomId('changes_json')
-    .setLabel('编辑变更 JSON（修改后提交即执行）')
-    .setStyle(TextInputStyle.Paragraph)
-    .setValue(truncated)
-    .setRequired(true)
-    .setMaxLength(4000);
-
-  modal.addComponents(
-    new ActionRowBuilder<TextInputBuilder>().addComponents(changesInput),
-  );
-
-  return modal;
 }
 
 // ==================== 解析工具 ====================
