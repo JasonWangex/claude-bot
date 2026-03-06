@@ -8,9 +8,9 @@ description: >
 
 # Goal - Development Goal Management
 
-Adds **persistence** (SQLite) and **parallel execution** (Drive API) on top of plan mode's research → plan → review workflow.
+Adds **persistence** (SQLite) and **parallel execution** (Drive) on top of plan mode's research -> plan -> review workflow.
 
-State flow: `Pending → Collecting → Planned → Processing → Completed → Merged`. Processing can enter `Blocking`.
+State flow: `Pending -> Collecting -> Planned -> Processing -> Blocking -> Completed -> Merged`.
 
 ## Mode dispatch
 
@@ -20,7 +20,7 @@ Based on `$ARGUMENTS`:
 |-------|------|
 | Empty | List: query Goals by status + recent 5 Ideas, display grouped by status |
 | `drive all` | Batch drive: query Planned + Blocking Goals, start Drive for each, output summary |
-| Other | `bot_goals(action="list", q=input)` → 1 match → continue; multiple → list for selection; none → create |
+| Other | `bot_goals(action="list", q=input)` -> 1 match -> continue; multiple -> list for selection; none -> create |
 
 ---
 
@@ -32,21 +32,21 @@ Based on `$ARGUMENTS`:
 bot_goals(action="create", name="<<=10 chars>", project="<project name>", status="Collecting", type="探索型|交付型", completion="<completion criteria>")
 ```
 
-Project name: path contains `claude-bot` → claude-bot; contains `LearnFlashy` → LearnFlashy; otherwise → directory name.
+Project name: path contains `claude-bot` -> claude-bot; contains `LearnFlashy` -> LearnFlashy; otherwise -> directory name.
 
 ### 2. Planning (reuse plan mode workflow)
 
 Collaborate with user following plan mode's natural rhythm:
 
-**Research** — Understand requirements, clarify questions, explore codebase
-**Plan** — Decompose into subtasks by feature (rules in `references/planning-guide.md`), write into body (template in `references/body-template.md`)
-**Review** — Show plan summary, enter confirmation loop: user modifies → update → re-display; user confirms (start/ok/lgtm) → next step
+**Research** -- Understand requirements, clarify questions, explore codebase
+**Plan** -- Decompose into subtasks by feature (rules in `references/planning-guide.md`), write into body (template in `references/body-template.md`)
+**Review** -- Show plan summary, enter confirmation loop: user modifies -> update -> re-display; user confirms (start/ok/lgtm) -> next step
 
 Difference from standard plan mode: plan is written to Goal body (`bot_goals(action="update")`) instead of local markdown files, enabling cross-session persistence.
 
 ### 3. Launch
 
-`bot_goals(action="update", goal_id=..., status="Planned")` → Drive launch (see below)
+`bot_goals(action="update", goal_id=..., status="Planned")` -> Drive launch (see below)
 
 ---
 
@@ -58,32 +58,32 @@ Difference from standard plan mode: plan is written to Goal body (`bot_goals(act
 |--------|----------|
 | Collecting | Continue plan mode planning workflow |
 | Planned (all tasks pending or empty) | Show plan, launch Drive after confirmation |
-| Planned/Processing/Blocking (has non-pending tasks) | Has incomplete tasks → launch Drive |
+| Planned/Processing/Blocking (has non-pending tasks) | Show status summary, launch Drive for remaining tasks |
 | Completed | Show summary, prompt merge |
 | Merged | Show archive |
 
 **User commands** (must `bot_goals(action="get")` for latest version before modifying body):
 
-- Complete/add subtasks → update body + progress/next
-- Record decisions → append to decision log (with date)
-- Direction change → archive abandoned tasks + record decision
-- Status change → `bot_goals(action="update", goal_id=..., status=...)`
+- Complete/add subtasks -> update body + progress/next
+- Record decisions -> append to decision log (with date)
+- Direction change -> archive abandoned tasks + record decision
+- Status change -> `bot_goals(action="update", goal_id=..., status=...)`
+- Task control -> `bot_goal_tasks(action="skip|done|retry|reset|pause|nudge", goal_id=..., task_id=...)`
 
 ---
 
 ## Drive launch
 
-Drive is **skill-driven** — Claude reviews, confirms with user, initializes tasks in DB, then signals the Orchestrator via event.
+Skill's job is to **validate, initialize tasks in DB, and send the drive event**. Everything after that is handled by the Orchestrator automatically.
 
-### Step 1 — Review & discuss
+### Step 1 -- Review & discuss
 Read the goal body. Summarize the task list by phase (e.g. "Phase 1: 3 tasks in parallel, Phase 2: 2 tasks sequentially"). Ask the user if anything needs adjusting before proceeding. **Wait for explicit confirmation** (ok / lgtm / yes).
 
-### Step 2 — Pre-flight checks (after user confirms)
+### Step 2 -- Pre-flight checks (after user confirms)
 From `bot_goals(action="get")` verify:
-- `drive_status` is `null` → new launch; `paused` → will auto-resume; `running` → report and stop
-- Each pending task has a valid `id` in `g<seq>t<N>` format, a `type`, and a `p:N` phase annotation — if any task is missing `p:N`, infer phase from dependencies and update the body (`bot_goals(action="update", body=...)`) before proceeding
+- Each pending task has a valid `id` in `g<seq>t<N>` format, a `type`, and a `p:N` phase annotation -- if any task is missing `p:N`, infer phase from dependencies and update the body (`bot_goals(action="update", body=...)`) before proceeding
 
-### Step 3 — Initialize tasks in DB
+### Step 3 -- Initialize tasks in DB
 Write the complete pending task list (with phase) to the database:
 ```
 bot_goal_tasks(action="set", goal_id="<id>", tasks='[
@@ -94,10 +94,10 @@ bot_goal_tasks(action="set", goal_id="<id>", tasks='[
 ```
 Only include tasks that are **not yet completed** (unchecked `- [ ]` in body).
 
-### Step 4 — Get thread ID
-`bot_tasks(action="list")` → match task's `cwd` with current cwd → get `channel_id`
+### Step 4 -- Get channel ID
+`bot_channels(action="list")` -> match current cwd -> get `channel_id`
 
-### Step 5 — Send drive event
+### Step 5 -- Send drive event
 ```
 bot_goal_event(goal_id="<id>", event_type="goal.drive", payload={
   "goalName": "<name>",
@@ -106,7 +106,6 @@ bot_goal_event(goal_id="<id>", event_type="goal.drive", payload={
   "maxConcurrent": 3
 })
 ```
-Orchestrator picks up the event within 5 seconds and starts Drive automatically.
 
-### Step 6 — Update status
+### Step 6 -- Update status
 `bot_goals(action="update", goal_id=..., status="Processing")`
