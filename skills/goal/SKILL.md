@@ -68,7 +68,8 @@ Difference from standard plan mode: plan is written to Goal body (`bot_goals(act
 - Record decisions -> append to decision log (with date)
 - Direction change -> archive abandoned tasks + record decision
 - Status change -> `bot_goals(action="update", goal_id=..., status=...)`
-- Task control -> `bot_goal_tasks(action="skip|done|retry|reset|pause|nudge", goal_id=..., task_id=...)`
+- Task control -> `bot_goal_tasks(action="skip|done|retry|reset|pause|stop|nudge", goal_id=..., task_id=...)`
+- Task CRUD -> `bot_goal_tasks(action="add|update|remove", goal_id=..., task_id=..., description=..., type=..., phase=..., complexity=...)`
 
 ---
 
