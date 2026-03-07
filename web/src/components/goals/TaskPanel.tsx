@@ -7,6 +7,7 @@ import {
   PauseOutlined,
   CaretRightOutlined,
 } from '@ant-design/icons';
+import { Link } from 'react-router';
 import { TaskStatusBadge } from './StatusBadge';
 import { skipTask, retryTask, markTaskDone, pauseGoalTask, resumeGoalTask } from '@/lib/hooks/use-goals';
 import type { GoalTask } from '@/lib/types';
@@ -16,10 +17,11 @@ const { Text } = Typography;
 interface TaskPanelProps {
   goalId: string;
   tasks: GoalTask[];
+  phaseMilestones?: Record<string, string>;
   onAction?: () => void;
 }
 
-export function TaskPanel({ goalId, tasks, onAction }: TaskPanelProps) {
+export function TaskPanel({ goalId, tasks, phaseMilestones, onAction }: TaskPanelProps) {
   const [acting, setActing] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -54,9 +56,16 @@ export function TaskPanel({ goalId, tasks, onAction }: TaskPanelProps) {
 
         {sortedPhases.map(([phase, phaseTasks]) => (
           <div key={phase}>
-            <Text type="secondary" strong style={{ fontSize: 12, marginBottom: 8, display: 'block' }}>
-              Phase {phase}
-            </Text>
+            <div style={{ marginBottom: 8 }}>
+              <Text type="secondary" strong style={{ fontSize: 12 }}>
+                Phase {phase}
+              </Text>
+              {phaseMilestones?.[String(phase)] && (
+                <Text type="secondary" style={{ fontSize: 12, marginLeft: 8 }}>
+                  — {phaseMilestones[String(phase)]}
+                </Text>
+              )}
+            </div>
             <Space direction="vertical" style={{ width: '100%' }} size="small">
               {phaseTasks.map(task => (
                 <div
@@ -73,10 +82,24 @@ export function TaskPanel({ goalId, tasks, onAction }: TaskPanelProps) {
                 >
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <Space size={4} style={{ marginBottom: 4 }}>
-                      <Text style={{ fontSize: 10, fontFamily: 'monospace' }} type="secondary">{task.id}</Text>
+                      {task.channelId ? (
+                        <Link to={`/channels/${task.channelId}`}>
+                          <Text style={{ fontSize: 10, fontFamily: 'monospace' }} type="secondary">{task.id}</Text>
+                        </Link>
+                      ) : (
+                        <Text style={{ fontSize: 10, fontFamily: 'monospace' }} type="secondary">{task.id}</Text>
+                      )}
                       <TaskStatusBadge status={task.status} />
                     </Space>
-                    <div style={{ fontSize: 14 }}>{task.description}</div>
+                    <div style={{ fontSize: 14 }}>
+                      {task.channelId ? (
+                        <Link to={`/channels/${task.channelId}`} style={{ color: 'inherit' }}>
+                          {task.description}
+                        </Link>
+                      ) : (
+                        task.description
+                      )}
+                    </div>
                     {task.error && <Text type="danger" style={{ fontSize: 12 }}>{task.error}</Text>}
                   </div>
                   <Space size={4}>

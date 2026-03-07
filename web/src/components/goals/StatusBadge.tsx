@@ -1,5 +1,5 @@
 import { Tag } from 'antd';
-import type { GoalStatus, GoalTaskStatus, GoalDriveStatus } from '@/lib/types';
+import type { GoalStatus, GoalTaskStatus } from '@/lib/types';
 
 const goalStatusColors: Record<GoalStatus, string> = {
   'Pending': 'default',
@@ -7,8 +7,10 @@ const goalStatusColors: Record<GoalStatus, string> = {
   'Planned': 'blue',
   'Processing': 'success',
   'Blocking': 'warning',
+  'Paused': 'warning',
   'Completed': 'success',
   'Merged': 'default',
+  'Failed': 'error',
 };
 
 export function GoalStatusBadge({ status }: { status: GoalStatus }) {
@@ -45,13 +47,3 @@ export function TaskStatusBadge({ status }: { status: GoalTaskStatus }) {
   return <Tag color={taskStatusColors[status]}>{taskStatusLabels[status]}</Tag>;
 }
 
-const driveStatusColors: Record<GoalDriveStatus, string> = {
-  'running': 'processing',
-  'paused': 'warning',
-  'completed': 'success',
-  'failed': 'error',
-};
-
-export function DriveStatusBadge({ status }: { status: GoalDriveStatus }) {
-  return <Tag color={driveStatusColors[status]}>{status}</Tag>;
-}

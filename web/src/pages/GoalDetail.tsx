@@ -26,8 +26,10 @@ const goalStatusOptions: { value: GoalStatus; label: string }[] = [
   { value: 'Planned', label: 'Planned' },
   { value: 'Processing', label: 'Processing' },
   { value: 'Blocking', label: 'Blocking' },
+  { value: 'Paused', label: 'Paused' },
   { value: 'Completed', label: 'Completed' },
   { value: 'Merged', label: 'Merged' },
+  { value: 'Failed', label: 'Failed' },
 ];
 
 const goalTypeOptions: { value: GoalType; label: string }[] = [
@@ -41,8 +43,6 @@ interface GoalEditFormValues {
   type?: GoalType;
   project?: string;
   completion?: string;
-  next?: string;
-  blocked_by?: string;
   body?: string;
 }
 
@@ -72,8 +72,6 @@ export default function GoalDetail() {
       type: goal.type ?? undefined,
       project: goal.project ?? '',
       completion: goal.completion ?? '',
-      next: goal.next ?? '',
-      blocked_by: goal.blocked_by ?? '',
       body: goal.body ?? '',
     });
     setEditOpen(true);
@@ -90,8 +88,6 @@ export default function GoalDetail() {
         type: values.type,
         project: values.project || undefined,
         completion: values.completion || undefined,
-        next: values.next || undefined,
-        blocked_by: values.blocked_by || undefined,
         body: values.body || undefined,
       });
       message.success('Goal 更新成功');
@@ -151,7 +147,7 @@ export default function GoalDetail() {
     {
       key: 'tasks',
       label: '任务列表',
-      children: <TaskPanel goalId={goalId} tasks={tasks} onAction={() => mutateDrive()} />,
+      children: <TaskPanel goalId={goalId} tasks={tasks} phaseMilestones={drive?.phaseMilestones} onAction={() => mutateDrive()} />,
     },
     {
       key: 'todos',
@@ -193,12 +189,6 @@ export default function GoalDetail() {
       <Space size="small">
         {goal.type && <Tag>{goal.type}</Tag>}
         {goal.project && <Tag color={getProjectColor(goal.project)}>{goal.project}</Tag>}
-        {goal.progress && (() => {
-          const p = goal.progress;
-          const isDone = goal.status === 'Completed' || goal.status === 'Merged';
-          const text = isDone ? `${p.total}/${p.total} 完成` : `${p.completed}/${p.total} 完成`;
-          return <Text type="secondary">{text}</Text>;
-        })()}
       </Space>
 
       {driveError && (
@@ -251,19 +241,6 @@ export default function GoalDetail() {
           <Form.Item name="completion" label="完成标准">
             <Input />
           </Form.Item>
-          {/* progress 由调度器自动计算，不可手动编辑 */}
-          <Row gutter={16}>
-            <Col span={12}>
-              <Form.Item name="next" label="下一步">
-                <Input />
-              </Form.Item>
-            </Col>
-            <Col span={12}>
-              <Form.Item name="blocked_by" label="卡点">
-                <Input />
-              </Form.Item>
-            </Col>
-          </Row>
           <Form.Item name="body" label="详情">
             <TextArea rows={6} placeholder="Markdown 格式" />
           </Form.Item>

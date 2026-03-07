@@ -19,8 +19,10 @@ const statusOptions = [
   { value: 'Planned', label: 'Planned' },
   { value: 'Processing', label: 'Processing' },
   { value: 'Blocking', label: 'Blocking' },
+  { value: 'Paused', label: 'Paused' },
   { value: 'Completed', label: 'Completed' },
   { value: 'Merged', label: 'Merged' },
+  { value: 'Failed', label: 'Failed' },
 ];
 
 const goalStatusOptions: { value: GoalStatus; label: string }[] = [
@@ -29,8 +31,10 @@ const goalStatusOptions: { value: GoalStatus; label: string }[] = [
   { value: 'Planned', label: 'Planned' },
   { value: 'Processing', label: 'Processing' },
   { value: 'Blocking', label: 'Blocking' },
+  { value: 'Paused', label: 'Paused' },
   { value: 'Completed', label: 'Completed' },
   { value: 'Merged', label: 'Merged' },
+  { value: 'Failed', label: 'Failed' },
 ];
 
 const goalTypeOptions: { value: GoalType; label: string }[] = [

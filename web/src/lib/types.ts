@@ -1,26 +1,23 @@
 // Goal 元数据
-export type GoalStatus = 'Pending' | 'Collecting' | 'Planned' | 'Processing' | 'Blocking' | 'Completed' | 'Merged';
+export type GoalStatus = 'Pending' | 'Collecting' | 'Planned' | 'Processing' | 'Blocking' | 'Completed' | 'Merged' | 'Paused' | 'Failed';
 export type GoalType = '探索型' | '交付型';
 
 export interface Goal {
   id: string;
+  seq: number | null;
   name: string;
   status: GoalStatus;
   type: GoalType | null;
   project: string | null;
   date: string | null;
   completion: string | null;
-  progress: { completed: number; total: number; running: number; failed: number } | null;
-  next: string | null;
-  blocked_by: string | null;
   body: string | null;
-  drive_status: GoalDriveStatus | null;
 }
 
 // Goal Drive
 export type GoalDriveStatus = 'running' | 'paused' | 'completed' | 'failed';
 export type GoalTaskStatus = 'pending' | 'dispatched' | 'running' | 'completed' | 'failed' | 'blocked' | 'blocked_feedback' | 'paused' | 'cancelled' | 'skipped';
-export type GoalTaskType = '代码' | '手动' | '调研' | '占位';
+export type GoalTaskType = '代码' | '手动' | '调研' | '占位' | '测试';
 
 export interface GoalTaskFeedback {
   type: string;
@@ -45,40 +42,20 @@ export interface GoalTask {
   pipelinePhase?: string;
 }
 
-export interface PendingReplan {
-  changes: Array<Record<string, unknown>>;
-  reasoning: string;
-  impactLevel: 'low' | 'medium' | 'high';
-  checkpointId: string;
-}
-
-export interface PendingRollback {
-  checkpointId: string;
-  pausedTaskIds: string[];
-  costSummary: string;
-  affectedTasks: Array<{
-    id: string;
-    description: string;
-    previousStatus: GoalTaskStatus;
-    runtime?: number;
-    diffStat?: string;
-  }>;
-  createdAt: number;
-}
-
 export interface GoalDriveState {
   goalId: string;
+  goalSeq: number;
   goalName: string;
-  goalBranch: string;
-  goalChannelId: string;
-  baseCwd: string;
+  branch: string;
+  channelId: string;
+  techLeadChannelId?: string;
+  phaseMilestones?: Record<string, string>;
+  cwd: string;
   status: GoalDriveStatus;
   createdAt: number;
   updatedAt: number;
   maxConcurrent: number;
   tasks: GoalTask[];
-  pendingReplan?: PendingReplan;
-  pendingRollback?: PendingRollback;
 }
 
 // Channel

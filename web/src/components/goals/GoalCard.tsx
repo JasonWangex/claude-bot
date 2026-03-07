@@ -1,4 +1,4 @@
-import { Card, Progress, Typography, Tag, Space } from 'antd';
+import { Card, Typography, Space } from 'antd';
 import { Link } from 'react-router';
 import { GoalStatusBadge } from './StatusBadge';
 import type { Goal } from '@/lib/types';
@@ -6,10 +6,6 @@ import type { Goal } from '@/lib/types';
 const { Text } = Typography;
 
 export function GoalCard({ goal }: { goal: Goal }) {
-  const isDone = goal.status === 'Completed' || goal.status === 'Merged';
-  const prog = goal.progress;
-  const percentage = isDone ? 100 : (prog && prog.total > 0 ? Math.round((prog.completed / prog.total) * 100) : 0);
-
   return (
     <Link to={`/goals/${goal.id}`}>
       <Card hoverable size="small">
@@ -23,27 +19,6 @@ export function GoalCard({ goal }: { goal: Goal }) {
           {goal.project && <><span>·</span><span>{goal.project}</span></>}
           {goal.date && <><span>·</span><span>{goal.date}</span></>}
         </Space>
-
-        {(isDone || prog) && (
-          <div style={{ marginTop: 8 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 12, color: '#999' }}>
-              <span>{isDone && prog ? `${prog.total}/${prog.total} 完成` : prog ? `${prog.completed}/${prog.total} 完成` : ''}</span>
-              <span>{percentage}%</span>
-            </div>
-            <Progress percent={percentage} showInfo={false} size="small" status={isDone ? 'success' : 'active'} />
-          </div>
-        )}
-
-        {!isDone && goal.next && (
-          <Text type="secondary" style={{ fontSize: 12, display: 'block', marginTop: 4 }} ellipsis>
-            下一步: {goal.next}
-          </Text>
-        )}
-        {!isDone && goal.blocked_by && (
-          <Text type="danger" style={{ fontSize: 12, display: 'block', marginTop: 4 }} ellipsis>
-            卡点: {goal.blocked_by}
-          </Text>
-        )}
       </Card>
     </Link>
   );

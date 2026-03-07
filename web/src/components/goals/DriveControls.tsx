@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import { Button, Space, Typography } from 'antd';
-import { PauseOutlined, CaretRightOutlined, WarningOutlined } from '@ant-design/icons';
-import { DriveStatusBadge } from './StatusBadge';
+import { PauseOutlined, CaretRightOutlined } from '@ant-design/icons';
 import { pauseDrive, resumeDrive } from '@/lib/hooks/use-goals';
 import type { GoalDriveStatus } from '@/lib/types';
 
@@ -45,7 +44,6 @@ export function DriveControls({ goalId, status, onAction }: DriveControlsProps) 
 
   return (
     <Space>
-      <DriveStatusBadge status={status} />
       {error && <Text type="danger" style={{ fontSize: 12 }}>{error}</Text>}
       {status === 'running' && (
         <Button size="small" icon={<PauseOutlined />} onClick={handlePause} loading={loading}>
@@ -56,11 +54,6 @@ export function DriveControls({ goalId, status, onAction }: DriveControlsProps) 
         <Button size="small" icon={<CaretRightOutlined />} onClick={handleResume} loading={loading}>
           恢复
         </Button>
-      )}
-      {status === 'failed' && (
-        <Text type="danger" style={{ fontSize: 14 }}>
-          <WarningOutlined /> Drive 失败
-        </Text>
       )}
     </Space>
   );
