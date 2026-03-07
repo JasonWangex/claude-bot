@@ -11,7 +11,7 @@ import type { MessageHandler } from '../bot/handlers.js';
 import type { MessageQueue } from '../bot/message-queue.js';
 import type { Client } from 'discord.js';
 import type { DiscordBotConfig } from '../types/index.js';
-import type { IGoalRepo, IGoalMetaRepo, ITaskRepo, IGoalTodoRepo, IChannelRepo } from '../types/repository.js';
+import type { IGoalRepo, ITaskRepo, IGoalTodoRepo, IChannelRepo } from '../types/repository.js';
 import type { PromptConfigService } from '../services/prompt-config-service.js';
 import type { TaskEventRepo } from '../db/repo/task-event-repo.js';
 import type { GoalTimelineRepo } from '../db/repo/goal-timeline-repo.js';
@@ -25,7 +25,6 @@ export interface OrchestratorDeps {
   mq: MessageQueue;
   config: DiscordBotConfig;
   goalRepo: IGoalRepo;
-  goalMetaRepo: IGoalMetaRepo;
   taskRepo: ITaskRepo;
   goalTodoRepo: IGoalTodoRepo;
   channelRepo: IChannelRepo;

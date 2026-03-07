@@ -23,6 +23,8 @@ export class TaskRepo implements ITaskRepo {
     deleteAllByGoal: Database.Statement;
     findByStatus: Database.Statement;
     findByChannelId: Database.Statement;
+    patchCheckin: Database.Statement;
+    patchNudge: Database.Statement;
   };
 
   constructor(db: Database.Database) {
@@ -47,14 +49,16 @@ export class TaskRepo implements ITaskRepo {
           error, merged, notified_blocked, feedback_json,
           complexity, pipeline_phase, audit_retries,
           tokens_in, tokens_out, cache_read_in, cache_write_in, cost_usd, duration_ms,
-          audit_session_key
+          audit_session_key,
+          checkin_count, last_checkin_at, nudge_count, last_nudge_at
         ) VALUES (
           @id, @goal_id, @description, @type, @phase, @status,
           @branch_name, @channel_id, @dispatched_at, @completed_at,
           @error, @merged, @notified_blocked, @feedback_json,
           @complexity, @pipeline_phase, @audit_retries,
           @tokens_in, @tokens_out, @cache_read_in, @cache_write_in, @cost_usd, @duration_ms,
-          @audit_session_key
+          @audit_session_key,
+          @checkin_count, @last_checkin_at, @nudge_count, @last_nudge_at
         )
         ON CONFLICT(id) DO UPDATE SET
           goal_id = @goal_id,
@@ -79,7 +83,11 @@ export class TaskRepo implements ITaskRepo {
           cache_write_in = @cache_write_in,
           cost_usd = @cost_usd,
           duration_ms = @duration_ms,
-          audit_session_key = @audit_session_key
+          audit_session_key = @audit_session_key,
+          checkin_count = @checkin_count,
+          last_checkin_at = @last_checkin_at,
+          nudge_count = @nudge_count,
+          last_nudge_at = @last_nudge_at
       `),
 
       deleteTask: this.db.prepare(
@@ -96,6 +104,14 @@ export class TaskRepo implements ITaskRepo {
 
       findByChannelId: this.db.prepare(
         `SELECT * FROM tasks WHERE channel_id = ?`,
+      ),
+
+      patchCheckin: this.db.prepare(
+        `UPDATE tasks SET checkin_count = ?, last_checkin_at = ? WHERE id = ?`,
+      ),
+
+      patchNudge: this.db.prepare(
+        `UPDATE tasks SET nudge_count = ?, last_nudge_at = ? WHERE id = ?`,
       ),
     };
   }
@@ -177,6 +193,16 @@ export class TaskRepo implements ITaskRepo {
       duration_ms: row.duration_ms,
     };
   }
+
+  /** 更新 check-in 计数和时间戳（直接 SQL，不走全量 upsert） */
+  patchCheckin(taskId: string, count: number, at: number | null): void {
+    this.stmts.patchCheckin.run(count, at, taskId);
+  }
+
+  /** 更新 tech lead 轻推计数和时间戳（直接 SQL，不走全量 upsert） */
+  patchNudge(taskId: string, count: number, at: number | null): void {
+    this.stmts.patchNudge.run(count, at, taskId);
+  }
 }
 
 // ==================== 转换函数 ====================
@@ -208,6 +234,10 @@ function taskToRow(task: Task, goalId?: string | null): Record<string, unknown> 
     cost_usd: task.costUsd ?? null,
     duration_ms: task.durationMs ?? null,
     audit_session_key: task.auditSessionKey ?? null,
+    checkin_count: task.checkinCount ?? 0,
+    last_checkin_at: task.lastCheckinAt ?? null,
+    nudge_count: task.nudgeCount ?? 0,
+    last_nudge_at: task.lastNudgeAt ?? null,
   };
 }
 
@@ -237,6 +267,10 @@ function rowToTask(row: TaskRow): Task {
     costUsd: row.cost_usd ?? undefined,
     durationMs: row.duration_ms ?? undefined,
     auditSessionKey: row.audit_session_key ?? undefined,
+    checkinCount: row.checkin_count ?? 0,
+    lastCheckinAt: row.last_checkin_at ?? null,
+    nudgeCount: row.nudge_count ?? 0,
+    lastNudgeAt: row.last_nudge_at ?? null,
   };
 }
 

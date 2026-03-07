@@ -8,7 +8,6 @@
 import type {
   GuildState,
   GoalDriveState,
-  GoalDriveStatus,
   Task,
   TaskStatus,
   GoalTask,
@@ -34,12 +33,8 @@ export interface Goal {
   project: string | null;
   date: string | null;           // ISO-8601 日期 (yyyy-MM-dd)
   completion: string | null;     // 完成标准
-  progress: string | null;       // "X/N 子任务完成"
-  next: string | null;           // 下一步
-  blockedBy: string | null;      // 卡点说明
   body: string | null;           // 页面正文 Markdown
   seq: number | null;            // 短序号，用于子任务命名前缀（g1, g2, ...）
-  driveStatus: GoalDriveStatus | null;  // Drive 运行状态（从 goals.drive_status 读取）
 }
 
 /** 开发日志 */
@@ -105,36 +100,26 @@ export interface IGuildRepo {
 }
 
 /**
- * Goal 仓库
+ * Goal 仓库（已合并原 GoalMetaRepo）
  *
- * 管理 Goal Drive 的状态（不含 tasks，tasks 由 IGoalTaskRepo 管理）。
+ * 管理 Goal 的完整元数据及 Drive 运行状态。
  * 主键: goalId
  */
 export interface IGoalRepo {
+  // —— Drive 状态（GoalDriveState）——
   get(goalId: string): Promise<GoalDriveState | null>;
   getAll(): Promise<GoalDriveState[]>;
   save(state: GoalDriveState): Promise<void>;
   delete(goalId: string): Promise<boolean>;
 
-  // —— 查询 ——
-  findByStatus(status: GoalDriveStatus): Promise<GoalDriveState[]>;
-}
+  // —— Drive 状态查询 ——
+  findByStatuses(statuses: GoalStatus[]): Promise<GoalDriveState[]>;
 
-/**
- * Goal 元数据仓库
- *
- * 管理 Goal 的完整元数据（name, status, body 等），
- * 与 IGoalRepo（仅管理 Drive 状态）互补。
- * 主键: id
- */
-export interface IGoalMetaRepo {
-  get(id: string): Promise<Goal | null>;
-  getAll(): Promise<Goal[]>;
-  save(goal: Goal): Promise<void>;
-  delete(id: string): Promise<boolean>;
-
-  // —— 查询 ——
-  findByStatus(status: GoalStatus): Promise<Goal[]>;
+  // —— Goal 元数据（Goal）——
+  getMeta(goalId: string): Promise<Goal | null>;
+  getAllMeta(): Promise<Goal[]>;
+  saveMeta(goal: Goal): Promise<void>;
+  findGoalsByStatus(status: GoalStatus): Promise<Goal[]>;
   findByProject(project: string): Promise<Goal[]>;
   search(query: string): Promise<Goal[]>;
 }
@@ -163,6 +148,10 @@ export interface ITaskRepo {
 
   // —— 聚合 ——
   getGoalUsageTotals(goalId: string): ChatUsageResult;
+
+  // —— Check-in 持久化 ——
+  patchCheckin(taskId: string, count: number, at: number | null): void;
+  patchNudge(taskId: string, count: number, at: number | null): void;
 }
 
 /**

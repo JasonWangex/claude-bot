@@ -23,12 +23,12 @@ export async function startDrive(ctx: GoalOrchestrator, params: StartDriveParams
   const { goalId, goalName, goalChannelId, baseCwd: inputCwd, maxConcurrent = 3 } = params;
 
   // 已有 drive 时：paused → 自动 resume；running → 直接返回当前状态
-  const existing = ctx.activeDrives.get(goalId) || await ctx.deps.goalRepo.get(goalId);
+  const existing = await ctx.deps.goalRepo.get(goalId);
   if (existing) {
     if (existing.status === 'paused') {
       logger.info(`[Orchestrator] Goal "${goalName}" is paused, auto-resuming`);
       await resumeDrive(ctx, goalId);
-      return ctx.activeDrives.get(goalId) ?? existing;
+      return (await ctx.deps.goalRepo.get(goalId)) ?? existing;
     }
     if (existing.status === 'running') {
       await ctx.notify(goalChannelId, `Goal "${goalName}" is already running.`, 'info');
@@ -47,18 +47,18 @@ export async function startDrive(ctx: GoalOrchestrator, params: StartDriveParams
     throw err;
   }
 
-  const goalBranch = await goalNameToBranch(goalName);
+  const branch = await goalNameToBranch(goalName);
 
   let goalWorktreeDir: string;
   try {
-    goalWorktreeDir = await createGoalBranch(baseCwd, goalBranch, ctx.deps.config.worktreesDir);
+    goalWorktreeDir = await createGoalBranch(baseCwd, branch, ctx.deps.config.worktreesDir);
   } catch (err: any) {
     await ctx.notify(goalChannelId, `Failed to create goal branch: ${err.message}`, 'error');
     throw err;
   }
 
   // 获取 goalMeta（seq + body）
-  const goalMeta = await ctx.deps.goalMetaRepo.get(goalId);
+  const goalMeta = await ctx.deps.goalRepo.getMeta(goalId);
   const goalSeq = goalMeta?.seq ?? 0;
 
   // tasks 由 Claude 提前通过 bot_goal_tasks(action="set") 写入 DB
@@ -81,9 +81,9 @@ export async function startDrive(ctx: GoalOrchestrator, params: StartDriveParams
     goalId,
     goalSeq,
     goalName,
-    goalBranch,
-    goalChannelId,
-    baseCwd,
+    branch,
+    channelId: goalChannelId,
+    cwd: baseCwd,
     status: 'running',
     createdAt: Date.now(),
     updatedAt: Date.now(),
@@ -115,21 +115,14 @@ export async function startDrive(ctx: GoalOrchestrator, params: StartDriveParams
   }
 
   await ctx.saveState(state);
-  ctx.activeDrives.set(goalId, state);
-  try {
-    await ctx.syncGoalMetaStatus(goalId, 'Processing');
-  } catch (err: any) {
-    // 非致命错误：drive 已启动，meta status 会在首次 dispatchNext 时由 syncGoalMeta 修正
-    logger.warn(`[Orchestrator] Failed to sync goal meta status to Processing: ${err.message}`);
-  }
 
   // 为 Tech Lead channel 创建 Opus 会话并发送初始化 prompt
   if (guildId) {
     ctx.ensureGoalChannelSession(state, guildId);
-    const techLeadChannelId = state.techLeadChannelId ?? state.goalChannelId;
+    const techLeadChannelId = state.techLeadChannelId ?? state.channelId;
     const initPrompt = ctx.deps.promptService.render('orchestrator.tech_lead_init', {
       GOAL_NAME: goalName,
-      GOAL_BRANCH: goalBranch,
+      GOAL_BRANCH: branch,
       GOAL_ID: goalId,
       GOAL_SEQ: String(state.goalSeq),
     });
@@ -142,12 +135,12 @@ export async function startDrive(ctx: GoalOrchestrator, params: StartDriveParams
 
   await ctx.notifyGoal(state,
     `**Goal Drive started:** ${goalName}\n` +
-    `Branch: \`${goalBranch}\`\n` +
+    `Branch: \`${branch}\`\n` +
     `Tasks: ${state.tasks.length}\n` +
     `Max concurrent: ${maxConcurrent}` +
     (state.techLeadChannelId ? `\nTech Lead: <#${state.techLeadChannelId}>` : ''),
     'success',
-    { driveChannel: true },  // 唯一发送到 drive channel 的消息
+    { driveChannel: true },
   );
 
   await ctx.reviewAndDispatch(state);
@@ -168,18 +161,18 @@ export async function pauseDrive(ctx: GoalOrchestrator, goalId: string): Promise
 // ── pauseAllRunningDrives ───────────────────────────────────────────────
 
 /**
- * 暂停所有正在运行的 Goal（紧急模式用）
+ * 暂停所有活跃 Goal（紧急模式用）
  */
 export async function pauseAllRunningDrives(ctx: GoalOrchestrator): Promise<void> {
-  const runningGoals = [...ctx.activeDrives.entries()].filter(([, s]) => s.status === 'running');
+  const activeGoals = await ctx.deps.goalRepo.findByStatuses(['Processing', 'Paused', 'Blocking']);
   const results = await Promise.allSettled(
-    runningGoals.map(([goalId]) => pauseDrive(ctx, goalId)),
+    activeGoals.map(state => pauseDrive(ctx, state.goalId)),
   );
   const failed = results.filter(r => r.status === 'rejected');
   if (failed.length > 0) {
-    logger.warn(`[Orchestrator] Emergency: paused ${runningGoals.length - failed.length}/${runningGoals.length} goal(s), ${failed.length} failed`);
+    logger.warn(`[Orchestrator] Emergency: paused ${activeGoals.length - failed.length}/${activeGoals.length} goal(s), ${failed.length} failed`);
   } else {
-    logger.info(`[Orchestrator] Emergency: paused ${runningGoals.length} running goal(s)`);
+    logger.info(`[Orchestrator] Emergency: paused ${activeGoals.length} active goal(s)`);
   }
 }
 
@@ -192,7 +185,7 @@ export async function resumeDrive(ctx: GoalOrchestrator, goalId: string): Promis
   await ctx.saveState(state);
   await ctx.notifyGoal(state, `Goal "${state.goalName}" resumed`, 'success');
 
-  // 确保 tech lead session 存在（Bot 重启后 paused drive 不经过 restoreRunningDrives）
+  // 确保 tech lead session 存在
   const guildId = ctx.getGuildId();
   if (guildId) {
     ctx.ensureGoalChannelSession(state, guildId);
@@ -211,17 +204,17 @@ export async function getStatus(ctx: GoalOrchestrator, goalId: string): Promise<
 // ── restoreRunningDrives ────────────────────────────────────────────────
 
 export async function restoreRunningDrives(ctx: GoalOrchestrator): Promise<void> {
-  const states = await ctx.deps.goalRepo.findByStatus('running');
+  const states = await ctx.deps.goalRepo.findByStatuses(['Processing']);
   for (const state of states) {
     try {
-      await stat(state.baseCwd);
+      await stat(state.cwd);
     } catch {
-      logger.error(`[Orchestrator] baseCwd does not exist for ${state.goalName}: ${state.baseCwd}`);
+      logger.error(`[Orchestrator] cwd does not exist for ${state.goalName}: ${state.cwd}`);
       state.status = 'paused';
       await ctx.saveState(state);
       await ctx.notifyGoal(state,
         `Goal "${state.goalName}" restore failed: working directory not found\n` +
-        `Path: ${state.baseCwd}\n` +
+        `Path: ${state.cwd}\n` +
         `Auto-paused. Check and resume manually.`,
         'error'
       );
@@ -235,7 +228,7 @@ export async function restoreRunningDrives(ctx: GoalOrchestrator): Promise<void>
         try {
           const stdout = await execGit(
             ['worktree', 'list', '--porcelain'],
-            state.baseCwd,
+            state.cwd,
             `restoreRunningDrives: check worktree for ${task.id}`
           );
           const worktreeDir = ctx.findWorktreeDir(stdout, task.branchName);
@@ -244,7 +237,6 @@ export async function restoreRunningDrives(ctx: GoalOrchestrator): Promise<void>
             task.status = 'failed';
             task.error = 'Worktree not found after restart';
           } else {
-            // Worktree exists but process is gone — reset to pending for re-dispatch
             logger.info(`[Orchestrator] Resetting task ${task.id} to pending for re-dispatch`);
             task.status = 'pending';
             task.branchName = undefined;
@@ -264,28 +256,24 @@ export async function restoreRunningDrives(ctx: GoalOrchestrator): Promise<void>
     if (stateModified) await ctx.saveState(state);
 
     // 重建 completed+unmerged 任务的 hidden audit session
-    // audit session 是无状态的（Claude 进程已消失），重建内存 entry 即可重新触发审核
     const guildIdForAudit = ctx.getGuildId();
     if (guildIdForAudit) {
       for (const task of state.tasks) {
         if (task.status === 'completed' && !task.merged && task.auditSessionKey) {
-          // 先 archive 旧 active 记录（防止 zombie session），再重建
           ctx.deps.stateManager.archiveSession(guildIdForAudit, task.auditSessionKey, undefined, 'restart-cleanup');
           ctx.deps.stateManager.getOrCreateSession(guildIdForAudit, task.auditSessionKey, {
             name: `audit-${task.id}`,
-            cwd: state.baseCwd,
+            cwd: state.cwd,
             hidden: true,
           });
           ctx.deps.stateManager.setSessionModel(guildIdForAudit, task.auditSessionKey, ctx.deps.config.pipelineOpusModel);
-          ctx.deps.stateManager.setSessionForkInfo(guildIdForAudit, task.auditSessionKey, state.goalChannelId, task.branchName ?? '');
+          ctx.deps.stateManager.setSessionForkInfo(guildIdForAudit, task.auditSessionKey, state.channelId, task.branchName ?? '');
           logger.info(`[Orchestrator] Restored hidden audit session for completed task ${task.id}`);
         }
       }
     }
 
-    ctx.activeDrives.set(state.goalId, state);
-
-    // 恢复 tech lead channel session（确保 cwd 和 Opus 模型正确设置）
+    // 恢复 tech lead channel session
     const guildId = ctx.getGuildId();
     if (guildId) {
       ctx.ensureGoalChannelSession(state, guildId);
@@ -298,6 +286,6 @@ export async function restoreRunningDrives(ctx: GoalOrchestrator): Promise<void>
     logger.info(`[Orchestrator] Restored ${states.length} running drives`);
   }
 
-  // 启动后台事件扫描器（兜底：处理 crash 后遗留的未处理事件）
+  // 启动后台事件扫描器
   ctx.startEventScanner();
 }

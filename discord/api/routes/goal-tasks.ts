@@ -11,7 +11,7 @@ import type { RouteHandler } from '../types.js';
 import { sendJson, readJsonBody } from '../middleware.js';
 import { getDb } from '../../db/index.js';
 import { TaskRepo } from '../../db/repo/index.js';
-import { GoalMetaRepo } from '../../db/goal-meta-repo.js';
+import { GoalRepo } from '../../db/repo/index.js';
 import type { Task } from '../../types/index.js';
 
 interface SetTasksRequest {
@@ -46,8 +46,8 @@ export const setGoalTasks: RouteHandler = async (req, res, params) => {
   const db = getDb();
 
   // 确认 goal 存在
-  const goalRepo = new GoalMetaRepo(db);
-  const goal = await goalRepo.get(goalId);
+  const goalRepo = new GoalRepo(db);
+  const goal = await goalRepo.getMeta(goalId);
   if (!goal) {
     sendJson(res, 404, { ok: false, error: `Goal not found: ${goalId}` });
     return;
@@ -95,8 +95,8 @@ export const addGoalTask: RouteHandler = async (req, res, params) => {
   }
 
   const db = getDb();
-  const goalRepo = new GoalMetaRepo(db);
-  const goal = await goalRepo.get(goalId);
+  const goalRepo = new GoalRepo(db);
+  const goal = await goalRepo.getMeta(goalId);
   if (!goal) {
     sendJson(res, 404, { ok: false, error: `Goal not found: ${goalId}` });
     return;

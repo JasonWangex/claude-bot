@@ -26,7 +26,6 @@ import { generateTopicTitle } from '../utils/llm.js';
 import { forkTaskCore } from '../utils/fork-task.js';
 import { initDb, getDb, closeDb } from '../db/index.js';
 import { GoalRepo, TaskRepo } from '../db/repo/index.js';
-import { GoalMetaRepo } from '../db/goal-meta-repo.js';
 import { GoalTodoRepository } from '../db/goal-todo-repo.js';
 import { TaskEventRepo } from '../db/repo/task-event-repo.js';
 import { GoalTimelineRepo } from '../db/repo/goal-timeline-repo.js';
@@ -541,8 +540,8 @@ export class DiscordBot {
       await interaction.update({ content: '正在准备推进 Goal...', components: [] }).catch(() => {});
 
       const db = getDb();
-      const goalMetaRepo = new GoalMetaRepo(db);
-      const goal = await goalMetaRepo.get(goalId);
+      const goalMetaRepo = new GoalRepo(db);
+      const goal = await goalMetaRepo.getMeta(goalId);
       if (!goal) {
         await interaction.followUp({ content: 'Goal not found', ephemeral: true }).catch(() => {});
         return;
@@ -833,7 +832,6 @@ export class DiscordBot {
     // 启动 Orchestrator
     const db = getDb();
     const goalRepo = new GoalRepo(db);
-    const goalMetaRepo = new GoalMetaRepo(db);
     const taskRepo = new TaskRepo(db);
     const goalTodoRepo = new GoalTodoRepository(db);
     const orchestratorChannelRepo = new ChannelRepository(db);
@@ -848,7 +846,6 @@ export class DiscordBot {
       mq: this.messageQueue,
       config: this.config,
       goalRepo,
-      goalMetaRepo,
       taskRepo,
       goalTodoRepo,
       channelRepo: orchestratorChannelRepo,

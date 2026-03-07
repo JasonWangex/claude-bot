@@ -200,26 +200,22 @@ export interface StatusResponse {
 
 export interface GoalSummary {
   id: string;
+  seq: number | null;
   name: string;
   status: GoalStatus;
   type: GoalType | null;
   project: string | null;
   date: string | null;
-  progress: string | null;
-  drive_status: string | null;
 }
 
 export interface GoalDetail extends GoalSummary {
   completion: string | null;
-  next: string | null;
-  blocked_by: string | null;
   body: string | null;
-  drive_branch: string | null;
-  drive_channel_id: string | null;
-  drive_base_cwd: string | null;
-  drive_max_concurrent: number | null;
-  drive_created_at: number | null;
-  drive_updated_at: number | null;
+  /** 当前 goal 的执行分支（drive 已启动时存在） */
+  branch: string | null;
+  channel_id: string | null;
+  cwd: string | null;
+  max_concurrent: number | null;
   tasks: GoalTaskSummary[];
 }
 

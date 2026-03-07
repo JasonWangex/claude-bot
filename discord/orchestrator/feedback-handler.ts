@@ -211,7 +211,7 @@ export function buildFeedbackInvestigationPrompt(
   return ctx.deps.promptService.render('orchestrator.feedback_investigation', {
     TASK_LABEL: label,
     TASK_DESCRIPTION: task.description,
-    GOAL_BRANCH: state.goalBranch,
+    GOAL_BRANCH: state.branch,
     FEEDBACK_TYPE: fb.type,
     FEEDBACK_REASON: fb.reason,
     FEEDBACK_DETAILS: fb.details ? `Details: ${fb.details}` : '',

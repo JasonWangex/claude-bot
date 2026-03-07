@@ -99,9 +99,9 @@ export async function processPendingEvents(ctx: GoalOrchestrator): Promise<void>
       continue;
     }
 
-    const state = ctx.activeDrives.get(ev.goalId);
+    const state = await ctx.deps.goalRepo.get(ev.goalId);
     if (!state) {
-      // goal 不在内存中（可能已完成）— 标记为已处理
+      // goal 不存在（可能已完成）— 标记为已处理
       ctx.deps.taskEventRepo.markProcessed(ev.id);
       continue;
     }
@@ -164,7 +164,7 @@ export async function processPendingEvents(ctx: GoalOrchestrator): Promise<void>
           }
           const guildId = ctx.getGuildId();
           if (!guildId) continue; // 未连接 guild，下轮重试
-          const techLeadChannelId = state.techLeadChannelId ?? state.goalChannelId;
+          const techLeadChannelId = state.techLeadChannelId ?? state.channelId;
           const techLeadLockKey = StateManager.channelLockKey(guildId, techLeadChannelId);
           if (ctx.deps.claudeClient.isRunning(techLeadLockKey)) {
             continue; // tech lead 忙，不标 processed，下轮重试
@@ -232,9 +232,8 @@ export async function checkOrphanedTasks(ctx: GoalOrchestrator): Promise<void> {
   const guildId = ctx.getGuildId();
   if (!guildId) return;
 
-  for (const state of ctx.activeDrives.values()) {
-    if (state.status !== 'running') continue;
-
+  const runningStates = await ctx.deps.goalRepo.findByStatuses(['Processing']);
+  for (const state of runningStates) {
     for (const task of state.tasks) {
       if (task.status !== 'running' || !task.channelId) continue;
 
@@ -254,11 +253,11 @@ export async function checkOrphanedTasks(ctx: GoalOrchestrator): Promise<void> {
       // 如果 sessionStatus 为 null（无 session 记录），也需要 check-in
       if (sessionStatus !== null && sessionStatus !== 'idle' && sessionStatus !== 'closed') continue;
 
-      // Cooldown 检查
-      const lastCheckIn = ctx.lastCheckInAt.get(task.id) ?? (task.dispatchedAt || 0);
+      // Cooldown 检查（从 DB 读取，重启后不归零）
+      const lastCheckIn = task.lastCheckinAt ?? (task.dispatchedAt || 0);
       if (now - lastCheckIn < CHECK_IN_COOLDOWN) continue;
 
-      const count = ctx.checkInCounts.get(task.id) ?? 0;
+      const count = task.checkinCount ?? 0;
       if (count >= MAX_CHECK_INS) {
         // 超限 → 标记失败
         logger.warn(`[CheckIn] Task ${task.id} exceeded max check-ins (${MAX_CHECK_INS}), marking failed`);
@@ -289,11 +288,11 @@ export async function checkOrphanedTasks(ctx: GoalOrchestrator): Promise<void> {
         if (pendingResult) continue;
       }
 
-      // Cooldown 检查（基于完成时间或上次轻推时间）
-      const lastNudge = ctx.lastTechLeadNudgeAt.get(task.id) ?? (task.completedAt ?? Date.now());
+      // Cooldown 检查（从 DB 读取，重启后不归零）
+      const lastNudge = task.lastNudgeAt ?? (task.completedAt ?? Date.now());
       if (now - lastNudge < CHECK_IN_COOLDOWN) continue;
 
-      const count = ctx.techLeadNudgeCounts.get(task.id) ?? 0;
+      const count = task.nudgeCount ?? 0;
       if (count >= MAX_CHECK_INS) {
         logger.warn(`[ReviewerNudge] Task ${task.id} exceeded max nudges, marking blocked`);
         task.status = 'blocked';
@@ -313,8 +312,7 @@ export async function checkOrphanedTasks(ctx: GoalOrchestrator): Promise<void> {
       } else {
         ctx.triggerTaskReview(state, task, guildId);  // 创建独立 audit session
       }
-      ctx.techLeadNudgeCounts.set(task.id, count + 1);
-      ctx.lastTechLeadNudgeAt.set(task.id, now);
+      ctx.deps.taskRepo.patchNudge(task.id, count + 1, now);
     }
   }
 }
@@ -334,10 +332,8 @@ export function sendCheckIn(
   const taskId = task.id;
   const channelId = task.channelId!;
 
-  // 立即更新 tracking，防止 scanner 在 check-in 期间重复触发
-  // （review-handler 等非 scanner 路径调用时同样需要维护冷却状态）
-  ctx.checkInCounts.set(taskId, attempt);
-  ctx.lastCheckInAt.set(taskId, Date.now());
+  // 立即更新 DB，防止 scanner 在 check-in 期间重复触发（重启后不归零）
+  ctx.deps.taskRepo.patchCheckin(taskId, attempt, Date.now());
 
   (async () => {
     try {
@@ -364,13 +360,11 @@ export function sendCheckIn(
 
 /** 清除任务的 check-in 追踪状态（subtask + tech lead nudge） */
 export function clearCheckInState(ctx: GoalOrchestrator, taskId: string): void {
-  ctx.checkInCounts.delete(taskId);
-  ctx.lastCheckInAt.delete(taskId);
+  ctx.deps.taskRepo.patchCheckin(taskId, 0, null);
   clearTechLeadNudgeState(ctx, taskId);
 }
 
 /** 清除任务的 tech lead 轻推追踪状态 */
 export function clearTechLeadNudgeState(ctx: GoalOrchestrator, taskId: string): void {
-  ctx.techLeadNudgeCounts.delete(taskId);
-  ctx.lastTechLeadNudgeAt.delete(taskId);
+  ctx.deps.taskRepo.patchNudge(taskId, 0, null);
 }

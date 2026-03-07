@@ -11,40 +11,30 @@
 
 import type { RouteHandler } from '../types.js';
 import { sendJson, readJsonBody } from '../middleware.js';
-import { getDb, GoalMetaRepo, GoalTimelineRepo } from '../../db/index.js';
+import { getDb, GoalRepo, GoalTimelineRepo } from '../../db/index.js';
 import type { Goal, GoalStatus, GoalType } from '../../types/repository.js';
 
-const VALID_STATUSES: GoalStatus[] = ['Pending', 'Collecting', 'Planned', 'Processing', 'Blocking', 'Completed', 'Merged'];
+const VALID_STATUSES: GoalStatus[] = [
+  'Pending', 'Collecting', 'Planned', 'Processing', 'Blocking',
+  'Completed', 'Merged', 'Paused', 'Failed',
+];
 const VALID_TYPES: GoalType[] = ['探索型', '交付型'];
 
 /** 合法的状态转换 */
-const VALID_TRANSITIONS: Record<GoalStatus, GoalStatus[]> = {
+const VALID_TRANSITIONS: Partial<Record<GoalStatus, GoalStatus[]>> = {
   Pending:    ['Collecting'],
   Collecting: ['Planned', 'Pending'],
   Planned:    ['Processing', 'Collecting'],
-  Processing: ['Completed', 'Blocking'],
-  Blocking:   ['Processing', 'Completed'],
+  Processing: ['Completed', 'Blocking', 'Paused', 'Failed'],
+  Blocking:   ['Processing', 'Completed', 'Paused'],
+  Paused:     ['Processing', 'Failed'],
   Completed:  ['Merged', 'Processing'],
   Merged:     [],
+  Failed:     ['Processing'],
 };
 
 function getRepo() {
-  return new GoalMetaRepo(getDb());
-}
-
-/** 解析 progress 字段：JSON 格式 → 结构化对象，旧文本格式 → 兼容解析 */
-function parseProgress(raw: string | null): { completed: number; total: number; running: number; failed: number } | null {
-  if (!raw) return null;
-  try {
-    const parsed = JSON.parse(raw);
-    if (typeof parsed.completed === 'number' && typeof parsed.total === 'number') {
-      return { completed: parsed.completed, total: parsed.total, running: parsed.running ?? 0, failed: parsed.failed ?? 0 };
-    }
-  } catch { /* not JSON, try legacy format */ }
-  // 兼容旧格式 "3/5 子任务完成"
-  const match = raw.match(/(\d+)\s*\/\s*(\d+)/);
-  if (match) return { completed: parseInt(match[1], 10), total: parseInt(match[2], 10), running: 0, failed: 0 };
-  return null;
+  return new GoalRepo(getDb());
 }
 
 /** Goal → API 响应格式 (snake_case) */
@@ -58,11 +48,7 @@ function toApiGoal(goal: Goal) {
     project: goal.project,
     date: goal.date,
     completion: goal.completion,
-    progress: parseProgress(goal.progress),
-    next: goal.next,
-    blocked_by: goal.blockedBy,
     body: goal.body,
-    drive_status: goal.driveStatus,
   };
 }
 
@@ -85,11 +71,11 @@ export const listGoals: RouteHandler = async (req, res) => {
       goals = await repo.findByProject(project);
       goals = goals.filter(g => g.status === status);
     } else if (status) {
-      goals = await repo.findByStatus(status as GoalStatus);
+      goals = await repo.findGoalsByStatus(status as GoalStatus);
     } else if (project) {
       goals = await repo.findByProject(project);
     } else {
-      goals = await repo.getAll();
+      goals = await repo.getAllMeta();
     }
 
     sendJson(res, 200, { ok: true, data: goals.map(toApiGoal) });
@@ -102,7 +88,7 @@ export const listGoals: RouteHandler = async (req, res) => {
 export const getGoal: RouteHandler = async (_req, res, params) => {
   try {
     const repo = getRepo();
-    const goal = await repo.get(params.goalId);
+    const goal = await repo.getMeta(params.goalId);
     if (!goal) {
       sendJson(res, 404, { ok: false, error: 'Goal not found' });
       return;
@@ -120,9 +106,6 @@ interface CreateGoalRequest {
   project?: string;
   date?: string;
   completion?: string;
-  progress?: string;
-  next?: string;
-  blocked_by?: string;
   body?: string;
 }
 
@@ -162,17 +145,13 @@ export const createGoal: RouteHandler = async (req, res) => {
       project: body.project?.trim() || null,
       date: body.date || new Date().toISOString().slice(0, 10),
       completion: body.completion?.trim() || null,
-      progress: body.progress?.trim() || null,
-      next: body.next?.trim() || null,
-      blockedBy: body.blocked_by?.trim() || null,
       body: body.body || null,
       seq: null,  // auto-assigned by DB (MAX(seq) + 1)
-      driveStatus: null,
     };
 
-    await repo.save(goal);
+    await repo.saveMeta(goal);
     // Re-read to get the auto-assigned seq
-    const saved = await repo.get(id);
+    const saved = await repo.getMeta(id);
     sendJson(res, 201, { ok: true, data: toApiGoal(saved || goal) });
   } catch (error: any) {
     sendJson(res, 500, { ok: false, error: `Failed to create goal: ${error.message}` });
@@ -186,9 +165,6 @@ interface UpdateGoalRequest {
   project?: string;
   date?: string;
   completion?: string;
-  progress?: string;
-  next?: string;
-  blocked_by?: string;
   body?: string;
 }
 
@@ -212,7 +188,7 @@ export const updateGoal: RouteHandler = async (req, res, params) => {
 
   try {
     const repo = getRepo();
-    const existing = await repo.get(params.goalId);
+    const existing = await repo.getMeta(params.goalId);
     if (!existing) {
       sendJson(res, 404, { ok: false, error: 'Goal not found' });
       return;
@@ -221,7 +197,7 @@ export const updateGoal: RouteHandler = async (req, res, params) => {
     // 状态转换校验
     if (updates.status && updates.status !== existing.status) {
       const allowed = VALID_TRANSITIONS[existing.status];
-      if (!allowed?.includes(updates.status)) {
+      if (allowed !== undefined && !allowed.includes(updates.status)) {
         sendJson(res, 400, {
           ok: false,
           error: `Invalid status transition: ${existing.status} → ${updates.status}. Allowed: ${allowed?.join(', ') || 'none (terminal state)'}`,
@@ -239,15 +215,11 @@ export const updateGoal: RouteHandler = async (req, res, params) => {
       project: updates.project !== undefined ? updates.project?.trim() ?? null : existing.project,
       date: updates.date ?? existing.date,
       completion: updates.completion !== undefined ? updates.completion?.trim() ?? null : existing.completion,
-      progress: updates.progress !== undefined ? updates.progress?.trim() ?? null : existing.progress,
-      next: updates.next !== undefined ? updates.next?.trim() ?? null : existing.next,
-      blockedBy: updates.blocked_by !== undefined ? updates.blocked_by?.trim() ?? null : existing.blockedBy,
       body: updates.body !== undefined ? updates.body : existing.body,
       seq: existing.seq,
-      driveStatus: existing.driveStatus,
     };
 
-    await repo.save(updated);
+    await repo.saveMeta(updated);
     sendJson(res, 200, { ok: true, data: toApiGoal(updated) });
   } catch (error: any) {
     sendJson(res, 500, { ok: false, error: `Failed to update goal: ${error.message}` });

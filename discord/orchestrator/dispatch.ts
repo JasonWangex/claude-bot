@@ -184,7 +184,6 @@ export async function dispatchNext(
   if (isGoalComplete(state)) {
     state.status = 'completed';
     await ctx.saveState(state);
-    await ctx.syncGoalMeta(state);
 
     // 检查未完成的 todo
     let todoWarning = '';
@@ -200,7 +199,7 @@ export async function dispatchNext(
 
     await ctx.notifyGoal(state,
       `${getNotifyMention()} **Goal "${state.goalName}" completed!**\n` +
-      `Review branch \`${state.goalBranch}\` and merge to main.` +
+      `Review branch \`${state.branch}\` and merge to main.` +
       todoWarning,
       'success',
       { driveChannel: true },
@@ -216,7 +215,6 @@ export async function dispatchNext(
   }
 
   if (isGoalStuck(state)) {
-    await ctx.syncGoalMeta(state);
     const guildIdForStuck = ctx.getGuildId();
     if (state.techLeadChannelId && guildIdForStuck) {
       triggerTechLeadConsultation(
@@ -261,7 +259,6 @@ export async function dispatchNext(
   }
 
   // dispatch 后同步 Goal 元数据，确保 next 反映新启动的任务
-  await ctx.syncGoalMeta(state);
 }
 
 /**
@@ -283,13 +280,13 @@ export async function dispatchTask(
   try {
     const stdout = await execGit(
       ['worktree', 'list', '--porcelain'],
-      state.baseCwd,
+      state.cwd,
       `dispatchTask(${task.id}): list worktrees`
     );
 
-    const goalWorktreeDir = ctx.findWorktreeDir(stdout, state.goalBranch);
+    const goalWorktreeDir = ctx.findWorktreeDir(stdout, state.branch);
     if (!goalWorktreeDir) {
-      throw new Error(`Goal worktree for ${state.goalBranch} not found`);
+      throw new Error(`Goal worktree for ${state.branch} not found`);
     }
 
     const { worktreeDir: subtaskDir, isExisting } = await createSubtaskBranch(
@@ -325,7 +322,7 @@ export async function dispatchTask(
           name: taskLabel,
           cwd: subtaskDir,
         });
-        ctx.deps.stateManager.setSessionForkInfo(guildId, channelId, state.goalChannelId, branchName);
+        ctx.deps.stateManager.setSessionForkInfo(guildId, channelId, state.channelId, branchName);
 
         await ctx.notifyGoal(state,
           `Resumed (branch existed): ${taskLabel} - ${task.description} → \`${branchName}\``,
@@ -345,12 +342,17 @@ export async function dispatchTask(
       task.channelId = undefined;
     }
 
-    const categoryId = await ctx.findCategoryId(state.goalChannelId);
+    const categoryId = await ctx.findCategoryId(state.channelId);
 
     if (!categoryId) {
       throw new Error('Cannot find Category for goal channel');
     }
-    const title = await generateTopicTitle(task.description);
+    let title: string;
+    try {
+      title = await generateTopicTitle(task.description);
+    } catch {
+      title = task.description.slice(0, 50);
+    }
     const channelName = `${taskLabel} ${title}`.slice(0, 100);
 
     const textChannel = await guild.channels.create({
@@ -372,7 +374,7 @@ export async function dispatchTask(
       name: channelName,
       cwd: subtaskDir,
     });
-    ctx.deps.stateManager.setSessionForkInfo(guildId, newThreadId, state.goalChannelId, branchName);
+    ctx.deps.stateManager.setSessionForkInfo(guildId, newThreadId, state.channelId, branchName);
 
     task.channelId = newThreadId;
     task.status = 'running';

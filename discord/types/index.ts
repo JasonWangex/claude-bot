@@ -12,7 +12,6 @@ export type {
   IdeaStatus,
   IGuildRepo,
   IGoalRepo,
-  IGoalMetaRepo,
   ITaskRepo,
   IGoalTaskRepo,
   IDevLogRepo,
@@ -339,6 +338,12 @@ export interface Task {
 
   // 元数据（用于存储扩展信息）
   metadata?: Record<string, any>;
+
+  // Check-in 持久化字段
+  checkinCount?: number;
+  lastCheckinAt?: number | null;
+  nudgeCount?: number;
+  lastNudgeAt?: number | null;
 }
 
 // ========== Deprecated aliases ==========
@@ -359,10 +364,11 @@ export interface GoalDriveState {
   goalId: string;
   goalSeq: number;            // 短序号，用于子任务命名前缀（g1, g2, ...）
   goalName: string;
-  goalBranch: string;
-  goalChannelId: string;      // 调度员 channel（用于通知用户）
+  branch: string;
+  channelId: string;          // 调度员 channel（用于通知用户）
   techLeadChannelId?: string; // Tech Lead 专用 channel（Opus 实例运行在此，负责审查、冲突解决、阶段评估）
-  baseCwd: string;
+  phaseMilestones?: Record<string, string>; // Phase 里程碑映射 {phaseNumber: milestone}
+  cwd: string;
   status: GoalDriveStatus;
   createdAt: number;
   updatedAt: number;

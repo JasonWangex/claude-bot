@@ -50,10 +50,10 @@ export async function doMergeAndCleanup(ctx: GoalOrchestrator, state: GoalDriveS
   try {
     const stdout = await execGit(
       ['worktree', 'list', '--porcelain'],
-      state.baseCwd,
+      state.cwd,
       `mergeAndCleanup(${branchName}): list worktrees`
     );
-    goalWorktreeDir = ctx.findWorktreeDir(stdout, state.goalBranch) ?? undefined;
+    goalWorktreeDir = ctx.findWorktreeDir(stdout, state.branch) ?? undefined;
     if (!goalWorktreeDir) {
       await ctx.notifyGoal(state, `Cannot find goal worktree, skipping merge: ${branchName}`, 'warning');
       return;
@@ -63,7 +63,12 @@ export async function doMergeAndCleanup(ctx: GoalOrchestrator, state: GoalDriveS
     if (subtaskDir) {
       const hasChanges = await hasUncommittedChanges(subtaskDir);
       if (hasChanges) {
+        logger.warn(`[MergeHandler] Auto-committing uncommitted changes in ${subtaskDir} for task ${task.id}`);
         await autoCommit(subtaskDir, `auto: ${task.description}`);
+        await ctx.notifyGoal(state,
+          `Task ${ctx.getTaskLabel(state, task.id)} 有未提交的修改，已自动 commit。请检查是否正常。`,
+          'warning',
+        );
       }
     }
 
@@ -81,10 +86,10 @@ export async function doMergeAndCleanup(ctx: GoalOrchestrator, state: GoalDriveS
       }
 
       await ctx.saveState(state);
-      await ctx.notifyGoal(state, `Merged: \`${branchName}\` → \`${state.goalBranch}\``, 'success');
+      await ctx.notifyGoal(state, `Merged: \`${branchName}\` → \`${state.branch}\``, 'success');
 
       if (subtaskDir) {
-        await cleanupSubtask(state.baseCwd, subtaskDir, branchName);
+        await cleanupSubtask(state.cwd, subtaskDir, branchName);
       }
 
       // Delete subtask channel
@@ -99,7 +104,7 @@ export async function doMergeAndCleanup(ctx: GoalOrchestrator, state: GoalDriveS
         : `Merge failed (treated as conflict): ${result.error ?? 'unknown error'}`;
       await abortMerge(goalWorktreeDir);
       await ctx.notifyGoal(state,
-        `${reason}: \`${branchName}\` → \`${state.goalBranch}\`. Queued for tech lead...`,
+        `${reason}: \`${branchName}\` → \`${state.branch}\`. Queued for tech lead...`,
         'warning'
       );
       ctx.deps.taskEventRepo.write(task.id, state.goalId, 'merge.conflict', {
@@ -118,7 +123,7 @@ export async function doMergeAndCleanup(ctx: GoalOrchestrator, state: GoalDriveS
     if (goalWorktreeDir) {
       await abortMerge(goalWorktreeDir);
       await ctx.notifyGoal(state,
-        `Merge exception (treated as conflict): \`${branchName}\` → \`${state.goalBranch}\`. Queued for tech lead...\nError: ${err.message}`,
+        `Merge exception (treated as conflict): \`${branchName}\` → \`${state.branch}\`. Queued for tech lead...\nError: ${err.message}`,
         'warning'
       );
       ctx.deps.taskEventRepo.write(task.id, state.goalId, 'merge.conflict', {

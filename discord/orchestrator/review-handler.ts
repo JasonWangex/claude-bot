@@ -11,6 +11,8 @@ import type { GoalDriveState, GoalTask } from '../types/index.js';
 import type { GoalOrchestrator } from './index.js';
 import type { MergeConflictPayload } from './orchestrator-types.js';
 import { MAX_REVIEW_RETRIES } from './orchestrator-types.js';
+import { readFileSync, existsSync } from 'fs';
+import { join } from 'path';
 import { logger } from '../utils/logger.js';
 import { execGit } from './git-ops.js';
 import { cleanupSubtask } from './goal-branch.js';
@@ -19,7 +21,28 @@ import { cleanupTaskChannel } from './merge-handler.js';
 
 export function triggerTaskReview(ctx: GoalOrchestrator, state: GoalDriveState, task: GoalTask, guildId: string): void {
   const taskId = task.id;
-  const goalChannelId = state.goalChannelId;
+  const goalChannelId = state.channelId;
+
+  // 调研/手动任务跳过 code-audit，直接 merge 后继续调度
+  if (task.type === '调研' || task.type === '手动') {
+    logger.info(`[TaskReview] Task ${taskId} is type ${task.type}, skipping audit, triggering merge directly`);
+    const phase = getPhaseNumber(task);
+    ctx.mergeAndCleanup(state, task)
+      .then(async () => {
+        const refreshed = await ctx.getState(state.goalId);
+        if (!refreshed || refreshed.status !== 'running') return;
+
+        // phase 全部合并完成 → 触发 phase 评估（含 milestone 验收 + 调研报告汇总）
+        if (isPhaseFullyMerged(refreshed, phase)) {
+          logger.info(`[TaskReview] Phase ${phase} fully merged after ${taskId}, triggering phase evaluation`);
+          triggerPhaseEvaluation(ctx, refreshed, phase, guildId);
+        } else {
+          await ctx.reviewAndDispatch(refreshed, taskId);
+        }
+      })
+      .catch((err: any) => logger.error(`[TaskReview] Direct merge failed for ${taskId}:`, err));
+    return;
+  }
 
   // 确保 audit session 存在（幂等，已存在则复用）
   if (!task.auditSessionKey) {
@@ -37,7 +60,7 @@ export function triggerTaskReview(ctx: GoalOrchestrator, state: GoalDriveState, 
       const goalDir = await ctx.getGoalWorktreeDir(state);
       if (goalDir && task.branchName) {
         diffStats = await execGit(
-          ['diff', '--stat', `${state.goalBranch}...${task.branchName}`],
+          ['diff', '--stat', `${state.branch}...${task.branchName}`],
           goalDir,
           `triggerTaskReview: diff stat for ${taskId}`,
         );
@@ -216,12 +239,12 @@ export function triggerConflictReview(
   (async () => {
     try {
       ctx.ensureGoalChannelSession(state, guildId);
-      const techLeadChannelId = state.techLeadChannelId ?? state.goalChannelId;
+      const techLeadChannelId = state.techLeadChannelId ?? state.channelId;
       const ps = ctx.deps.promptService;
       const prompt = ps.render('orchestrator.conflict_review', {
         TASK_LABEL: ctx.getTaskLabel(state, task.id),
         BRANCH_NAME: payload.branchName,
-        GOAL_BRANCH: state.goalBranch,
+        GOAL_BRANCH: state.branch,
         TASK_DESCRIPTION: payload.taskDescription,
         GOAL_WORKTREE_DIR: payload.goalWorktreeDir,
         TASK_ID: task.id,
@@ -257,10 +280,10 @@ export function nudgeConflictReview(
     try {
       const stdout = await execGit(
         ['worktree', 'list', '--porcelain'],
-        state.baseCwd,
+        state.cwd,
         `nudgeConflictReview(${task.id}): list worktrees`,
       );
-      const goalWorktreeDir = ctx.findWorktreeDir(stdout, state.goalBranch);
+      const goalWorktreeDir = ctx.findWorktreeDir(stdout, state.branch);
       if (!goalWorktreeDir) {
         logger.warn(`[ReviewerNudge] Cannot find goal worktree for ${task.id}, skipping nudge`);
         return;
@@ -308,7 +331,7 @@ export async function handleConflictResolutionResult(
       // merge.conflict 事件在前一 scanner tick 已被 markProcessed，需用 readAny 读取历史 payload
       const conflictPayload = ctx.deps.taskEventRepo.readAny<MergeConflictPayload>(taskId, 'merge.conflict');
       if (task.branchName && conflictPayload?.subtaskDir) {
-        await cleanupSubtask(state.baseCwd, conflictPayload.subtaskDir, task.branchName).catch(() => {});
+        await cleanupSubtask(state.cwd, conflictPayload.subtaskDir, task.branchName).catch(() => {});
       }
 
       // 清理 subtask Discord channel
@@ -349,7 +372,7 @@ export async function handleConflictResolutionResult(
  */
 export function triggerPhaseEvaluation(ctx: GoalOrchestrator, state: GoalDriveState, phase: number, guildId: string): void {
   const goalId = state.goalId;
-  const techLeadChannelId = state.techLeadChannelId ?? state.goalChannelId;
+  const techLeadChannelId = state.techLeadChannelId ?? state.channelId;
 
   (async () => {
     try {
@@ -368,6 +391,26 @@ export function triggerPhaseEvaluation(ctx: GoalOrchestrator, state: GoalDriveSt
       const lastMerged = phaseTasks.filter(t => t.merged).pop();
       const phaseTaskId = lastMerged?.id ?? phaseTasks[0]?.id ?? 'unknown';
 
+      const milestones = state.phaseMilestones ?? {};
+      const milestone = milestones[String(phase)] ?? '（无 milestone，请综合判断）';
+
+      // 提取调研任务报告内容（task.description 含 "输出路径: <relative>.md"）
+      const researchReports = phaseTasks
+        .filter(t => t.type === '调研' && t.merged)
+        .map(t => {
+          const match = t.description.match(/输出路径[:：]\s*(\S+\.md)/);
+          if (!match) return `- **${t.id}** (${t.description.slice(0, 60)}): 报告路径未在 description 中指定`;
+          const relPath = match[1];
+          const absPath = join(state.cwd, relPath);
+          if (!existsSync(absPath)) return `- **${t.id}** (${relPath}): 报告文件不存在，请 tech lead 直接查阅`;
+          try {
+            const content = readFileSync(absPath, 'utf8');
+            return `- **${t.id}** (${relPath}):\n\`\`\`\n${content.slice(0, 3000)}${content.length > 3000 ? '\n...(截断)' : ''}\n\`\`\``;
+          } catch {
+            return `- **${t.id}** (${relPath}): 报告读取失败，请 tech lead 直接查阅`;
+          }
+        }).join('\n\n');
+
       const ps = ctx.deps.promptService;
       const prompt = ps.render('orchestrator.phase_review', {
         PHASE_NUMBER: String(phase),
@@ -375,6 +418,8 @@ export function triggerPhaseEvaluation(ctx: GoalOrchestrator, state: GoalDriveSt
         TASK_REVIEW_SUMMARIES: summaries,
         PROGRESS_SUMMARY: progress,
         PHASE_TASK_ID: phaseTaskId,
+        PHASE_MILESTONE: milestone,
+        RESEARCH_REPORTS: researchReports || '（本 phase 无调研任务）',
       });
 
       await ctx.notifyGoal(state,
@@ -396,14 +441,30 @@ export function triggerPhaseEvaluation(ctx: GoalOrchestrator, state: GoalDriveSt
         ctx.deps.taskEventRepo.markProcessedByTask(phaseTaskId, 'review.phase_result');
         await handlePhaseResult(ctx, goalId, phaseTaskId, phaseResult);
       } else {
-        // 没写事件 → 默认 continue
-        logger.warn(`[PhaseReview] No review.phase_result event for phase ${phase}, defaulting to continue`);
-        await handlePhaseResult(ctx, goalId, phaseTaskId, { decision: 'continue', summary: 'Auto-continue (no event)' });
+        // 没写事件 → Pause goal，等待人工干预
+        logger.warn(`[PhaseReview] No review.phase_result event for phase ${phase}, pausing goal`);
+        const pauseState = await ctx.getState(goalId);
+        if (pauseState) {
+          pauseState.status = 'paused';
+          await ctx.saveState(pauseState);
+        }
+        await ctx.notifyGoal(state,
+          `Phase ${phase} 评估未收到结果，goal 已暂停，请手动决定是否继续。`,
+          'warning',
+        );
       }
     } catch (err: any) {
-      // 评估失败 → 默认 continue
+      // 评估失败 → Pause goal
       logger.error(`[PhaseReview] Phase ${phase} evaluation failed:`, err);
-      await handlePhaseResult(ctx, goalId, 'fallback', { decision: 'continue', summary: `Evaluation failed: ${err.message}` });
+      const pauseState = await ctx.getState(goalId);
+      if (pauseState) {
+        pauseState.status = 'paused';
+        await ctx.saveState(pauseState);
+      }
+      await ctx.notifyGoal(state,
+        `Phase ${phase} 评估失败: ${err.message}，goal 已暂停，请手动干预。`,
+        'error',
+      );
     }
   })();
 }
@@ -420,7 +481,7 @@ export function triggerFailedTaskReview(
   (async () => {
     try {
       ctx.ensureGoalChannelSession(state, guildId);
-      const techLeadChannelId = state.techLeadChannelId ?? state.goalChannelId;
+      const techLeadChannelId = state.techLeadChannelId ?? state.channelId;
       const ps = ctx.deps.promptService;
       const prompt = ps.render('orchestrator.failed_task_review', {
         TASK_LABEL: ctx.getTaskLabel(state, task.id),
@@ -533,7 +594,7 @@ export function triggerTechLeadConsultation(
       const ps = ctx.deps.promptService;
       const prompt = ps.render('orchestrator.tech_lead_consultation', {
         GOAL_NAME: state.goalName,
-        GOAL_BRANCH: state.goalBranch,
+        GOAL_BRANCH: state.branch,
         GOAL_ID: state.goalId,
         SITUATION: situation,
         CONTEXT: details ?? '',

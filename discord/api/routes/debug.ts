@@ -26,7 +26,7 @@ export async function getRunningTasks(
     SELECT
       t.id, t.goal_id, t.description, t.status, t.pipeline_phase,
       t.channel_id, t.dispatched_at,
-      g.seq as goal_seq, g.name as goal_name, g.drive_status
+      g.seq as goal_seq, g.name as goal_name, g.status as goal_status
     FROM tasks t
     JOIN goals g ON t.goal_id = g.id
     WHERE t.status = 'running'

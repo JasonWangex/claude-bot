@@ -88,15 +88,6 @@ export class GoalOrchestrator {
   deps: OrchestratorDeps;
   mergeLocks = new Map<string, Promise<void>>();
   stateLocks = new Map<string, Promise<void>>();
-  activeDrives = new Map<string, GoalDriveState>();
-
-  // Check-in 监工状态（subtask）
-  checkInCounts = new Map<string, number>();         // taskId → check-in 次数
-  lastCheckInAt = new Map<string, number>();         // taskId → 上次 check-in 时间
-
-  // Tech Lead 轻推状态（completed + unmerged 任务）
-  techLeadNudgeCounts = new Map<string, number>();   // taskId → 轻推次数
-  lastTechLeadNudgeAt = new Map<string, number>();   // taskId → 上次轻推时间
 
   // goal event 重试计数（eventId → 失败次数），超过上限后放弃并标记已处理
   goalEventRetryCounts = new Map<string, number>();
@@ -131,51 +122,6 @@ export class GoalOrchestrator {
     }
   }
 
-  /** 同步 Goal 元数据 status */
-  async syncGoalMetaStatus(goalId: string, status: string): Promise<void> {
-    try {
-      const meta = await this.deps.goalMetaRepo.get(goalId);
-      if (meta) {
-        meta.status = status as any;
-        await this.deps.goalMetaRepo.save(meta);
-      }
-    } catch (err: any) {
-      logger.warn(`[Orchestrator] Failed to sync goal meta status: ${err.message}`);
-    }
-  }
-
-  /** 同步 Goal 元数据（progress / next / blockedBy / status） */
-  async syncGoalMeta(state: GoalDriveState): Promise<void> {
-    try {
-      const meta = await this.deps.goalMetaRepo.get(state.goalId);
-      if (!meta) return;
-
-      const total = state.tasks.filter(t => t.status !== 'cancelled' && t.status !== 'skipped').length;
-      const completed = state.tasks.filter(t => t.status === 'completed' && (!t.branchName || t.merged)).length;
-      const running = state.tasks.filter(t => t.status === 'dispatched' || t.status === 'running').length;
-      const failed = state.tasks.filter(t => t.status === 'failed').length;
-      meta.progress = JSON.stringify({ completed, total, running, failed });
-
-      if (isGoalComplete(state)) {
-        meta.status = 'Completed';
-        meta.next = `审查 ${state.goalBranch} 分支并合并到 main`;
-        meta.blockedBy = null;
-      } else if (isGoalStuck(state)) {
-        meta.status = 'Blocking';
-        meta.blockedBy = this.getStuckReason(state);
-        meta.next = null;
-      } else {
-        meta.status = 'Processing';
-        meta.blockedBy = null;
-        meta.next = this.getNextStepSummary(state);
-      }
-
-      await this.deps.goalMetaRepo.save(meta);
-    } catch (err: any) {
-      logger.warn(`[Orchestrator] Failed to sync goal meta: ${err.message}`);
-    }
-  }
-
   /** 获取 Goal 卡住的原因描述 */
   getStuckReason(state: GoalDriveState): string {
     const reasons: string[] = [];
@@ -207,7 +153,7 @@ export class GoalOrchestrator {
   }
 
   async getState(goalId: string): Promise<GoalDriveState | null> {
-    return this.activeDrives.get(goalId) || await this.deps.goalRepo.get(goalId);
+    return await this.deps.goalRepo.get(goalId);
   }
 
   async saveState(state: GoalDriveState): Promise<void> {
@@ -217,7 +163,7 @@ export class GoalOrchestrator {
 
   /** 发送通知到日志 channel */
   async notify(
-    threadId: string,
+    channelId: string,
     message: string,
     type?: NotifyType,
     options?: NotifyOptions,
@@ -243,7 +189,7 @@ export class GoalOrchestrator {
       }
 
       if (options?.driveChannel) {
-        await this.deps.mq.sendEmbed(threadId, message, {
+        await this.deps.mq.sendEmbed(channelId, message, {
           color: embedColor,
         });
       }
@@ -273,7 +219,7 @@ export class GoalOrchestrator {
     type?: NotifyType,
     options?: NotifyOptions,
   ): Promise<void> {
-    await this.notify(state.goalChannelId, message, type, options);
+    await this.notify(state.channelId, message, type, options);
     if (!options?.logOnly) {
       this.appendTimeline(state.goalId, message, type ?? 'info');
     }
@@ -320,10 +266,10 @@ export class GoalOrchestrator {
     try {
       const stdout = await execGit(
         ['worktree', 'list', '--porcelain'],
-        state.baseCwd,
+        state.cwd,
         `getGoalWorktreeDir: list worktrees`,
       );
-      return this.findWorktreeDir(stdout, state.goalBranch);
+      return this.findWorktreeDir(stdout, state.branch);
     } catch {
       return null;
     }
@@ -413,12 +359,12 @@ export class GoalOrchestrator {
 
   /** 确保 Tech Lead Channel 有 Opus 会话 */
   ensureGoalChannelSession(state: GoalDriveState, guildId: string): void {
-    const techLeadChannelId = state.techLeadChannelId ?? state.goalChannelId;
+    const techLeadChannelId = state.techLeadChannelId ?? state.channelId;
     this.deps.stateManager.getOrCreateSession(guildId, techLeadChannelId, {
       name: `tech-lead-${state.goalName}`,
-      cwd: state.baseCwd,
+      cwd: state.cwd,
     });
-    this.deps.stateManager.setSessionCwd(guildId, techLeadChannelId, state.baseCwd);
+    this.deps.stateManager.setSessionCwd(guildId, techLeadChannelId, state.cwd);
     this.deps.stateManager.setSessionModel(guildId, techLeadChannelId, this.deps.config.pipelineOpusModel);
   }
 
@@ -427,11 +373,11 @@ export class GoalOrchestrator {
     const auditSessionKey = `audit-${task.id}`;
     this.deps.stateManager.getOrCreateSession(guildId, auditSessionKey, {
       name: `audit-${task.id}`,
-      cwd: state.baseCwd,
+      cwd: state.cwd,
       hidden: true,
     });
     this.deps.stateManager.setSessionModel(guildId, auditSessionKey, this.deps.config.pipelineOpusModel);
-    this.deps.stateManager.setSessionForkInfo(guildId, auditSessionKey, state.goalChannelId, task.branchName ?? '');
+    this.deps.stateManager.setSessionForkInfo(guildId, auditSessionKey, state.channelId, task.branchName ?? '');
     logger.info(`[AuditSession] Created hidden audit session for task ${task.id}`);
     return auditSessionKey;
   }

@@ -16,13 +16,13 @@
 // ================================================================
 
 /** Goal 状态 */
-export type GoalStatus = 'Pending' | 'Collecting' | 'Planned' | 'Processing' | 'Blocking' | 'Completed' | 'Merged';
+export type GoalStatus = 'Pending' | 'Collecting' | 'Planned' | 'Processing' | 'Blocking' | 'Completed' | 'Merged' | 'Paused' | 'Failed';
 
 /** Goal 类型 */
 export type GoalType = '探索型' | '交付型';
 
 /** Goal Drive 运行状态（已有，re-export 保持一致） */
-export type { GoalDriveStatus, GoalTaskStatus, GoalTaskType } from './index.js';
+export type { GoalTaskStatus, GoalTaskType } from './index.js';
 
 // ================================================================
 // guilds 表 — 对应 GuildState 接口
@@ -58,12 +58,6 @@ export interface GoalRow {
   date: string | null;
   /** 完成标准 */
   completion: string | null;
-  /** 进度描述 (e.g. "2/6 子任务完成") */
-  progress: string | null;
-  /** 下一步 */
-  next: string | null;
-  /** 卡点说明 */
-  blocked_by: string | null;
   /** 页面正文 Markdown（完整内容） */
   body: string | null;
   /** 人类可读的短序号（g1, g2, ...），用于子任务命名前缀 */
@@ -71,22 +65,18 @@ export interface GoalRow {
 
   // ---- Drive 状态（Goal 被 drive 时填充）----
 
-  /** Drive 运行状态 */
-  drive_status: 'running' | 'paused' | 'completed' | 'failed' | null;
   /** Goal 的 git 分支名 */
-  drive_branch: string | null;
-  /** 调度员 Discord Thread ID */
-  drive_thread_id: string | null;
+  branch: string | null;
+  /** 调度员 Discord Channel ID */
+  channel_id: string | null;
   /** Drive 的基础工作目录 */
-  drive_base_cwd: string | null;
+  cwd: string | null;
   /** 最大并发子任务数 */
-  drive_max_concurrent: number | null;
-  /** Drive 创建时间 (Unix ms) */
-  drive_created_at: number | null;
-  /** Drive 最近更新时间 (Unix ms) */
-  drive_updated_at: number | null;
+  max_concurrent: number | null;
   /** Tech Lead 专用 Discord Channel ID */
   tech_lead_channel_id: string | null;
+  /** Phase 里程碑 JSON（{"1": "milestone...", "2": "..."}） */
+  phase_milestones: string | null;
 }
 
 // ================================================================
@@ -381,6 +371,14 @@ export interface TaskRow {
   detail_plan: string | null;
   audit_session_key: string | null;  // hidden audit session 的虚拟 channelId（'audit-{taskId}'）
   metadata_json: string | null;      // JSON: Record<string, any>，存储运行时扩展字段
+  /** check-in 次数 */
+  checkin_count: number;
+  /** 上次 check-in 时间 (Unix ms) */
+  last_checkin_at: number | null;
+  /** 轻推次数 */
+  nudge_count: number;
+  /** 上次轻推时间 (Unix ms) */
+  last_nudge_at: number | null;
 }
 
 // ================================================================
@@ -416,8 +414,6 @@ export interface PromptConfigRow {
 
 import type {
   GuildState,
-  GoalDriveState,
-  GoalTask,
 } from './index.js';
 
 /** GuildState → GuildRow */
@@ -425,15 +421,3 @@ export type GuildStateToRow = (guild: GuildState) => GuildRow;
 
 /** GuildRow → GuildState */
 export type RowToGuildState = (row: GuildRow) => GuildState;
-
-/** GoalDriveState → GoalRow + GoalTaskRow[] */
-export type GoalDriveStateToRows = (state: GoalDriveState) => {
-  goal: Partial<GoalRow>;
-  tasks: GoalTaskRow[];
-};
-
-/** GoalRow + GoalTaskRow[] → GoalDriveState */
-export type RowsToGoalDriveState = (
-  goal: GoalRow,
-  tasks: GoalTaskRow[],
-) => GoalDriveState;

@@ -19,7 +19,7 @@ import { forkTaskCore } from '../../utils/fork-task.js';
 import { logger } from '../../utils/logger.js';
 import { EmbedColors } from '../message-queue.js';
 import { getDb } from '../../db/index.js';
-import { GoalMetaRepo } from '../../db/goal-meta-repo.js';
+import { GoalRepo } from '../../db/repo/index.js';
 import type { CommandDeps } from './types.js';
 import { requireAuth, requireThread } from './utils.js';
 
@@ -70,11 +70,11 @@ async function handleGoal(
 
     try {
       const db = getDb();
-      const goalMetaRepo = new GoalMetaRepo(db);
-      const collectingGoals = await goalMetaRepo.findByStatus('Collecting');
-      const plannedGoals = await goalMetaRepo.findByStatus('Planned');
-      const processingGoals = await goalMetaRepo.findByStatus('Processing');
-      const blockingGoals = await goalMetaRepo.findByStatus('Blocking');
+      const goalMetaRepo = new GoalRepo(db);
+      const collectingGoals = await goalMetaRepo.findGoalsByStatus('Collecting');
+      const plannedGoals = await goalMetaRepo.findGoalsByStatus('Planned');
+      const processingGoals = await goalMetaRepo.findGoalsByStatus('Processing');
+      const blockingGoals = await goalMetaRepo.findGoalsByStatus('Blocking');
       const allGoals = [...collectingGoals, ...plannedGoals, ...processingGoals, ...blockingGoals];
 
       if (allGoals.length === 0) {
@@ -95,21 +95,7 @@ async function handleGoal(
       const lines = allGoals.map((goal, i) => {
         const emoji = statusEmoji[goal.status] || '\u26AA';
         let line = `**${i + 1}.** ${emoji} ${goal.name}`;
-        if (goal.progress) {
-          try {
-            const p = JSON.parse(goal.progress);
-            if (typeof p.completed === 'number' && typeof p.total === 'number') {
-              line += `\n   Progress: ${p.completed}/${p.total} 完成`;
-              if (p.running > 0) line += `, ${p.running} 进行中`;
-              if (p.failed > 0) line += `, ${p.failed} 失败`;
-            } else {
-              line += `\n   Progress: ${goal.progress}`;
-            }
-          } catch {
-            line += `\n   Progress: ${goal.progress}`;
-          }
-        }
-        if (goal.next) line += `\n   Next: ${goal.next}`;
+
         if (goal.project) line += `\n   Project: \`${goal.project}\``;
         return line;
       });

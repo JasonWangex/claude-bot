@@ -64,6 +64,8 @@ import migration048 from './migrations/048_test_review_three_verdicts.js';
 import migration049 from './migrations/049_fix_test_rules_self_resolve.js';
 import migration050 from './migrations/050_update_consultation_prompt_replan.js';
 import migration051 from './migrations/051_goals_add_tech_lead_channel.js';
+import migration052 from './migrations/052_goal_schema_refactor.js';
+import migration053 from './migrations/053_acceptance_criteria.js';
 
 const allMigrations: Migration[] = [
   migration001,
@@ -117,6 +119,8 @@ const allMigrations: Migration[] = [
   migration049,
   migration050,
   migration051,
+  migration052,
+  migration053,
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -204,7 +208,6 @@ export type { Migration } from './migrate.js';
 // Re-export Repository 实现
 export { DevLogRepository } from './devlog-repo.js';
 export { IdeaRepository } from './idea-repo.js';
-export { GoalMetaRepo } from './goal-meta-repo.js';
 export { GoalRepo, TaskRepo } from './repo/index.js';
 /** @deprecated Use TaskRepo */
 export { TaskRepo as GoalTaskRepo } from './repo/index.js';

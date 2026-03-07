@@ -62,7 +62,7 @@ async function runGoalAudit(
   }
 
   // 3. 设置 audit session（使用 tech lead channel，Opus 模型，CWD = goal worktree）
-  const auditChannelId = state.techLeadChannelId ?? state.goalChannelId;
+  const auditChannelId = state.techLeadChannelId ?? state.channelId;
   ctx.deps.stateManager.getOrCreateSession(guildId, auditChannelId, {
     name: `audit-${state.goalName}`,
     cwd: goalWorktreeDir,
@@ -72,7 +72,7 @@ async function runGoalAudit(
 
   // 4. 发送通知：审查开始
   await ctx.notifyGoal(state,
-    `**代码审查开始** — Goal \`${state.goalName}\` 已完成，正在对分支 \`${state.goalBranch}\` 进行自动代码审查...\n` +
+    `**代码审查开始** — Goal \`${state.goalName}\` 已完成，正在对分支 \`${state.branch}\` 进行自动代码审查...\n` +
     `变更文件数: ${changedFilesCount}`,
     'info',
   );
@@ -101,13 +101,13 @@ function buildGoalAuditPrompt(
 ): string {
   return `# Goal 代码审查
 
-Goal **"${state.goalName}"** 的所有子任务已完成，全部代码变更已合并到分支 \`${state.goalBranch}\`。
+Goal **"${state.goalName}"** 的所有子任务已完成，全部代码变更已合并到分支 \`${state.branch}\`。
 
 请对本次 Goal 的全部代码变更进行系统性代码审查，输出完整审查报告。
 
 ## 变更信息
 
-- 分支: \`${state.goalBranch}\`
+- 分支: \`${state.branch}\`
 - 变更文件数: ${changedFilesCount}
 
 **Diff 统计:**

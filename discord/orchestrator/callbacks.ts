@@ -103,8 +103,7 @@ export async function onTaskCompleted(
     if (guildId && task.branchName) {
       ctx.triggerTaskReview(state, task, guildId);
     } else {
-      // 无分支（调研等）→ 直接 merge/dispatch
-      if (task.branchName) await ctx.mergeAndCleanup(state, task);
+      // 无分支（调研等）→ 直接触发下一轮调度
       const refreshed = await ctx.getState(goalId);
       if (refreshed && refreshed.status === 'running') await ctx.reviewAndDispatch(refreshed, taskId);
     }

@@ -199,7 +199,7 @@ export async function stopTask(ctx: GoalOrchestrator, goalId: string, taskId: st
 
   abortTaskSession(ctx, task);
 
-  task.status = 'failed';
+  task.status = 'cancelled';
   task.error = 'Stopped by user';
   await ctx.saveState(state);
   await ctx.notifyGoal(state,
