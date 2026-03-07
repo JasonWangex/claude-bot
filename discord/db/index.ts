@@ -62,6 +62,8 @@ import migration046 from './migrations/046_add_tech_lead_consultation_prompt.js'
 import migration047 from './migrations/047_update_test_task_prompts.js';
 import migration048 from './migrations/048_test_review_three_verdicts.js';
 import migration049 from './migrations/049_fix_test_rules_self_resolve.js';
+import migration050 from './migrations/050_update_consultation_prompt_replan.js';
+import migration051 from './migrations/051_goals_add_tech_lead_channel.js';
 
 const allMigrations: Migration[] = [
   migration001,
@@ -113,6 +115,8 @@ const allMigrations: Migration[] = [
   migration047,
   migration048,
   migration049,
+  migration050,
+  migration051,
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -201,7 +205,7 @@ export type { Migration } from './migrate.js';
 export { DevLogRepository } from './devlog-repo.js';
 export { IdeaRepository } from './idea-repo.js';
 export { GoalMetaRepo } from './goal-meta-repo.js';
-export { GoalRepo, TaskRepo, CheckpointRepo } from './repo/index.js';
+export { GoalRepo, TaskRepo } from './repo/index.js';
 /** @deprecated Use TaskRepo */
 export { TaskRepo as GoalTaskRepo } from './repo/index.js';
 export { GuildRepository } from './repo/index.js';

@@ -15,7 +15,6 @@ export type {
   IGoalMetaRepo,
   ITaskRepo,
   IGoalTaskRepo,
-  IGoalCheckpointRepo,
   IDevLogRepo,
   IIdeaRepo,
 } from './repository.js';
@@ -356,24 +355,6 @@ export type GoalPipelinePhase = PipelinePhase;
 /** @deprecated Use Task */
 export type GoalTask = Task;
 
-/** 待用户确认的回滚操作 */
-export interface PendingRollback {
-  checkpointId: string;
-  /** 被暂停的受影响任务（回滚前状态为 running/dispatched 的任务） */
-  pausedTaskIds: string[];
-  /** 成本评估摘要 */
-  costSummary: string;
-  /** 受影响任务详情 */
-  affectedTasks: Array<{
-    id: string;
-    description: string;
-    previousStatus: GoalTaskStatus;
-    runtime?: number;        // 运行时长 ms
-    diffStat?: string;       // git diff --stat 输出
-  }>;
-  createdAt: number;
-}
-
 export interface GoalDriveState {
   goalId: string;
   goalSeq: number;            // 短序号，用于子任务命名前缀（g1, g2, ...）
@@ -388,22 +369,6 @@ export interface GoalDriveState {
   maxConcurrent: number;
 
   tasks: Task[];
-
-  /** 待用户确认的回滚操作 */
-  pendingRollback?: PendingRollback;
-}
-
-// Goal 快照检查点
-export interface GoalCheckpoint {
-  id: string;
-  goalId: string;
-  trigger: string;
-  triggerTaskId?: string;
-  reason?: string;
-  tasksSnapshot?: GoalTask[];
-  gitRef?: string;
-  changeSummary?: string;
-  createdAt: number;
 }
 
 // Thread 归档会话
@@ -456,7 +421,7 @@ export interface ClaudeSession {
   status: 'active' | 'waiting' | 'idle' | 'closed';  // 扩展状态支持
   createdAt: number;
   closedAt?: number;
-  purpose?: 'channel' | 'plan' | 'temp' | 'replan';  // 会话用途
+  purpose?: 'channel' | 'plan' | 'temp';  // 会话用途
   parentSessionId?: string;  // 父会话 CLI session_id
   lastActivityAt?: number;   // 最后活动时间（用于超时监控）
   lastUsageJson?: string;    // 最后一次 token/cost 数据（JSON string）

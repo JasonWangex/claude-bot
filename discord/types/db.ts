@@ -85,8 +85,8 @@ export interface GoalRow {
   drive_created_at: number | null;
   /** Drive 最近更新时间 (Unix ms) */
   drive_updated_at: number | null;
-  /** JSON: pendingRollback + techLeadChannelId（重启恢复用） */
-  drive_pending_json: string | null;
+  /** Tech Lead 专用 Discord Channel ID */
+  tech_lead_channel_id: string | null;
 }
 
 // ================================================================
@@ -225,31 +225,6 @@ export interface GoalTodoRow {
 }
 
 // ================================================================
-// goal_checkpoints 表 — 对应 GoalCheckpoint 接口
-// ================================================================
-
-export interface GoalCheckpointRow {
-  /** UUID (PRIMARY KEY) */
-  id: string;
-  /** 所属 Goal ID (FOREIGN KEY → goals.id) */
-  goal_id: string;
-  /** 触发方式，如 'task_complete' | 'manual' | 'phase_change' */
-  trigger: string;
-  /** 触发任务 ID（可选） */
-  trigger_task_id: string | null;
-  /** 触发原因 */
-  reason: string | null;
-  /** 任务列表快照 (JSON) */
-  tasks_snapshot: string | null;
-  /** git 引用（commit hash 或 branch） */
-  git_ref: string | null;
-  /** 变更摘要 */
-  change_summary: string | null;
-  /** 创建时间 (Unix ms) */
-  created_at: number;
-}
-
-// ================================================================
 // knowledge_base 表
 // ================================================================
 
@@ -328,7 +303,7 @@ export interface ClaudeSessionRow {
   status: 'active' | 'waiting' | 'idle' | 'closed';  // 扩展状态支持
   created_at: number;
   closed_at: number | null;
-  purpose: 'channel' | 'plan' | 'temp' | 'replan' | null;  // 会话用途
+  purpose: 'channel' | 'plan' | 'temp' | null;  // 会话用途
   parent_session_id: string | null;  // 父会话 CLI session_id
   last_activity_at: number | null;   // 最后活动时间
   last_usage_json: string | null;    // 最后一次 token/cost 数据（JSON）

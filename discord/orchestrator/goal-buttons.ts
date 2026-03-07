@@ -17,25 +17,6 @@ import {
 
 export const GOAL_BUTTON_PREFIX = 'goal:';
 
-// ==================== 回滚确认按钮 ====================
-
-/**
- * 生成回滚确认/取消按钮组
- */
-export function buildRollbackConfirmButtons(goalId: string): ActionRowBuilder<ButtonBuilder>[] {
-  const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-    new ButtonBuilder()
-      .setCustomId(`goal:confirm_rollback:${goalId}`)
-      .setLabel('✅ 确认回滚')
-      .setStyle(ButtonStyle.Danger),
-    new ButtonBuilder()
-      .setCustomId(`goal:cancel_rollback:${goalId}`)
-      .setLabel('🚫 取消')
-      .setStyle(ButtonStyle.Secondary),
-  );
-  return [row];
-}
-
 // ==================== 任务失败 retry 按钮 ====================
 
 /**

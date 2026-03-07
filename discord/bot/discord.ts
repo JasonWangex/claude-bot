@@ -25,7 +25,7 @@ import { generateBranchName } from '../utils/git-utils.js';
 import { generateTopicTitle } from '../utils/llm.js';
 import { forkTaskCore } from '../utils/fork-task.js';
 import { initDb, getDb, closeDb } from '../db/index.js';
-import { GoalRepo, TaskRepo, CheckpointRepo } from '../db/repo/index.js';
+import { GoalRepo, TaskRepo } from '../db/repo/index.js';
 import { GoalMetaRepo } from '../db/goal-meta-repo.js';
 import { GoalTodoRepository } from '../db/goal-todo-repo.js';
 import { TaskEventRepo } from '../db/repo/task-event-repo.js';
@@ -497,34 +497,6 @@ export class DiscordBot {
 
     try {
       switch (action) {
-        case 'rollback': {
-          if (!extra) {
-            await interaction.reply({ content: '缺少检查点 ID', ephemeral: true }).catch(() => {});
-            return;
-          }
-          await interaction.update({ content: '\u23F3 正在评估回滚成本...', components: [] }).catch(() => {});
-          const pending = await this.orchestrator.rollback(goalId, extra);
-          if (!pending) {
-            await interaction.followUp({ content: '回滚评估失败，请查看 Goal thread', ephemeral: true }).catch(() => {});
-          }
-          break;
-        }
-
-        case 'confirm_rollback': {
-          await interaction.update({ content: '\u23F3 正在执行回滚...', components: [] }).catch(() => {});
-          const ok = await this.orchestrator.confirmRollback(goalId);
-          if (!ok) {
-            await interaction.followUp({ content: '回滚执行失败', ephemeral: true }).catch(() => {});
-          }
-          break;
-        }
-
-        case 'cancel_rollback': {
-          await interaction.update({ content: '\u{1F6AB} 已取消回滚', components: [] }).catch(() => {});
-          await this.orchestrator.cancelRollback(goalId);
-          break;
-        }
-
         case 'retry_task': {
           if (!extra) return;
           await interaction.update({ content: '🔄 正在重试...', components: [] }).catch(() => {});
@@ -863,7 +835,6 @@ export class DiscordBot {
     const goalRepo = new GoalRepo(db);
     const goalMetaRepo = new GoalMetaRepo(db);
     const taskRepo = new TaskRepo(db);
-    const checkpointRepo = new CheckpointRepo(db);
     const goalTodoRepo = new GoalTodoRepository(db);
     const orchestratorChannelRepo = new ChannelRepository(db);
     const taskEventRepo = new TaskEventRepo(db);
@@ -879,7 +850,6 @@ export class DiscordBot {
       goalRepo,
       goalMetaRepo,
       taskRepo,
-      checkpointRepo,
       goalTodoRepo,
       channelRepo: orchestratorChannelRepo,
       taskEventRepo,

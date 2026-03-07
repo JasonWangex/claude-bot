@@ -40,12 +40,12 @@ export class GoalRepo implements IGoalRepo {
           id, name, status,
           drive_status, drive_branch, drive_thread_id, drive_base_cwd,
           drive_max_concurrent, drive_created_at, drive_updated_at,
-          drive_pending_json
+          tech_lead_channel_id
         ) VALUES (
           @id, @name, COALESCE((SELECT status FROM goals WHERE id = @id), 'Processing'),
           @drive_status, @drive_branch, @drive_thread_id, @drive_base_cwd,
           @drive_max_concurrent, @drive_created_at, @drive_updated_at,
-          @drive_pending_json
+          @tech_lead_channel_id
         )
         ON CONFLICT(id) DO UPDATE SET
           name = @name,
@@ -56,7 +56,7 @@ export class GoalRepo implements IGoalRepo {
           drive_max_concurrent = @drive_max_concurrent,
           drive_created_at = @drive_created_at,
           drive_updated_at = @drive_updated_at,
-          drive_pending_json = @drive_pending_json
+          tech_lead_channel_id = @tech_lead_channel_id
       `),
 
       deleteGoal: this.db.prepare(`DELETE FROM goals WHERE id = ?`),
@@ -91,7 +91,7 @@ export class GoalRepo implements IGoalRepo {
       this.stmts.upsertGoal.run(goalDriveStateToGoalRow(state));
 
       if (state.tasks.length === 0) {
-        // 无任务时直接清空（replan 后任务全部重建的边界情况）
+        // 无任务时直接清空
         this.db.prepare(`DELETE FROM tasks WHERE goal_id = ?`).run(state.goalId);
         return;
       }
@@ -171,7 +171,7 @@ export class GoalRepo implements IGoalRepo {
         });
       }
 
-      // 3. 删除孤儿任务（replan 期间被移除的任务）
+      // 3. 删除孤儿任务（tech lead 通过 MCP 移除的任务）
       const ids = state.tasks.map(t => t.id);
       const placeholders = ids.map(() => '?').join(',');
       this.db
@@ -199,12 +199,6 @@ export class GoalRepo implements IGoalRepo {
 // ==================== 转换函数 ====================
 
 function goalDriveStateToGoalRow(state: GoalDriveState): Record<string, unknown> {
-  // 序列化 pendingRollback + techLeadChannelId 为 JSON
-  const pending: Record<string, unknown> = {};
-  if (state.pendingRollback) pending.pendingRollback = state.pendingRollback;
-  if (state.techLeadChannelId) pending.techLeadChannelId = state.techLeadChannelId;
-  const pendingJson = Object.keys(pending).length > 0 ? JSON.stringify(pending) : null;
-
   return {
     id: state.goalId,
     name: state.goalName,
@@ -215,7 +209,7 @@ function goalDriveStateToGoalRow(state: GoalDriveState): Record<string, unknown>
     drive_max_concurrent: state.maxConcurrent,
     drive_created_at: state.createdAt,
     drive_updated_at: state.updatedAt,
-    drive_pending_json: pendingJson,
+    tech_lead_channel_id: state.techLeadChannelId ?? null,
   };
 }
 
@@ -223,31 +217,18 @@ function rowsToGoalDriveState(
   goal: GoalRow,
   tasks: TaskRow[],
 ): GoalDriveState {
-  // 反序列化 pendingRollback / techLeadChannelId
-  let pendingRollback: GoalDriveState['pendingRollback'];
-  let techLeadChannelId: string | undefined;
-  if (goal.drive_pending_json) {
-    try {
-      const pending = JSON.parse(goal.drive_pending_json);
-      pendingRollback = pending.pendingRollback;
-      // 兼容旧字段名 reviewerChannelId
-      techLeadChannelId = pending.techLeadChannelId ?? pending.reviewerChannelId;
-    } catch { /* ignore corrupt JSON */ }
-  }
-
   return {
     goalId: goal.id,
     goalSeq: goal.seq ?? 0,
     goalName: goal.name,
     goalBranch: goal.drive_branch ?? '',
     goalChannelId: goal.drive_thread_id ?? '',
-    techLeadChannelId,
+    techLeadChannelId: goal.tech_lead_channel_id ?? undefined,
     baseCwd: goal.drive_base_cwd ?? '',
     status: (goal.drive_status as GoalDriveStatus) ?? 'running',
     createdAt: goal.drive_created_at ?? 0,
     updatedAt: goal.drive_updated_at ?? 0,
     maxConcurrent: goal.drive_max_concurrent ?? 2,
-    pendingRollback,
     tasks: tasks.map((t) => ({
       id: t.id,
       goalId: t.goal_id ?? undefined,

@@ -31,8 +31,8 @@ import { getNotifyMention } from '../utils/env.js';
  * Review completed task results and decide what to dispatch next.
  *
  * Runs three review passes before falling through to normal dispatch:
- *   1. Placeholder task interception (trigger replan when deps are met)
- *   2. Deep review of research tasks that didn't submit replan feedback
+ *   1. Placeholder task interception (notify tech lead when deps are met)
+ *   2. Deep review of research tasks that completed without feedback
  *   3. Feedback routing for blocked_feedback tasks
  */
 export async function reviewAndDispatch(

@@ -12,7 +12,7 @@
 
 import { ChannelType } from 'discord.js';
 import { EmbedColors, type EmbedColor } from '../bot/message-queue.js';
-import type { GoalDriveState, GoalTask, GoalTaskFeedback, PipelinePhase, PendingRollback, ChatUsageResult } from '../types/index.js';
+import type { GoalDriveState, GoalTask, GoalTaskFeedback, PipelinePhase, ChatUsageResult } from '../types/index.js';
 import { ClaudeErrorType, ClaudeExecutionError } from '../types/index.js';
 import { getAuthorizedGuildId, getGoalLogChannelId } from '../utils/env.js';
 import { execGit } from './git-ops.js';
@@ -53,11 +53,6 @@ import {
   onTaskCompleted as _onTaskCompleted,
   onTaskFailed as _onTaskFailed,
 } from './callbacks.js';
-import {
-  rollback as _rollback,
-  confirmRollback as _confirmRollback,
-  cancelRollback as _cancelRollback,
-} from './rollback-handler.js';
 import {
   startFeedbackInvestigation as _startFeedbackInvestigation,
   buildFeedbackInvestigationPrompt as _buildFeedbackInvestigationPrompt,
@@ -556,11 +551,6 @@ export class GoalOrchestrator {
   // -- Callbacks --
   async onTaskCompleted(goalId: string, taskId: string, usage?: ChatUsageResult) { return _onTaskCompleted(this, goalId, taskId, usage); }
   async onTaskFailed(goalId: string, taskId: string, error: string, usage?: ChatUsageResult) { return _onTaskFailed(this, goalId, taskId, error, usage); }
-
-  // -- Rollback --
-  async rollback(goalId: string, checkpointId: string) { return _rollback(this, goalId, checkpointId); }
-  async confirmRollback(goalId: string) { return _confirmRollback(this, goalId); }
-  async cancelRollback(goalId: string) { return _cancelRollback(this, goalId); }
 
   // -- Feedback --
   startFeedbackInvestigation(state: GoalDriveState, task: GoalTask, guildId: string) { return _startFeedbackInvestigation(this, state, task, guildId); }

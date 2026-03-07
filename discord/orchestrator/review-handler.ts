@@ -534,6 +534,7 @@ export function triggerTechLeadConsultation(
       const prompt = ps.render('orchestrator.tech_lead_consultation', {
         GOAL_NAME: state.goalName,
         GOAL_BRANCH: state.goalBranch,
+        GOAL_ID: state.goalId,
         SITUATION: situation,
         CONTEXT: details ?? '',
         STUCK_TASKS: stuckTasks,
