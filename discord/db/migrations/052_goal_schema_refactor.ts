@@ -28,6 +28,9 @@ const migration: Migration = {
       UPDATE goals SET status = 'Failed'     WHERE drive_status = 'failed';
     `);
 
+    // 删除引用 drive_status 的索引（DROP COLUMN 不能有索引存在）
+    db.exec(`DROP INDEX IF EXISTS idx_goals_drive_status;`);
+
     // 删除废弃列（SQLite 3.35+）
     db.exec(`
       ALTER TABLE goals DROP COLUMN drive_status;
