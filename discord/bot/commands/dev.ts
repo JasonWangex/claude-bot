@@ -12,13 +12,14 @@ import {
 } from 'discord.js';
 import { qdevCore } from '../../utils/qdev-core.js';
 import { logger } from '../../utils/logger.js';
-import { EmbedColors } from '../message-queue.js';
+import { EmbedColors, MessagePriority } from '../message-queue.js';
 import { StateManager } from '../state.js';
 import { getDb } from '../../db/index.js';
 import { IdeaRepository } from '../../db/idea-repo.js';
 import { buildIdeaPromoteButtons } from '../idea-buttons.js';
 import { MODEL_OPTIONS } from './task.js';
 import type { Idea } from '../../types/repository.js';
+import { IdeaStatus, IdeaType } from '../../types/repository.js';
 import type { CommandDeps } from './types.js';
 import { requireAuth, requireThread } from './utils.js';
 
@@ -264,8 +265,8 @@ async function handleIdea(
       const idea: Idea = {
         id: randomUUID(),
         name: args,
-        status: 'Idea',
-        type: 'manual',
+        status: IdeaStatus.Idea,
+        type: IdeaType.Manual,
         project,
         date: today,
         body: null,
@@ -277,7 +278,7 @@ async function handleIdea(
       await ideaRepo.save(idea);
       await messageQueue.send(channelId, `Idea recorded: **${args}**\nProject: \`${project}\``, {
         embedColor: EmbedColors.GREEN,
-        priority: 'high',
+        priority: MessagePriority.High,
       });
     } catch (err: any) {
       logger.error('idea record failed:', err);
@@ -290,12 +291,12 @@ async function handleIdea(
     try {
       const db = getDb();
       const ideaRepo = new IdeaRepository(db);
-      const ideas = await ideaRepo.findByStatus('Idea');
+      const ideas = await ideaRepo.findByStatus(IdeaStatus.Idea);
 
       if (ideas.length === 0) {
         await messageQueue.send(channelId, 'No undeveloped ideas found.', {
           embedColor: EmbedColors.GRAY,
-          priority: 'high',
+          priority: MessagePriority.High,
         });
         return;
       }
@@ -313,7 +314,7 @@ async function handleIdea(
         {
           components: rows as any,
           embedColor: EmbedColors.PURPLE,
-          priority: 'high',
+          priority: MessagePriority.High,
         },
       );
     } catch (err: any) {

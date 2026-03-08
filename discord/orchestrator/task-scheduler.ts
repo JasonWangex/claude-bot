@@ -5,6 +5,7 @@
  */
 
 import type { GoalDriveState, GoalTask } from '../types/index.js';
+import { TaskStatus, TaskType, GoalDriveStatus } from '../types/index.js';
 
 /**
  * 获取所有可派发的 pending 任务
@@ -20,8 +21,8 @@ import type { GoalDriveState, GoalTask } from '../types/index.js';
  *  - skipped / cancelled → 终结
  */
 const isTerminal = (task: GoalTask): boolean => {
-  if (task.status === 'skipped' || task.status === 'cancelled') return true;
-  if (task.status === 'completed') {
+  if (task.status === TaskStatus.Skipped || task.status === TaskStatus.Cancelled) return true;
+  if (task.status === TaskStatus.Completed) {
     return !task.branchName || task.merged === true;
   }
   return false;
@@ -38,10 +39,10 @@ export function getDispatchableTasks(state: GoalDriveState): GoalTask[] {
   };
 
   for (const task of state.tasks) {
-    if (task.status !== 'pending') continue;
+    if (task.status !== TaskStatus.Pending) continue;
 
     // 占位任务不自动派发
-    if (task.type === '占位') continue;
+    if (task.type === TaskType.Placeholder) continue;
 
     // 检查 phase 依赖
     if (task.phase != null && task.phase > 1) {
@@ -61,7 +62,7 @@ export function getDispatchableTasks(state: GoalDriveState): GoalTask[] {
  */
 export function getNextBatch(state: GoalDriveState): GoalTask[] {
   const activeCount = state.tasks.filter(
-    t => t.status === 'dispatched' || t.status === 'running'
+    t => t.status === TaskStatus.Dispatched || t.status === TaskStatus.Running
   ).length;
 
   const available = state.maxConcurrent - activeCount;
@@ -72,8 +73,8 @@ export function getNextBatch(state: GoalDriveState): GoalTask[] {
   // 手动任务标记为 blocked 而不是派发
   const auto: GoalTask[] = [];
   for (const task of dispatchable) {
-    if (task.type === '手动') {
-      task.status = 'blocked';
+    if (task.type === TaskType.Manual) {
+      task.status = TaskStatus.Blocked;
     } else {
       auto.push(task);
     }
@@ -91,18 +92,18 @@ export function isGoalComplete(state: GoalDriveState): boolean {
 export function isGoalStuck(state: GoalDriveState): boolean {
   // blocked_feedback / paused 状态直接视为卡住
   const hasBlockedOrPaused = state.tasks.some(
-    t => t.status === 'blocked_feedback' || t.status === 'paused'
+    t => t.status === TaskStatus.BlockedFeedback || t.status === TaskStatus.Paused
   );
   if (hasBlockedOrPaused) return true;
 
   // completed 但未 merged 的任务阻塞后续（merge 失败等情况）
   const hasUnmerged = state.tasks.some(
-    t => t.status === 'completed' && t.branchName && !t.merged
+    t => t.status === TaskStatus.Completed && t.branchName && !t.merged
   );
   if (hasUnmerged) return true;
 
-  const hasPending = state.tasks.some(t => t.status === 'pending');
-  const hasActive = state.tasks.some(t => t.status === 'dispatched' || t.status === 'running');
+  const hasPending = state.tasks.some(t => t.status === TaskStatus.Pending);
+  const hasActive = state.tasks.some(t => t.status === TaskStatus.Dispatched || t.status === TaskStatus.Running);
   if (!hasPending || hasActive) return false;
 
   // 有 pending 但没有 active，且没有可派发的 → 卡住
@@ -135,10 +136,10 @@ export function getCurrentPhase(state: GoalDriveState): number {
 export function getProgressSummary(state: GoalDriveState): string {
   const total = state.tasks.length;
   const merged = state.tasks.filter(t => isTerminal(t)).length;
-  const unmerged = state.tasks.filter(t => t.status === 'completed' && t.branchName && !t.merged).length;
-  const running = state.tasks.filter(t => t.status === 'dispatched' || t.status === 'running').length;
-  const failed = state.tasks.filter(t => t.status === 'failed').length;
-  const blocked = state.tasks.filter(t => t.status === 'blocked').length;
+  const unmerged = state.tasks.filter(t => t.status === TaskStatus.Completed && t.branchName && !t.merged).length;
+  const running = state.tasks.filter(t => t.status === TaskStatus.Dispatched || t.status === TaskStatus.Running).length;
+  const failed = state.tasks.filter(t => t.status === TaskStatus.Failed).length;
+  const blocked = state.tasks.filter(t => t.status === TaskStatus.Blocked).length;
 
   const parts = [`${merged}/${total} 完成`];
   if (unmerged > 0) parts.push(`${unmerged} 待合并`);

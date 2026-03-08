@@ -12,8 +12,9 @@ import type { IncomingMessage, ServerResponse } from 'http';
 import type { ApiDeps } from '../types.js';
 import { sendJson, readJsonBody } from '../middleware.js';
 import { logger } from '../../utils/logger.js';
-import { EmbedColors } from '../../bot/message-queue.js';
+import { EmbedColors, MessagePriority } from '../../bot/message-queue.js';
 import { getNotifyMention } from '../../utils/env.js';
+import { TaskStatus } from '../../types/index.js';
 
 // Session 级别的并发锁（防止并发 Hook 事件导致状态覆盖）
 const sessionLocks = new Map<string, Promise<void>>();
@@ -237,7 +238,7 @@ async function handleNotification(
         const msgId = await deps.mq.send(
           channelId,
           `${getNotifyMention()} 等待输入 ${usageText}`,
-          { priority: 'high', embedColor: EmbedColors.BLUE }
+          { priority: MessagePriority.High, embedColor: EmbedColors.BLUE }
         );
 
         // 记录消息 ID 用于后续删除
@@ -349,7 +350,7 @@ async function handleStop(
         logger.debug('[Hook] Done already sent by handler, skipping');
         return;
       }
-      await deps.mq.send(channelId, doneText, { priority: 'high', embedColor: EmbedColors.GREEN });
+      await deps.mq.send(channelId, doneText, { priority: MessagePriority.High, embedColor: EmbedColors.GREEN });
       deps.stateManager.setDoneSentAt(channelId);
       logger.info('[Hook] Sent fallback Done message');
     } catch (err) {
@@ -393,7 +394,7 @@ async function handleSessionEnd(
     try {
       const result = await taskRepo.findByChannelId(channelId);
       if (!result || !result.goalId) return;
-      if (result.task.status === 'running') {
+      if (result.task.status === TaskStatus.Running) {
         logger.warn(`[Hook] Marking task ${result.task.id} as failed due to session termination`);
         await deps.orchestrator.onTaskFailed(
           result.goalId,
@@ -425,7 +426,7 @@ async function checkGoalTaskCompletion(
   try {
     const result = await taskRepo.findByChannelId(channelId);
     if (!result) return;
-    const runningTask = result.task.status === 'running' && result.goalId ? result.task : null;
+    const runningTask = result.task.status === TaskStatus.Running && result.goalId ? result.task : null;
 
     if (!runningTask) {
       logger.debug('[Hook] No running goal task found, skip completion check');

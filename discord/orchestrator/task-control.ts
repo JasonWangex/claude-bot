@@ -11,6 +11,8 @@
 import { DiscordAPIError } from 'discord.js';
 import type { GoalOrchestrator } from './index.js';
 import type { GoalTask } from '../types/index.js';
+import { TaskStatus, PipelinePhase, GoalDriveStatus } from '../types/index.js';
+import { NotifyType } from './orchestrator-types.js';
 import { StateManager } from '../bot/state.js';
 import { logger } from '../utils/logger.js';
 
@@ -31,12 +33,12 @@ export async function skipTask(ctx: GoalOrchestrator, goalId: string, taskId: st
   const task = state.tasks.find(t => t.id === taskId);
   if (!task) return false;
 
-  if (task.status === 'running') abortTaskSession(ctx, task);
+  if (task.status === TaskStatus.Running) abortTaskSession(ctx, task);
 
-  task.status = 'skipped';
+  task.status = TaskStatus.Skipped;
   await ctx.saveState(state);
-  await ctx.notifyGoal(state, `Skipped task: ${ctx.getTaskLabel(state, task.id)} - ${task.description}`, 'info');
-  if (state.status === 'running') await ctx.reviewAndDispatch(state);
+  await ctx.notifyGoal(state, `Skipped task: ${ctx.getTaskLabel(state, task.id)} - ${task.description}`, NotifyType.Info);
+  if (state.status === GoalDriveStatus.Running) await ctx.reviewAndDispatch(state);
   return true;
 }
 
@@ -46,13 +48,13 @@ export async function markTaskDone(ctx: GoalOrchestrator, goalId: string, taskId
   const task = state.tasks.find(t => t.id === taskId);
   if (!task) return false;
 
-  if (task.status === 'running') abortTaskSession(ctx, task);
+  if (task.status === TaskStatus.Running) abortTaskSession(ctx, task);
 
-  task.status = 'completed';
+  task.status = TaskStatus.Completed;
   task.completedAt = Date.now();
   await ctx.saveState(state);
-  await ctx.notifyGoal(state, `Manual task completed: ${ctx.getTaskLabel(state, task.id)} - ${task.description}`, 'success');
-  if (state.status === 'running') await ctx.reviewAndDispatch(state, taskId);
+  await ctx.notifyGoal(state, `Manual task completed: ${ctx.getTaskLabel(state, task.id)} - ${task.description}`, NotifyType.Success);
+  if (state.status === GoalDriveStatus.Running) await ctx.reviewAndDispatch(state, taskId);
   return true;
 }
 
@@ -72,7 +74,7 @@ export async function retryTask(ctx: GoalOrchestrator, goalId: string, taskId: s
   if (!guildId) return false;
 
   // 如果任务正在运行，先 abort
-  if (task.status === 'running') abortTaskSession(ctx, task);
+  if (task.status === TaskStatus.Running) abortTaskSession(ctx, task);
 
   // 有 channel 上下文 → 先验证 channel 是否仍存在
   if (task.channelId) {
@@ -88,15 +90,15 @@ export async function retryTask(ctx: GoalOrchestrator, goalId: string, taskId: s
     if (channel) {
       // channel 存在 → 保留 branch/thread，在原 channel 中 resume
       const savedError = task.error;
-      task.status = 'running';
+      task.status = TaskStatus.Running;
       task.error = undefined;
-      task.pipelinePhase = 'execute';
+      task.pipelinePhase = PipelinePhase.Execute;
       task.feedback = undefined;
       task.auditRetries = 0;
       await ctx.saveState(state);
       await ctx.notifyGoal(state,
         `Retrying task (resume): ${ctx.getTaskLabel(state, task.id)} - ${task.description}`,
-        'warning',
+        NotifyType.Warning,
       );
       const errorHint = savedError ? `\n上次错误：${savedError}` : '';
       const prompt = `[Retry] 任务${errorHint ? '因以下原因失败，请修正后继续' : '恢复执行'}。${errorHint}\n请检查工作区现有进度并继续完成任务。`;
@@ -111,7 +113,7 @@ export async function retryTask(ctx: GoalOrchestrator, goalId: string, taskId: s
 
   // 无有效 channel → 轻量重置后重新派发（不清除统计数据）
   // 注意：branchName 保留，dispatchTask 会独立检查分支是否存在，缺什么补什么
-  task.status = 'pending';
+  task.status = TaskStatus.Pending;
   task.error = undefined;
   task.channelId = undefined;
   task.dispatchedAt = undefined;
@@ -121,8 +123,8 @@ export async function retryTask(ctx: GoalOrchestrator, goalId: string, taskId: s
   ctx.deps.taskEventRepo.clearByTask(taskId);
   ctx.clearCheckInState(taskId);
   await ctx.saveState(state);
-  await ctx.notifyGoal(state, `Retrying task (re-dispatch): ${ctx.getTaskLabel(state, task.id)} - ${task.description}`, 'warning');
-  if (state.status === 'running') await ctx.reviewAndDispatch(state);
+  await ctx.notifyGoal(state, `Retrying task (re-dispatch): ${ctx.getTaskLabel(state, task.id)} - ${task.description}`, NotifyType.Warning);
+  if (state.status === GoalDriveStatus.Running) await ctx.reviewAndDispatch(state);
   return true;
 }
 
@@ -136,9 +138,9 @@ export async function resetAndStart(ctx: GoalOrchestrator, goalId: string, taskI
   const task = state.tasks.find(t => t.id === taskId);
   if (!task) return false;
 
-  if (task.status === 'running') abortTaskSession(ctx, task);
+  if (task.status === TaskStatus.Running) abortTaskSession(ctx, task);
 
-  task.status = 'pending';
+  task.status = TaskStatus.Pending;
   task.error = undefined;
   task.branchName = undefined;
   task.channelId = undefined;
@@ -160,8 +162,8 @@ export async function resetAndStart(ctx: GoalOrchestrator, goalId: string, taskI
   ctx.deps.taskEventRepo.clearByTask(taskId);
   ctx.clearCheckInState(taskId);
   await ctx.saveState(state);
-  await ctx.notifyGoal(state, `Reset and start task: ${ctx.getTaskLabel(state, task.id)} - ${task.description}`, 'warning');
-  if (state.status === 'running') await ctx.reviewAndDispatch(state);
+  await ctx.notifyGoal(state, `Reset and start task: ${ctx.getTaskLabel(state, task.id)} - ${task.description}`, NotifyType.Warning);
+  if (state.status === GoalDriveStatus.Running) await ctx.reviewAndDispatch(state);
   return true;
 }
 
@@ -177,12 +179,12 @@ export async function pauseTask(ctx: GoalOrchestrator, goalId: string, taskId: s
   const task = state.tasks.find(t => t.id === taskId);
   if (!task) return false;
 
-  task.status = 'paused';
+  task.status = TaskStatus.Paused;
   // 保留 branchName, channelId, dispatchedAt — 恢复时复用
   await ctx.saveState(state);
   await ctx.notifyGoal(state,
     `Paused task: ${ctx.getTaskLabel(state, task.id)} - ${task.description}\nBranch/thread preserved for resume.`,
-    'warning'
+    NotifyType.Warning
   );
   return true;
 }
@@ -199,14 +201,14 @@ export async function stopTask(ctx: GoalOrchestrator, goalId: string, taskId: st
 
   abortTaskSession(ctx, task);
 
-  task.status = 'cancelled';
+  task.status = TaskStatus.Cancelled;
   task.error = 'Stopped by user';
   await ctx.saveState(state);
   await ctx.notifyGoal(state,
     `Stopped task: ${ctx.getTaskLabel(state, task.id)} - ${task.description}`,
-    'error'
+    NotifyType.Error
   );
-  if (state.status === 'running') await ctx.reviewAndDispatch(state);
+  if (state.status === GoalDriveStatus.Running) await ctx.reviewAndDispatch(state);
   return true;
 }
 
@@ -233,10 +235,10 @@ export async function nudgeTask(ctx: GoalOrchestrator, goalId: string, taskId: s
   const label = ctx.getTaskLabel(state, task.id);
 
   // 已完成且已合并 → 无需操作，仅通知 goal channel
-  if (task.status === 'completed' && task.merged) {
+  if (task.status === TaskStatus.Completed && task.merged) {
     await ctx.notifyGoal(state,
       `Nudge: ${label} - ${task.description} 已完成且已合并，无需操作。`,
-      'info'
+      NotifyType.Info
     );
     return { ok: true, message: 'Already completed and merged' };
   }
@@ -247,40 +249,40 @@ export async function nudgeTask(ctx: GoalOrchestrator, goalId: string, taskId: s
   if (task.channelId) {
     const channelId = task.channelId;
     const prevStatus = task.status;
-    const needsStatusChange = ['failed', 'paused', 'blocked_feedback', 'dispatched'].includes(task.status);
+    const needsStatusChange = [TaskStatus.Failed, TaskStatus.Paused, TaskStatus.BlockedFeedback, TaskStatus.Dispatched].includes(task.status);
 
     // running 任务：先 abort 当前进程，再轻推，防止并发执行器竞争
-    if (task.status === 'running') {
+    if (task.status === TaskStatus.Running) {
       abortTaskSession(ctx, task);
     }
 
     if (needsStatusChange) {
-      task.status = 'running';
+      task.status = TaskStatus.Running;
       task.error = undefined;
       await ctx.saveState(state);
     }
 
     await ctx.notifyGoal(state,
       `Nudge: ${label} (${prevStatus}${needsStatusChange ? ' → running' : ''}) - ${task.description}`,
-      'info'
+      NotifyType.Info
     );
     ctx.executeTaskInBackground(goalId, taskId, guildId, channelId, nudgePrompt);
     return { ok: true, message: `Nudged task ${label} (prev: ${prevStatus})` };
   }
 
   // completed & !merged & 无 channel → 通知 goal channel，无法轻推
-  if (task.status === 'completed' && !task.merged) {
+  if (task.status === TaskStatus.Completed && !task.merged) {
     await ctx.notifyGoal(state,
       `Nudge: ${label} - 已完成但无 channel 可推，请人工检查分支 \`${task.branchName ?? '未知'}\` 并触发合并。`,
-      'warning'
+      NotifyType.Warning
     );
     return { ok: true, message: `Notified goal channel: ${label} completed but no channel` };
   }
 
   // 无 channel + 可重派状态 → 重置为 pending，重新派发
-  const redispatchable = ['failed', 'paused', 'blocked_feedback'].includes(task.status);
+  const redispatchable = [TaskStatus.Failed, TaskStatus.Paused, TaskStatus.BlockedFeedback].includes(task.status);
   if (redispatchable) {
-    task.status = 'pending';
+    task.status = TaskStatus.Pending;
     task.branchName = undefined;
     task.channelId = undefined;
     task.dispatchedAt = undefined;
@@ -288,9 +290,9 @@ export async function nudgeTask(ctx: GoalOrchestrator, goalId: string, taskId: s
     await ctx.saveState(state);
     await ctx.notifyGoal(state,
       `Nudge: ${label} - ${task.description}（无 channel，重新派发）`,
-      'info'
+      NotifyType.Info
     );
-    if (state.status === 'running') await ctx.dispatchNext(state);
+    if (state.status === GoalDriveStatus.Running) await ctx.dispatchNext(state);
     return { ok: true, message: `Re-dispatching task ${label}` };
   }
 
@@ -298,7 +300,7 @@ export async function nudgeTask(ctx: GoalOrchestrator, goalId: string, taskId: s
 }
 
 export function buildNudgePrompt(task: GoalTask, label: string): string {
-  if (task.status === 'completed' && !task.merged) {
+  if (task.status === TaskStatus.Completed && !task.merged) {
     return `[Nudge] 任务 ${label} 已标记完成但尚未合并。如工作确实已完成，请重新发送 task.completed 事件触发合并；如还有未完成工作，请继续开发后再上报。`;
   }
   const errorHint = task.error ? `\n上次错误：${task.error}` : '';

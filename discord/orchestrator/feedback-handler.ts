@@ -7,7 +7,9 @@
  */
 
 import type { GoalDriveState, GoalTask } from '../types/index.js';
+import { TaskStatus, PipelinePhase, FeedbackInvestigationAction, GoalDriveStatus } from '../types/index.js';
 import type { GoalOrchestrator } from './index.js';
+import { NotifyType } from './orchestrator-types.js';
 import { logger } from '../utils/logger.js';
 import { triggerTechLeadConsultation } from './review-handler.js';
 import { TaskEventType } from '../db/repo/task-event-repo.js';
@@ -29,12 +31,12 @@ export function startFeedbackInvestigation(
     try {
       // 使用 Sonnet 做调查（快速且够用）
       const { pipelineSonnetModel: sonnetModel } = ctx.deps.config;
-      ctx.switchSessionModel(guildId, channelId, sonnetModel, 'execute');
-      await ctx.updatePipelinePhase(goalId, taskId, 'execute');
+      ctx.switchSessionModel(guildId, channelId, sonnetModel, PipelinePhase.Execute);
+      await ctx.updatePipelinePhase(goalId, taskId, PipelinePhase.Execute);
 
       await ctx.notifyGoal(state,
         `[GoalOrchestrator] ${taskId}: AI 调查 blocked feedback...`,
-        'pipeline',
+        NotifyType.Pipeline,
       );
 
       const prompt = buildFeedbackInvestigationPrompt(ctx, task, state);
@@ -48,22 +50,22 @@ export function startFeedbackInvestigation(
       if (!await ctx.isTaskStillRunning(goalId, taskId)) return;
 
       switch (conclusion.action) {
-        case 'continue':
+        case FeedbackInvestigationAction.Continue:
           // Claude 已在调查中修复了问题 → 走 audit → fix 循环验证
           await ctx.notifyGoal(state,
             `[GoalOrchestrator] ${taskId}: 调查结论 — 问题已修复，继续执行`,
-            'info',
+            NotifyType.Info,
             { logOnly: true },
           );
           // 调查中已修复 → 重新执行 pipeline 让 Claude 确认并上报完成
           ctx.executeTaskPipeline(goalId, taskId, guildId, channelId, task, state);
           break;
 
-        case 'retry':
+        case FeedbackInvestigationAction.Retry:
           // 在原 channel 中继续执行（resume 语义），调查结论留在 thread 供参考
           await ctx.notifyGoal(state,
             `[GoalOrchestrator] ${taskId}: 调查结论 — 在原 thread 继续执行\n原因: ${conclusion.reason}`,
-            'warning',
+            NotifyType.Warning,
             { logOnly: true },
           );
           await ctx.withStateLock(goalId, async () => {
@@ -72,19 +74,19 @@ export function startFeedbackInvestigation(
             const freshTask = freshState.tasks.find(t => t.id === taskId);
             if (!freshTask) return;
             // 确保 task 处于 retryTask 可接受的状态
-            if (!['failed', 'blocked_feedback', 'paused'].includes(freshTask.status)) {
-              freshTask.status = 'failed';
+            if (![TaskStatus.Failed, TaskStatus.BlockedFeedback, TaskStatus.Paused].includes(freshTask.status)) {
+              freshTask.status = TaskStatus.Failed;
               await ctx.saveState(freshState);
             }
           });
           await ctx.retryTask(goalId, taskId);
           break;
 
-        case 'replan': {
+        case FeedbackInvestigationAction.Replan: {
           // 调查结论需要修改任务 → 标记完成，通知 tech lead
           await ctx.notifyGoal(state,
             `[GoalOrchestrator] ${taskId}: 调查结论 — 需要修改任务\n原因: ${conclusion.reason}`,
-            'info',
+            NotifyType.Info,
             { logOnly: true },
           );
           await ctx.withStateLock(goalId, async () => {
@@ -92,7 +94,7 @@ export function startFeedbackInvestigation(
             if (!freshState) return;
             const freshTask = freshState.tasks.find(t => t.id === taskId);
             if (!freshTask) return;
-            freshTask.status = 'completed';
+            freshTask.status = TaskStatus.Completed;
             freshTask.completedAt = Date.now();
             await ctx.saveState(freshState);
           });
@@ -106,13 +108,13 @@ export function startFeedbackInvestigation(
           }
 
           const refreshed = await ctx.getState(goalId);
-          if (refreshed && refreshed.status === 'running') {
+          if (refreshed && refreshed.status === GoalDriveStatus.Running) {
             await ctx.reviewAndDispatch(refreshed, taskId);
           }
           break;
         }
 
-        case 'escalate':
+        case FeedbackInvestigationAction.Escalate:
         default: {
           // AI 调查无法自动解决 → 先让 tech lead 介入
           let escalateState: GoalDriveState | null = null;
@@ -121,7 +123,7 @@ export function startFeedbackInvestigation(
             if (!freshState) return;
             const freshTask = freshState.tasks.find(t => t.id === taskId);
             if (!freshTask) return;
-            freshTask.status = 'blocked_feedback';
+            freshTask.status = TaskStatus.BlockedFeedback;
             freshTask.pipelinePhase = undefined;
             await ctx.saveState(freshState);
             escalateState = freshState;
@@ -139,13 +141,13 @@ export function startFeedbackInvestigation(
             );
             await ctx.notifyGoal(escalateState as GoalDriveState,
               `[GoalOrchestrator] ${taskId}: AI 调查无法自动解决，已上报 tech lead 介入`,
-              'warning',
+              NotifyType.Warning,
               { logOnly: true },
             );
           } else {
             await ctx.notifyGoal(escalateState as GoalDriveState,
               `[GoalOrchestrator] ${taskId}: AI 调查无法自动解决\n原因: ${conclusion.reason}\n需要人工干预。`,
-              'error',
+              NotifyType.Error,
               { logOnly: true },
             );
           }
@@ -164,7 +166,7 @@ export function startFeedbackInvestigation(
           if (!freshState) return;
           const freshTask = freshState.tasks.find(t => t.id === taskId);
           if (!freshTask) return;
-          freshTask.status = 'blocked_feedback';
+          freshTask.status = TaskStatus.BlockedFeedback;
           freshTask.pipelinePhase = undefined;
           await ctx.saveState(freshState);
           errorState = freshState;
@@ -181,13 +183,13 @@ export function startFeedbackInvestigation(
           );
           await ctx.notifyGoal(errorState as GoalDriveState,
             `[GoalOrchestrator] ${taskId}: AI 调查出错，已上报 tech lead 介入`,
-            'warning',
+            NotifyType.Warning,
             { logOnly: true },
           );
         } else {
           await ctx.notifyGoal(errorState as GoalDriveState,
             `[GoalOrchestrator] ${taskId}: AI 调查出错: ${err.message}\n已回退到 blocked_feedback，需要人工干预。`,
-            'error',
+            NotifyType.Error,
             { logOnly: true },
           );
         }
@@ -227,17 +229,19 @@ export async function readInvestigationResult(
   ctx: GoalOrchestrator,
   _state: GoalDriveState,
   task: GoalTask,
-): Promise<{ action: string; reason: string; details?: string }> {
-  const defaultResult = { action: 'escalate', reason: 'No investigation event found in DB' };
+): Promise<{ action: FeedbackInvestigationAction; reason: string; details?: string }> {
+  const defaultResult = { action: FeedbackInvestigationAction.Escalate, reason: 'No investigation event found in DB' };
 
   const result = ctx.deps.taskEventRepo.read<{ action: string; reason: string; details?: string }>(
     task.id, TaskEventType.Feedback,
   );
   if (!result) return defaultResult;
 
-  const validActions = ['continue', 'retry', 'replan', 'escalate'];
+  const validActions = Object.values(FeedbackInvestigationAction);
   return {
-    action: validActions.includes(result.action) ? result.action : 'escalate',
+    action: validActions.includes(result.action as FeedbackInvestigationAction)
+      ? result.action as FeedbackInvestigationAction
+      : FeedbackInvestigationAction.Escalate,
     reason: result.reason || 'No reason provided',
     details: result.details,
   };

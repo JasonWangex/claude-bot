@@ -1,5 +1,7 @@
 import type { GoalDriveState, GoalTask } from '../types/index.js';
+import { PipelinePhase } from '../types/index.js';
 import type { GoalOrchestrator } from './index.js';
+import { NotifyType } from './orchestrator-types.js';
 import { execGit } from './git-ops.js';
 import {
   mergeSubtaskBranch,
@@ -56,7 +58,7 @@ export async function doMergeAndCleanup(ctx: GoalOrchestrator, state: GoalDriveS
     );
     goalWorktreeDir = ctx.findWorktreeDir(stdout, state.branch) ?? undefined;
     if (!goalWorktreeDir) {
-      await ctx.notifyGoal(state, `Cannot find goal worktree, skipping merge: ${branchName}`, 'warning');
+      await ctx.notifyGoal(state, `Cannot find goal worktree, skipping merge: ${branchName}`, NotifyType.Warning);
       return;
     }
 
@@ -68,7 +70,7 @@ export async function doMergeAndCleanup(ctx: GoalOrchestrator, state: GoalDriveS
         await autoCommit(subtaskDir, `auto: ${task.description}`);
         await ctx.notifyGoal(state,
           `Task ${ctx.getTaskLabel(state, task.id)} 有未提交的修改，已自动 commit。请检查是否正常。`,
-          'warning',
+          NotifyType.Warning,
         );
       }
     }
@@ -87,7 +89,7 @@ export async function doMergeAndCleanup(ctx: GoalOrchestrator, state: GoalDriveS
       }
 
       await ctx.saveState(state);
-      await ctx.notifyGoal(state, `Merged: \`${branchName}\` → \`${state.branch}\``, 'success');
+      await ctx.notifyGoal(state, `Merged: \`${branchName}\` → \`${state.branch}\``, NotifyType.Success);
 
       if (subtaskDir) {
         await cleanupSubtask(state.cwd, subtaskDir, branchName);
@@ -106,7 +108,7 @@ export async function doMergeAndCleanup(ctx: GoalOrchestrator, state: GoalDriveS
       await abortMerge(goalWorktreeDir);
       await ctx.notifyGoal(state,
         `${reason}: \`${branchName}\` → \`${state.branch}\`. Queued for tech lead...`,
-        'warning'
+        NotifyType.Warning
       );
       ctx.deps.taskEventRepo.write(task.id, state.goalId, TaskEventType.MergeConflict, {
         branchName,
@@ -115,7 +117,7 @@ export async function doMergeAndCleanup(ctx: GoalOrchestrator, state: GoalDriveS
         taskDescription: task.description,
       }, 'orchestrator');
       // task 保持 completed 状态（execution done，merge pending）；标记 conflict 阶段供轻推机制识别
-      task.pipelinePhase = 'conflict';
+      task.pipelinePhase = PipelinePhase.Conflict;
       await ctx.saveState(state);
     }
   } catch (err: any) {
@@ -125,7 +127,7 @@ export async function doMergeAndCleanup(ctx: GoalOrchestrator, state: GoalDriveS
       await abortMerge(goalWorktreeDir);
       await ctx.notifyGoal(state,
         `Merge exception (treated as conflict): \`${branchName}\` → \`${state.branch}\`. Queued for tech lead...\nError: ${err.message}`,
-        'warning'
+        NotifyType.Warning
       );
       ctx.deps.taskEventRepo.write(task.id, state.goalId, TaskEventType.MergeConflict, {
         branchName,
@@ -133,7 +135,7 @@ export async function doMergeAndCleanup(ctx: GoalOrchestrator, state: GoalDriveS
         subtaskDir: subtaskDir ?? null,
         taskDescription: task.description,
       }, 'orchestrator');
-      task.pipelinePhase = 'conflict';
+      task.pipelinePhase = PipelinePhase.Conflict;
       await ctx.saveState(state);
     }
   }

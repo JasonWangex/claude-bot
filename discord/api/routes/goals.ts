@@ -16,6 +16,7 @@ import type { RouteHandler } from '../types.js';
 import { sendJson, requireAuth, readJsonBody } from '../middleware.js';
 import { logger } from '../../utils/logger.js';
 import type { StartDriveParams } from '../../orchestrator/index.js';
+import { GoalDriveStatus, TaskStatus } from '../../types/index.js';
 
 // POST /api/goals/:goalId/drive
 export const startDrive: RouteHandler = async (req, res, params, deps) => {
@@ -100,7 +101,7 @@ export const pauseDrive: RouteHandler = async (_req, res, params, deps) => {
     return;
   }
 
-  sendJson(res, 200, { ok: true, data: { status: 'paused' } });
+  sendJson(res, 200, { ok: true, data: { status: GoalDriveStatus.Paused } });
 };
 
 // POST /api/goals/:goalId/resume
@@ -119,7 +120,7 @@ export const resumeDrive: RouteHandler = async (_req, res, params, deps) => {
     return;
   }
 
-  sendJson(res, 200, { ok: true, data: { status: 'running' } });
+  sendJson(res, 200, { ok: true, data: { status: GoalDriveStatus.Running } });
 };
 
 // POST /api/goals/:goalId/tasks/:taskId/skip
@@ -138,7 +139,7 @@ export const skipTask: RouteHandler = async (_req, res, params, deps) => {
     return;
   }
 
-  sendJson(res, 200, { ok: true, data: { status: 'skipped' } });
+  sendJson(res, 200, { ok: true, data: { status: TaskStatus.Skipped } });
 };
 
 // POST /api/goals/:goalId/tasks/:taskId/done
@@ -157,7 +158,7 @@ export const markTaskDone: RouteHandler = async (_req, res, params, deps) => {
     return;
   }
 
-  sendJson(res, 200, { ok: true, data: { status: 'completed' } });
+  sendJson(res, 200, { ok: true, data: { status: TaskStatus.Completed } });
 };
 
 // POST /api/goals/:goalId/tasks/:taskId/retry
@@ -176,7 +177,7 @@ export const retryTask: RouteHandler = async (_req, res, params, deps) => {
     return;
   }
 
-  sendJson(res, 200, { ok: true, data: { status: 'running' } });
+  sendJson(res, 200, { ok: true, data: { status: TaskStatus.Running } });
 };
 
 // POST /api/goals/:goalId/tasks/:taskId/reset
@@ -195,7 +196,7 @@ export const resetAndStartTask: RouteHandler = async (_req, res, params, deps) =
     return;
   }
 
-  sendJson(res, 200, { ok: true, data: { status: 'pending' } });
+  sendJson(res, 200, { ok: true, data: { status: TaskStatus.Pending } });
 };
 
 // POST /api/goals/:goalId/tasks/:taskId/pause
@@ -214,7 +215,7 @@ export const pauseTask: RouteHandler = async (_req, res, params, deps) => {
     return;
   }
 
-  sendJson(res, 200, { ok: true, data: { status: 'paused' } });
+  sendJson(res, 200, { ok: true, data: { status: TaskStatus.Paused } });
 };
 
 // POST /api/goals/:goalId/tasks/:taskId/stop
@@ -233,7 +234,7 @@ export const stopTask: RouteHandler = async (_req, res, params, deps) => {
     return;
   }
 
-  sendJson(res, 200, { ok: true, data: { status: 'failed' } });
+  sendJson(res, 200, { ok: true, data: { status: TaskStatus.Cancelled } });
 };
 
 // POST /api/goals/:goalId/tasks/:taskId/nudge

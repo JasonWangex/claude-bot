@@ -4,7 +4,7 @@
 
 import type { LoggerTransport, LogEntry } from '../logger.js';
 import type { MessageQueue, EmbedColor } from '../../bot/message-queue.js';
-import { EmbedColors } from '../../bot/message-queue.js';
+import { EmbedColors, MessagePriority } from '../../bot/message-queue.js';
 
 export interface DiscordTransportOptions {
   messageQueue: MessageQueue;
@@ -86,7 +86,7 @@ export class DiscordTransport implements LoggerTransport {
     this.messageQueue.send(this.channelId, message, {
       embedColor,
       silent: true,
-      priority: entry.level === 'error' ? 'high' : 'normal',
+      priority: entry.level === 'error' ? MessagePriority.High : MessagePriority.Normal,
     }).catch(err => {
       console.error('[DiscordTransport] Failed to send log:', err);
     }).finally(() => {

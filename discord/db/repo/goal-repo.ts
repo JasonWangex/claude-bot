@@ -8,43 +8,45 @@
 
 import type Database from 'better-sqlite3';
 import type { IGoalRepo } from '../../types/repository.js';
-import type { Goal, GoalStatus, GoalType } from '../../types/repository.js';
-import type { GoalDriveState, GoalDriveStatus, TaskStatus } from '../../types/index.js';
+import type { Goal, GoalType } from '../../types/repository.js';
+import type { GoalDriveState, TaskStatus, TaskType, TaskComplexity } from '../../types/index.js';
+import { GoalStatus } from '../../types/db.js';
 import type { GoalRow, TaskRow } from '../../types/db.js';
+import { GoalDriveStatus } from '../../types/index.js';
 
 const VALID_GOAL_STATUSES: GoalStatus[] = [
-  'Pending', 'Collecting', 'Planned', 'Processing', 'Blocking',
-  'Completed', 'Merged', 'Paused', 'Failed',
+  GoalStatus.Pending, GoalStatus.Collecting, GoalStatus.Planned, GoalStatus.Processing, GoalStatus.Blocking,
+  GoalStatus.Completed, GoalStatus.Merged, GoalStatus.Paused, GoalStatus.Failed,
 ];
 
 /** 安全解析 GoalStatus，旧数据 fallback 到 Pending */
 function parseGoalStatus(value: string): GoalStatus {
   return VALID_GOAL_STATUSES.includes(value as GoalStatus)
     ? value as GoalStatus
-    : 'Pending';
+    : GoalStatus.Pending;
 }
 
 /** DB status（GoalStatus 大写）→ GoalDriveStatus（小写） */
 function goalStatusToDriveStatus(status: string): GoalDriveStatus {
   const map: Record<string, GoalDriveStatus> = {
-    Processing: 'running',
-    Paused: 'paused',
-    Completed: 'completed',
-    Failed: 'failed',
-    Blocking: 'paused',
+    Processing: GoalDriveStatus.Running,
+    Paused: GoalDriveStatus.Paused,
+    Completed: GoalDriveStatus.Completed,
+    Failed: GoalDriveStatus.Failed,
+    Blocking: GoalDriveStatus.Paused,
   };
-  return map[status] ?? 'running';
+  return map[status] ?? GoalDriveStatus.Running;
 }
 
 /** GoalDriveStatus（小写）→ DB status（GoalStatus 大写） */
 function driveStatusToGoalStatus(status: GoalDriveStatus): GoalStatus {
   const map: Record<GoalDriveStatus, GoalStatus> = {
-    running: 'Processing',
-    paused: 'Paused',
-    completed: 'Completed',
-    failed: 'Failed',
+    [GoalDriveStatus.Running]: GoalStatus.Processing,
+    [GoalDriveStatus.Paused]: GoalStatus.Paused,
+    [GoalDriveStatus.Completed]: GoalStatus.Completed,
+    [GoalDriveStatus.Failed]: GoalStatus.Failed,
   };
-  return map[status] ?? 'Processing';
+  return map[status] ?? GoalStatus.Processing;
 }
 
 /** GoalRow → Goal (元数据视图) */
@@ -339,9 +341,9 @@ function rowsToGoalDriveState(
       id: t.id,
       goalId: t.goal_id ?? undefined,
       description: t.description,
-      type: t.type,
+      type: t.type as TaskType,
       phase: t.phase ?? undefined,
-      complexity: t.complexity ?? undefined,
+      complexity: t.complexity as TaskComplexity ?? undefined,
       pipelinePhase: (t.pipeline_phase as GoalDriveState['tasks'][number]['pipelinePhase']) ?? undefined,
       auditRetries: t.audit_retries ?? 0,
       status: t.status as TaskStatus,

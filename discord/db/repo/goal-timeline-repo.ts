@@ -7,7 +7,13 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
 
-export type TimelineEventType = 'success' | 'error' | 'warning' | 'info' | 'pipeline';
+export enum TimelineEventType {
+  Success  = 'success',
+  Error    = 'error',
+  Warning  = 'warning',
+  Info     = 'info',
+  Pipeline = 'pipeline',
+}
 
 export interface GoalTimelineEvent {
   id: string;
@@ -46,7 +52,7 @@ export class GoalTimelineRepo {
     };
   }
 
-  append(goalId: string, message: string, type: TimelineEventType = 'info'): void {
+  append(goalId: string, message: string, type: TimelineEventType = TimelineEventType.Info): void {
     this.stmts.append.run(randomUUID(), goalId, type, message, Date.now());
   }
 

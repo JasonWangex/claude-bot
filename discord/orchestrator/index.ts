@@ -13,7 +13,7 @@
 import { ChannelType } from 'discord.js';
 import { EmbedColors, type EmbedColor } from '../bot/message-queue.js';
 import type { GoalDriveState, GoalTask, GoalTaskFeedback, PipelinePhase, ChatUsageResult } from '../types/index.js';
-import { ClaudeErrorType, ClaudeExecutionError } from '../types/index.js';
+import { ClaudeErrorType, ClaudeExecutionError, TaskStatus, TaskType, GoalDriveStatus } from '../types/index.js';
 import { getAuthorizedGuildId, getGoalLogChannelId } from '../utils/env.js';
 import { execGit } from './git-ops.js';
 import { translateToBranchName } from './goal-state.js';
@@ -21,8 +21,11 @@ import { isGoalComplete, isGoalStuck, getProgressSummary } from './task-schedule
 import { logger } from '../utils/logger.js';
 
 // Types re-export (external callers import from here)
-import type { OrchestratorDeps, NotifyOptions, NotifyType } from './orchestrator-types.js';
+import type { OrchestratorDeps, NotifyOptions } from './orchestrator-types.js';
+import { NotifyType } from './orchestrator-types.js';
 import { TaskEventType } from '../db/repo/task-event-repo.js';
+import { TimelineEventType } from '../db/repo/goal-timeline-repo.js';
+import { FeedbackType, TaskReviewVerdict, FailedTaskVerdict, PhaseDecision } from '../types/index.js';
 export type { StartDriveParams } from './orchestrator-types.js';
 
 // Handler imports
@@ -127,16 +130,16 @@ export class GoalOrchestrator {
   getStuckReason(state: GoalDriveState): string {
     const reasons: string[] = [];
 
-    const blockedFeedback = state.tasks.filter(t => t.status === 'blocked_feedback');
+    const blockedFeedback = state.tasks.filter(t => t.status === TaskStatus.BlockedFeedback);
     if (blockedFeedback.length > 0) reasons.push(`${blockedFeedback.length} 个任务有待处理反馈`);
 
-    const paused = state.tasks.filter(t => t.status === 'paused');
+    const paused = state.tasks.filter(t => t.status === TaskStatus.Paused);
     if (paused.length > 0) reasons.push(`${paused.length} 个任务已暂停`);
 
-    const unmerged = state.tasks.filter(t => t.status === 'completed' && t.branchName && !t.merged);
+    const unmerged = state.tasks.filter(t => t.status === TaskStatus.Completed && t.branchName && !t.merged);
     if (unmerged.length > 0) reasons.push(`${unmerged.length} 个任务完成但合并失败`);
 
-    const failedTasks = state.tasks.filter(t => t.status === 'failed');
+    const failedTasks = state.tasks.filter(t => t.status === TaskStatus.Failed);
     if (failedTasks.length > 0) reasons.push(`${failedTasks.length} 个任务执行失败`);
 
     if (reasons.length === 0) reasons.push('存在无法满足的依赖关系');
@@ -145,7 +148,7 @@ export class GoalOrchestrator {
 
   /** 获取下一步描述 */
   getNextStepSummary(state: GoalDriveState): string {
-    const running = state.tasks.filter(t => t.status === 'dispatched' || t.status === 'running');
+    const running = state.tasks.filter(t => t.status === TaskStatus.Dispatched || t.status === TaskStatus.Running);
     if (running.length > 0) {
       const labels = running.map(t => this.getTaskLabel(state, t.id)).join(', ');
       return `正在执行: ${labels}`;
@@ -170,12 +173,12 @@ export class GoalOrchestrator {
     options?: NotifyOptions,
   ): Promise<void> {
     try {
-      const colorMap: Record<string, EmbedColor> = {
-        success: EmbedColors.GREEN,
-        error: EmbedColors.RED,
-        warning: EmbedColors.YELLOW,
-        info: EmbedColors.GRAY,
-        pipeline: EmbedColors.BLUE,
+      const colorMap: Record<NotifyType, EmbedColor> = {
+        [NotifyType.Success]:  EmbedColors.GREEN,
+        [NotifyType.Error]:    EmbedColors.RED,
+        [NotifyType.Warning]:  EmbedColors.YELLOW,
+        [NotifyType.Info]:     EmbedColors.GRAY,
+        [NotifyType.Pipeline]: EmbedColors.BLUE,
       };
       const embedColor = type ? colorMap[type] : undefined;
       const logChannelId = getGoalLogChannelId();
@@ -200,14 +203,17 @@ export class GoalOrchestrator {
   }
 
   /** 记录 Timeline 事件 */
-  appendTimeline(goalId: string, message: string, type: string = 'info'): void {
-    const VALID_TYPES = ['success', 'error', 'warning', 'info', 'pipeline'] as const;
-    type ValidType = typeof VALID_TYPES[number];
-    const safeType: ValidType = (VALID_TYPES as readonly string[]).includes(type)
-      ? type as ValidType
-      : 'info';
+  appendTimeline(goalId: string, message: string, type?: NotifyType): void {
+    const notifyToTimeline: Record<NotifyType, TimelineEventType> = {
+      [NotifyType.Success]:  TimelineEventType.Success,
+      [NotifyType.Error]:    TimelineEventType.Error,
+      [NotifyType.Warning]:  TimelineEventType.Warning,
+      [NotifyType.Info]:     TimelineEventType.Info,
+      [NotifyType.Pipeline]: TimelineEventType.Pipeline,
+    };
+    const timelineType = type ? (notifyToTimeline[type] ?? TimelineEventType.Info) : TimelineEventType.Info;
     try {
-      this.deps.goalTimelineRepo.append(goalId, message, safeType);
+      this.deps.goalTimelineRepo.append(goalId, message, timelineType);
     } catch (err: any) {
       logger.warn(`[Orchestrator] appendTimeline failed: ${err.message}`);
     }
@@ -222,7 +228,7 @@ export class GoalOrchestrator {
   ): Promise<void> {
     await this.notify(state.channelId, message, type, options);
     if (!options?.logOnly) {
-      this.appendTimeline(state.goalId, message, type ?? 'info');
+      this.appendTimeline(state.goalId, message, type);
     }
   }
 
@@ -310,11 +316,11 @@ export class GoalOrchestrator {
       details?: string;
     }>(task.id, TaskEventType.Feedback);
     if (!parsed || !parsed.type || !parsed.reason) return null;
-    return { type: parsed.type, reason: parsed.reason, details: parsed.details };
+    return { type: parsed.type as FeedbackType, reason: parsed.reason, details: parsed.details };
   }
 
   async generateBranchName(task: GoalTask, state: GoalDriveState): Promise<string> {
-    const prefix = task.type === '调研' ? 'research' : 'feat';
+    const prefix = task.type === TaskType.Research ? 'research' : 'feat';
     const translated = await translateToBranchName(task.description);
     const taskLabel = this.getTaskLabel(state, task.id);
     return `${prefix}/${taskLabel}-${translated.slice(0, 30) || 'task'}`;
@@ -342,15 +348,15 @@ export class GoalOrchestrator {
     const fb = ps.tryRender('orchestrator.task.feedback_protocol', { TASK_ID: task.id });
     if (fb) parts.push(fb);
 
-    if (task.type === '调研') {
+    if (task.type === TaskType.Research) {
       const s = ps.tryRender('orchestrator.task.research_rules', {});
       if (s) parts.push(s);
     }
-    if (task.type === '占位') {
+    if (task.type === TaskType.Placeholder) {
       const s = ps.tryRender('orchestrator.task.placeholder_rules', {});
       if (s) parts.push(s);
     }
-    if (task.type === '测试') {
+    if (task.type === TaskType.Test) {
       const s = ps.tryRender('orchestrator.task.test_rules', {});
       if (s) parts.push(s);
     }
@@ -422,7 +428,7 @@ export class GoalOrchestrator {
     const state = await this.getState(goalId);
     if (!state) return false;
     const task = state.tasks.find(t => t.id === taskId);
-    return task?.status === 'running';
+    return task?.status === TaskStatus.Running;
   }
 
   async getTaskStatus(goalId: string, taskId: string): Promise<string> {
@@ -517,7 +523,7 @@ export class GoalOrchestrator {
 
   // -- Review / Audit --
   triggerTaskReview(state: GoalDriveState, task: GoalTask, guildId: string) { return _triggerTaskReview(this, state, task, guildId); }
-  async handleTaskReviewResult(goalId: string, taskId: string, result: { verdict?: string; summary?: string; issues?: string[] }) {
+  async handleTaskReviewResult(goalId: string, taskId: string, result: { verdict?: TaskReviewVerdict; summary?: string; issues?: string[] }) {
     return _handleTaskReviewResult(this, goalId, taskId, result);
   }
   triggerConflictReview(state: GoalDriveState, task: GoalTask, guildId: string, payload: MergeConflictPayload) {
@@ -532,13 +538,13 @@ export class GoalOrchestrator {
   triggerPhaseEvaluation(state: GoalDriveState, phase: number, guildId: string) {
     return _triggerPhaseEvaluation(this, state, phase, guildId);
   }
-  async handlePhaseResult(goalId: string, triggerTaskId: string, result: { decision?: string; summary?: string; issues?: string[] }) {
+  async handlePhaseResult(goalId: string, triggerTaskId: string, result: { decision?: PhaseDecision; summary?: string; issues?: string[] }) {
     return _handlePhaseResult(this, goalId, triggerTaskId, result);
   }
   triggerFailedTaskReview(state: GoalDriveState, task: GoalTask, guildId: string) {
     return _triggerFailedTaskReview(this, state, task, guildId);
   }
-  async handleFailedTaskReviewResult(goalId: string, taskId: string, payload: { verdict?: string; reason?: string }) {
+  async handleFailedTaskReviewResult(goalId: string, taskId: string, payload: { verdict?: FailedTaskVerdict; reason?: string }) {
     return _handleFailedTaskReviewResult(this, goalId, taskId, payload);
   }
 }

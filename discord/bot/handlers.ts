@@ -16,7 +16,7 @@ import { InteractionRegistry } from './interaction-registry.js';
 import { ClaudeClient } from '../claude/client.js';
 import { AuthErrorInterceptor } from '../claude/auth-error-interceptor.js';
 import { ApiErrorInterceptor } from '../claude/api-error-interceptor.js';
-import { MessageQueue, EmbedColors } from './message-queue.js';
+import { MessageQueue, EmbedColors, MessagePriority } from './message-queue.js';
 import { escapeMarkdown } from './message-utils.js';
 import { getDb, SessionChangesRepo } from '../db/index.js';
 import {
@@ -148,7 +148,7 @@ export class MessageHandler {
       const fileText = await MessageHandler.downloadTextFile(textFileAttachment.url);
       if (fileText === null) {
         // 下载失败，通知用户
-        await this.mq.send(channelId, '⚠️ 无法读取你发送的文本文件，请重试。', { silent: true, priority: 'high' });
+        await this.mq.send(channelId, '⚠️ 无法读取你发送的文本文件，请重试。', { silent: true, priority: MessagePriority.High });
         return;
       }
       // 文件附件存在时以文件内容为准；若用户同时附带了说明文字则前置
@@ -181,7 +181,7 @@ export class MessageHandler {
       if (!replyToId) {
         await this.mq.send(channelId,
           `This channel has ${activeLinks.length} active sessions. Please **reply** to a message from the session you want to talk to.`,
-          { silent: true, priority: 'high' }
+          { silent: true, priority: MessagePriority.High }
         );
         return;
       }
@@ -191,7 +191,7 @@ export class MessageHandler {
         // 该消息不属于任何活跃 link（如 reply 到进度消息或非 Done 消息）
         await this.mq.send(channelId,
           'Cannot route: please **reply** to a **Done** message from the target session.',
-          { silent: true, priority: 'high' }
+          { silent: true, priority: MessagePriority.High }
         );
         return;
       }
@@ -204,7 +204,7 @@ export class MessageHandler {
           // link 存在但 claudeSessionId 尚未初始化（session 还未和 Claude 建立过对话）
           await this.mq.send(channelId,
             'Target session is not ready yet (no CLI session established). Please send a message first to initialize it.',
-            { silent: true, priority: 'high' }
+            { silent: true, priority: MessagePriority.High }
           );
           return;
         }
@@ -221,7 +221,7 @@ export class MessageHandler {
         logger.info(`[${session.name}] Message injected to running Claude process`);
         await this.mq.send(channelId,
           '↪ Claude is working — your message will be processed next',
-          { silent: true, priority: 'high' });
+          { silent: true, priority: MessagePriority.High });
         return;
       }
       // 注入失败（进程刚退出）→ 继续正常流程
@@ -233,12 +233,12 @@ export class MessageHandler {
         await this.executePlanApproval(guildId, channelId, session);
         return;
       }
-      const ackMsgId = session.hidden ? null : await this.mq.send(channelId, 'Thinking...', { silent: true, priority: 'high' });
+      const ackMsgId = session.hidden ? null : await this.mq.send(channelId, 'Thinking...', { silent: true, priority: MessagePriority.High });
       await this.sendChatInternal(guildId, session, text, 'plan', undefined, ackMsgId);
       return;
     }
 
-    const ackMsgId = session.hidden ? null : await this.mq.send(channelId, 'Thinking...', { silent: true, priority: 'high' });
+    const ackMsgId = session.hidden ? null : await this.mq.send(channelId, 'Thinking...', { silent: true, priority: MessagePriority.High });
     await this.sendChatInternal(guildId, session, text, undefined, undefined, ackMsgId);
   }
 
@@ -278,12 +278,12 @@ export class MessageHandler {
           logger.info(`[${session.name}] Image injected to running Claude process`);
           await this.mq.send(channelId,
             '↪ Claude is working — your image will be processed next',
-            { silent: true, priority: 'high' });
+            { silent: true, priority: MessagePriority.High });
           return;
         }
       }
 
-      const ackMsgId = session.hidden ? null : await this.mq.send(channelId, 'Thinking...', { silent: true, priority: 'high' });
+      const ackMsgId = session.hidden ? null : await this.mq.send(channelId, 'Thinking...', { silent: true, priority: MessagePriority.High });
       await this.sendChatInternal(guildId, session, caption, undefined, [image], ackMsgId);
     } catch (error: any) {
       logger.error(`[${session.name}] Photo processing error:`, error);
@@ -411,7 +411,7 @@ export class MessageHandler {
 
       try {
         // 始终发新消息，不 edit 已有消息
-        const msgId = await mq.sendLong(channelId, newContent, { priority: 'high', silent: true });
+        const msgId = await mq.sendLong(channelId, newContent, { priority: MessagePriority.High, silent: true });
         threadAnchorMsgId = msgId; // 新消息作为后续 tool calls 的 thread anchor
         if (currentToolThreadId) {
           mq.finalizeThread(currentToolThreadId, buildThreadTitle()).catch(e => logger.warn(`[${session.name}] finalizeThread failed:`, e));
@@ -469,7 +469,7 @@ export class MessageHandler {
             .setLabel('Cancel')
             .setStyle(ButtonStyle.Secondary);
           const queuedRow = new ActionRowBuilder<ButtonBuilder>().addComponents(interruptButton, cancelButton);
-          mq.send(channelId, `Queued (position ${pos})...`, { components: [queuedRow as any], embedColor: EmbedColors.GRAY, silent: true, priority: 'high' })
+          mq.send(channelId, `Queued (position ${pos})...`, { components: [queuedRow as any], embedColor: EmbedColors.GRAY, silent: true, priority: MessagePriority.High })
             .then(id => { queuedMsgId = id; })
             .catch(() => {});
         }
@@ -862,14 +862,14 @@ export class MessageHandler {
             try {
               const planContent = readFileSync(planFile.filePath, 'utf-8').trim();
               if (planContent) {
-                await mq.sendLong(channelId, planContent, { priority: 'high', silent: true });
+                await mq.sendLong(channelId, planContent, { priority: MessagePriority.High, silent: true });
                 planSent = true;
               }
             } catch {}
           }
         }
         if (!planSent && sentTextCount === 0 && response.result.trim()) {
-          await mq.sendLong(channelId, response.result, { priority: 'high', silent: true });
+          await mq.sendLong(channelId, response.result, { priority: MessagePriority.High, silent: true });
         }
 
         if (planSent) fileChanges.length = 0;
@@ -990,10 +990,10 @@ export class MessageHandler {
             `✅ ${sessionPrefix}${notifyPart}Plan generated${summary}\n\n` +
             `Reply "ok" to compact context and execute.\n` +
             `Reply with anything else to continue discussing.`,
-            { priority: 'high' }
+            { priority: MessagePriority.High }
           );
         } else {
-          doneMsgId = await mq.send(channelId, `✅ ${sessionPrefix}${notifyPart}Done${summary}${changesLink}`, { priority: 'high' });
+          doneMsgId = await mq.send(channelId, `✅ ${sessionPrefix}${notifyPart}Done${summary}${changesLink}`, { priority: MessagePriority.High });
         }
 
         // 记录最新 Discord 消息 ID 到 link（reply 路由用）
@@ -1037,7 +1037,7 @@ export class MessageHandler {
           }
         }
         if (!isHidden) {
-          mq.send(channelId, 'Stopped', { embedColor: EmbedColors.YELLOW, priority: 'high', silent: true });
+          mq.send(channelId, 'Stopped', { embedColor: EmbedColors.YELLOW, priority: MessagePriority.High, silent: true });
         }
         return totalUsage;
       }
@@ -1080,7 +1080,7 @@ export class MessageHandler {
             hint = 'Check bot config (is Claude CLI available?)';
           }
         }
-        mq.send(channelId, `Error:\n${error.message}\n\n${hint}`, { embedColor: EmbedColors.RED, priority: 'high', silent: true });
+        mq.send(channelId, `Error:\n${error.message}\n\n${hint}`, { embedColor: EmbedColors.RED, priority: MessagePriority.High, silent: true });
       } else if (error instanceof ClaudeExecutionError && error.errorType === ClaudeErrorType.SESSION_RECOVERABLE) {
         this.stateManager.clearSessionClaudeId(guildId, channelId);
       }
@@ -1120,7 +1120,7 @@ export class MessageHandler {
       const content = `**[${label}]**\n\n${message}`;
       anchorMsgId = await this.mq.sendLong(channelId, content, {
         embedColor: EmbedColors.GRAY,
-        priority: 'high',
+        priority: MessagePriority.High,
         silent: true,
       }).catch(err => {
         logger.warn('[handleBackgroundChat] indicator send failed:', err);
@@ -1162,7 +1162,7 @@ export class MessageHandler {
     if (!q) return 'No question';
 
     if (!q.options?.length) {
-      await this.mq.send(channelId, `${getNotifyMention()} **${q.header || 'Question'}**\n\n${q.question}\n\nPlease type your reply directly.`, { priority: 'high' });
+      await this.mq.send(channelId, `${getNotifyMention()} **${q.header || 'Question'}**\n\n${q.question}\n\nPlease type your reply directly.`, { priority: MessagePriority.High });
       const { promise } = this.interactionRegistry.register(toolUseId, guildId, channelId);
       this.interactionRegistry.setWaitingCustomText(toolUseId, true);
       return promise;
@@ -1200,7 +1200,7 @@ export class MessageHandler {
       rows.push(new ActionRowBuilder<ButtonBuilder>().addComponents(buttons.slice(i, i + 5)));
     }
 
-    await this.mq.send(channelId, `${getNotifyMention()}\n${questionText}`, { components: rows as any, priority: 'high' });
+    await this.mq.send(channelId, `${getNotifyMention()}\n${questionText}`, { components: rows as any, priority: MessagePriority.High });
 
     return promise;
   }
@@ -1248,7 +1248,7 @@ export class MessageHandler {
         .setStyle(ButtonStyle.Secondary),
     );
 
-    await this.mq.send(channelId, text, { components: [row1 as any, row2 as any], priority: 'high' });
+    await this.mq.send(channelId, text, { components: [row1 as any, row2 as any], priority: MessagePriority.High });
 
     return promise;
   }

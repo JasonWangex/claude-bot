@@ -13,6 +13,7 @@ import { getDb } from '../../db/index.js';
 import { TaskRepo } from '../../db/repo/index.js';
 import { GoalRepo } from '../../db/repo/index.js';
 import type { Task } from '../../types/index.js';
+import { TaskStatus, TaskType, TaskComplexity } from '../../types/index.js';
 
 interface SetTasksRequest {
   tasks: Array<{
@@ -24,7 +25,7 @@ interface SetTasksRequest {
   }>;
 }
 
-const VALID_TYPES = ['代码', '手动', '调研', '占位', '测试'] as const;
+const VALID_TYPES = [TaskType.Code, TaskType.Manual, TaskType.Research, TaskType.Placeholder, TaskType.Test] as const;
 type ValidType = typeof VALID_TYPES[number];
 
 // POST /api/goals/:goalId/tasks
@@ -57,12 +58,12 @@ export const setGoalTasks: RouteHandler = async (req, res, params) => {
     id: t.id,
     goalId,
     description: t.description,
-    type: (VALID_TYPES.includes(t.type as ValidType) ? t.type : '代码') as ValidType,
+    type: (VALID_TYPES.includes(t.type as ValidType) ? t.type : TaskType.Code) as ValidType,
     phase: t.phase ?? 1,
-    complexity: (t.complexity === 'simple' || t.complexity === 'complex')
-      ? t.complexity
+    complexity: (t.complexity === TaskComplexity.Simple || t.complexity === TaskComplexity.Complex)
+      ? t.complexity as TaskComplexity
       : undefined,
-    status: 'pending',
+    status: TaskStatus.Pending,
     merged: false,
     notifiedBlocked: false,
     auditRetries: 0,
@@ -106,12 +107,12 @@ export const addGoalTask: RouteHandler = async (req, res, params) => {
     id: body.id,
     goalId,
     description: body.description,
-    type: (VALID_TYPES.includes(body.type as ValidType) ? body.type : '代码') as ValidType,
+    type: (VALID_TYPES.includes(body.type as ValidType) ? body.type : TaskType.Code) as ValidType,
     phase: body.phase ?? 1,
-    complexity: (body.complexity === 'simple' || body.complexity === 'complex')
-      ? body.complexity
+    complexity: (body.complexity === TaskComplexity.Simple || body.complexity === TaskComplexity.Complex)
+      ? body.complexity as TaskComplexity
       : undefined,
-    status: 'pending',
+    status: TaskStatus.Pending,
     merged: false,
     notifiedBlocked: false,
     auditRetries: 0,
@@ -163,8 +164,8 @@ export const updateGoalTask: RouteHandler = async (req, res, params) => {
   }
   if (body.phase !== undefined) task.phase = body.phase;
   if (body.complexity !== undefined) {
-    task.complexity = (body.complexity === 'simple' || body.complexity === 'complex')
-      ? body.complexity
+    task.complexity = (body.complexity === TaskComplexity.Simple || body.complexity === TaskComplexity.Complex)
+      ? body.complexity as TaskComplexity
       : undefined;
   }
 
@@ -189,11 +190,11 @@ export const removeGoalTask: RouteHandler = async (_req, res, params) => {
     return;
   }
 
-  task.status = 'cancelled';
+  task.status = TaskStatus.Cancelled;
 
   try {
     await taskRepo.saveAll(tasks, goalId);
-    sendJson(res, 200, { ok: true, data: { status: 'cancelled' } });
+    sendJson(res, 200, { ok: true, data: { status: TaskStatus.Cancelled } });
   } catch (err: any) {
     sendJson(res, 500, { ok: false, error: err.message });
   }

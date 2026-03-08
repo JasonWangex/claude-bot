@@ -9,11 +9,13 @@
  */
 
 import type { GoalDriveState, GoalTask } from '../types/index.js';
+import { TaskStatus, GoalDriveStatus, TaskReviewVerdict, FailedTaskVerdict, PhaseDecision, PipelinePhase } from '../types/index.js';
 import type { GoalOrchestrator } from './index.js';
 import { logger } from '../utils/logger.js';
 import { StateManager } from '../bot/state.js';
 import type { MergeConflictPayload } from './orchestrator-types.js';
-import { CHECK_IN_COOLDOWN, MAX_CHECK_INS } from './orchestrator-types.js';
+import { CHECK_IN_COOLDOWN, MAX_CHECK_INS, NotifyType } from './orchestrator-types.js';
+import { GoalStatus } from '../types/db.js';
 import { TaskEventType } from '../db/repo/task-event-repo.js';
 import { GoalEventType } from '../db/repo/goal-event-repo.js';
 
@@ -78,7 +80,7 @@ export async function processGoalEvents(ctx: GoalOrchestrator): Promise<void> {
         try {
           const p = ev.payload as { goalChannelId?: string };
           if (p.goalChannelId) {
-            await ctx.notify(p.goalChannelId, `Drive 启动失败（已重试 ${retries} 次）：${err.message}\n请检查任务列表和目录配置后重新发送 goal.drive 事件。`, 'error');
+            await ctx.notify(p.goalChannelId, `Drive 启动失败（已重试 ${retries} 次）：${err.message}\n请检查任务列表和目录配置后重新发送 goal.drive 事件。`, NotifyType.Error);
           }
         } catch (notifyErr: any) {
           logger.warn(`[Scanner] Failed to notify goal channel about drive failure: ${notifyErr.message}`);
@@ -109,7 +111,7 @@ export async function processPendingEvents(ctx: GoalOrchestrator): Promise<void>
     }
 
     // 暂停/完成的 goal 不自动处理事件，等 goal 恢复 running 后再处理
-    if (state.status !== 'running') continue;
+    if (state.status !== GoalDriveStatus.Running) continue;
 
     const task = state.tasks.find(t => t.id === ev.taskId);
     if (!task) {
@@ -122,7 +124,7 @@ export async function processPendingEvents(ctx: GoalOrchestrator): Promise<void>
         case TaskEventType.Completed:
         case TaskEventType.Feedback:
           // 任务完成/反馈事件 — 只处理 running 状态的任务
-          if (task.status !== 'running') {
+          if (task.status !== TaskStatus.Running) {
             ctx.deps.taskEventRepo.markProcessed(ev.id);
             continue;
           }
@@ -132,14 +134,14 @@ export async function processPendingEvents(ctx: GoalOrchestrator): Promise<void>
 
         case TaskEventType.ReviewTaskResult: {
           // Per-task 审核结果 — 处理 completed 但未 merged 的任务
-          if (task.status !== 'completed' || task.merged) {
+          if (task.status !== TaskStatus.Completed || task.merged) {
             ctx.deps.taskEventRepo.markProcessed(ev.id);
             continue;
           }
           logger.info(`[Scanner] Processing review.task_result for task ${ev.taskId}`);
           const rp = (ev.payload ?? {}) as Record<string, unknown>;
           await ctx.handleTaskReviewResult(ev.goalId, ev.taskId, {
-            verdict: typeof rp.verdict === 'string' ? rp.verdict : undefined,
+            verdict: typeof rp.verdict === 'string' ? rp.verdict as TaskReviewVerdict : undefined,
             summary: typeof rp.summary === 'string' ? rp.summary : undefined,
             issues: Array.isArray(rp.issues) ? rp.issues as string[] : undefined,
           });
@@ -151,7 +153,7 @@ export async function processPendingEvents(ctx: GoalOrchestrator): Promise<void>
           logger.info(`[Scanner] Processing review.phase_result for task ${ev.taskId}`);
           const pp = (ev.payload ?? {}) as Record<string, unknown>;
           await ctx.handlePhaseResult(ev.goalId, ev.taskId, {
-            decision: typeof pp.decision === 'string' ? pp.decision : undefined,
+            decision: typeof pp.decision === 'string' ? pp.decision as PhaseDecision : undefined,
             summary: typeof pp.summary === 'string' ? pp.summary : undefined,
             issues: Array.isArray(pp.issues) ? pp.issues as string[] : undefined,
           });
@@ -193,14 +195,14 @@ export async function processPendingEvents(ctx: GoalOrchestrator): Promise<void>
 
         case TaskEventType.ReviewFailedTask: {
           // Tech lead 对失败任务的裁决 — 只处理 failed 状态的任务
-          if (task.status !== 'failed') {
+          if (task.status !== TaskStatus.Failed) {
             ctx.deps.taskEventRepo.markProcessed(ev.id);
             continue;
           }
           logger.info(`[Scanner] Processing review.failed_task for task ${ev.taskId}`);
           const fp = (ev.payload ?? {}) as Record<string, unknown>;
           await ctx.handleFailedTaskReviewResult(ev.goalId, ev.taskId, {
-            verdict: typeof fp.verdict === 'string' ? fp.verdict : undefined,
+            verdict: typeof fp.verdict === 'string' ? fp.verdict as FailedTaskVerdict : undefined,
             reason: typeof fp.reason === 'string' ? fp.reason : undefined,
           });
           break;
@@ -234,10 +236,10 @@ export async function checkOrphanedTasks(ctx: GoalOrchestrator): Promise<void> {
   const guildId = ctx.getGuildId();
   if (!guildId) return;
 
-  const runningStates = await ctx.deps.goalRepo.findByStatuses(['Processing']);
+  const runningStates = await ctx.deps.goalRepo.findByStatuses([GoalStatus.Processing]);
   for (const state of runningStates) {
     for (const task of state.tasks) {
-      if (task.status !== 'running' || !task.channelId) continue;
+      if (task.status !== TaskStatus.Running || !task.channelId) continue;
 
       // 检查是否有未处理的事件（scanner 会处理这些，不需要 check-in）
       const hasCompletedEvent = ctx.deps.taskEventRepo.read(task.id, TaskEventType.Completed) !== null;
@@ -278,7 +280,7 @@ export async function checkOrphanedTasks(ctx: GoalOrchestrator): Promise<void> {
     // 每个任务使用独立 hidden audit session，互不阻塞
 
     for (const task of state.tasks) {
-      if (task.status !== 'completed' || task.merged) continue;
+      if (task.status !== TaskStatus.Completed || task.merged) continue;
 
       // 该 task 已有 audit session 且正在运行 → 跳过（不影响其他任务）
       if (task.auditSessionKey) {
@@ -297,19 +299,19 @@ export async function checkOrphanedTasks(ctx: GoalOrchestrator): Promise<void> {
       const count = task.nudgeCount ?? 0;
       if (count >= MAX_CHECK_INS) {
         logger.warn(`[ReviewerNudge] Task ${task.id} exceeded max nudges, marking blocked`);
-        task.status = 'blocked';
+        task.status = TaskStatus.Blocked;
         task.error = `Reviewer did not respond after ${MAX_CHECK_INS} nudge attempts`;
         await ctx.saveState(state);
         await ctx.notifyGoal(state,
           `Task ${ctx.getTaskLabel(state, task.id)} tech lead stalled (${MAX_CHECK_INS} nudges). Manual intervention needed.`,
-          'error',
+          NotifyType.Error,
         );
         clearTechLeadNudgeState(ctx, task.id);
         continue;
       }
 
       logger.info(`[ReviewerNudge] Nudging tech lead for task ${task.id} (attempt ${count + 1}, phase=${task.pipelinePhase})`);
-      if (task.pipelinePhase === 'conflict') {
+      if (task.pipelinePhase === PipelinePhase.Conflict) {
         ctx.nudgeConflictReview(state, task, guildId, count + 1);  // conflict 仍用 tech lead channel
       } else {
         ctx.triggerTaskReview(state, task, guildId);  // 创建独立 audit session
@@ -349,7 +351,7 @@ export function sendCheckIn(
 
       await ctx.notifyGoal(state,
         `[GoalOrchestrator] Check-in #${attempt} for ${taskId} (session idle, no event received)`,
-        'warning',
+        NotifyType.Warning,
       );
 
       logger.info(`[CheckIn] Sending check-in #${attempt} for task ${taskId}`);

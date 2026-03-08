@@ -7,7 +7,9 @@
  */
 
 import type { ChatUsageResult } from '../types/index.js';
+import { TaskStatus, FeedbackType, GoalDriveStatus } from '../types/index.js';
 import type { GoalOrchestrator } from './index.js';
+import { NotifyType } from './orchestrator-types.js';
 import { buildTaskFailedButtons } from './goal-buttons.js';
 import { triggerFailedTaskReview, triggerTechLeadConsultation } from './review-handler.js';
 import { logger } from '../utils/logger.js';
@@ -24,7 +26,7 @@ export async function onTaskCompleted(
     const task = state.tasks.find(t => t.id === taskId);
     if (!task) return;
     // 防止扫描器与正常流竞争时重复处理同一任务
-    if (task.status !== 'running') return;
+    if (task.status !== TaskStatus.Running) return;
 
     // 清除 check-in 追踪
     ctx.clearCheckInState(taskId);
@@ -45,15 +47,15 @@ export async function onTaskCompleted(
       task.feedback = feedback;
 
       // replan 类型的 feedback → 标记完成，merge，通知 tech lead
-      if (feedback.type === 'replan') {
-        task.status = 'completed';
+      if (feedback.type === FeedbackType.Replan) {
+        task.status = TaskStatus.Completed;
         task.completedAt = Date.now();
         await ctx.saveState(state);
 
         await ctx.notifyGoal(state,
           `**Replan feedback:** ${ctx.getTaskLabel(state, task.id)} - ${task.description}\n` +
           `Reason: ${feedback.reason}`,
-          'info'
+          NotifyType.Info
         );
 
         // 先 merge 分支
@@ -72,31 +74,31 @@ export async function onTaskCompleted(
 
         // 继续调度
         const refreshed = await ctx.getState(goalId);
-        if (refreshed && refreshed.status === 'running') await ctx.reviewAndDispatch(refreshed, taskId);
+        if (refreshed && refreshed.status === GoalDriveStatus.Running) await ctx.reviewAndDispatch(refreshed, taskId);
         return;
       }
 
       // 非 replan 类型 → 标记为 blocked_feedback 等待人工处理
-      task.status = 'blocked_feedback';
+      task.status = TaskStatus.BlockedFeedback;
       await ctx.saveState(state);
       await ctx.notifyGoal(state,
         `**Feedback received:** ${ctx.getTaskLabel(state, task.id)} - ${task.description}\n` +
         `Type: ${feedback.type}\n` +
         `Reason: ${feedback.reason}` +
         (feedback.details ? `\nDetails: ${feedback.details}` : ''),
-        'warning'
+        NotifyType.Warning
       );
       // blocked_feedback 后也经过审查层，让 reviewAndDispatch 处理路由
-      if (state.status === 'running') await ctx.reviewAndDispatch(state);
+      if (state.status === GoalDriveStatus.Running) await ctx.reviewAndDispatch(state);
       return;
     }
 
-    task.status = 'completed';
+    task.status = TaskStatus.Completed;
     task.completedAt = Date.now();
     await ctx.saveState(state);
 
     const costInfo = usage ? ` ($${usage.total_cost_usd.toFixed(4)}, ${Math.round(usage.duration_ms / 1000)}s)` : '';
-    await ctx.notifyGoal(state, `Completed: ${ctx.getTaskLabel(state, task.id)} - ${task.description}${costInfo}`, 'success');
+    await ctx.notifyGoal(state, `Completed: ${ctx.getTaskLabel(state, task.id)} - ${task.description}${costInfo}`, NotifyType.Success);
 
     // Phase Review: 不立即 merge，先触发 per-task 审核
     const guildId = ctx.getGuildId();
@@ -105,7 +107,7 @@ export async function onTaskCompleted(
     } else {
       // 无分支（调研等）→ 直接触发下一轮调度
       const refreshed = await ctx.getState(goalId);
-      if (refreshed && refreshed.status === 'running') await ctx.reviewAndDispatch(refreshed, taskId);
+      if (refreshed && refreshed.status === GoalDriveStatus.Running) await ctx.reviewAndDispatch(refreshed, taskId);
     }
   });
 }
@@ -126,7 +128,7 @@ export async function onTaskFailed(
     // 清除 check-in 追踪
     ctx.clearCheckInState(taskId);
 
-    task.status = 'failed';
+    task.status = TaskStatus.Failed;
     task.error = error;
 
     // 写入 usage 数据（失败的 task 也记录已消耗的 token）
@@ -149,7 +151,7 @@ export async function onTaskFailed(
       // 自动上报 tech lead，由 tech lead 决定是否 retry
       await ctx.notifyGoal(state,
         `Failed: ${ctx.getTaskLabel(state, task.id)} - ${task.description}${costInfo}\nError: ${error}\n\nEscalated to tech lead for review.`,
-        'error',
+        NotifyType.Error,
       );
       triggerFailedTaskReview(ctx, state, task, guildId!);
     } else {
@@ -159,10 +161,10 @@ export async function onTaskFailed(
       const buttons = hasContext ? buildTaskFailedButtons(goalId, task.id) : undefined;
       await ctx.notifyGoal(state,
         `Failed: ${ctx.getTaskLabel(state, task.id)} - ${task.description}${costInfo}\nError: ${error}\n\n${hint}`,
-        'error',
+        NotifyType.Error,
         buttons ? { components: buttons } : undefined,
       );
     }
-    if (state.status === 'running') await ctx.reviewAndDispatch(state);
+    if (state.status === GoalDriveStatus.Running) await ctx.reviewAndDispatch(state);
   });
 }

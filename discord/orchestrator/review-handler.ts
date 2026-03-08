@@ -8,9 +8,10 @@
  */
 
 import type { GoalDriveState, GoalTask } from '../types/index.js';
+import { TaskStatus, GoalDriveStatus, TaskReviewVerdict, FailedTaskVerdict, PhaseDecision, TaskType } from '../types/index.js';
 import type { GoalOrchestrator } from './index.js';
 import type { MergeConflictPayload } from './orchestrator-types.js';
-import { MAX_REVIEW_RETRIES } from './orchestrator-types.js';
+import { MAX_REVIEW_RETRIES, NotifyType } from './orchestrator-types.js';
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { logger } from '../utils/logger.js';
@@ -25,13 +26,13 @@ export function triggerTaskReview(ctx: GoalOrchestrator, state: GoalDriveState, 
   const goalChannelId = state.channelId;
 
   // 调研/手动任务跳过 code-audit，直接 merge 后继续调度
-  if (task.type === '调研' || task.type === '手动') {
+  if (task.type === TaskType.Research || task.type === TaskType.Manual) {
     logger.info(`[TaskReview] Task ${taskId} is type ${task.type}, skipping audit, triggering merge directly`);
     const phase = getPhaseNumber(task);
     ctx.mergeAndCleanup(state, task)
       .then(async () => {
         const refreshed = await ctx.getState(state.goalId);
-        if (!refreshed || refreshed.status !== 'running') return;
+        if (!refreshed || refreshed.status !== GoalDriveStatus.Running) return;
 
         // phase 全部合并完成 → 触发 phase 评估（含 milestone 验收 + 调研报告汇总）
         if (isPhaseFullyMerged(refreshed, phase)) {
@@ -70,7 +71,7 @@ export function triggerTaskReview(ctx: GoalOrchestrator, state: GoalDriveState, 
 
     // 2. 渲染 prompt（测试型任务使用专用 prompt，只验证测试思路）
     const ps = ctx.deps.promptService;
-    const promptKey = task.type === '测试'
+    const promptKey = task.type === TaskType.Test
       ? 'orchestrator.test_task_review'
       : 'orchestrator.task_review';
     const prompt = ps.render(promptKey, {
@@ -83,7 +84,7 @@ export function triggerTaskReview(ctx: GoalOrchestrator, state: GoalDriveState, 
 
     await ctx.notify(goalChannelId,
       `[GoalOrchestrator] Reviewing task ${taskId}: ${task.description}`,
-      'pipeline',
+      NotifyType.Pipeline,
     );
 
     // 3. 纯事件驱动：fire-and-forget，结果由 event scanner 处理
@@ -127,21 +128,21 @@ export async function handleTaskReviewResult(
   ctx: GoalOrchestrator,
   goalId: string,
   taskId: string,
-  result: { verdict?: string; summary?: string; issues?: string[] },
+  result: { verdict?: TaskReviewVerdict; summary?: string; issues?: string[] },
 ): Promise<void> {
   await ctx.withStateLock(goalId, async () => {
     const state = await ctx.getState(goalId);
     if (!state) return;
     const task = state.tasks.find(t => t.id === taskId);
-    if (!task || task.status !== 'completed') return;
+    if (!task || task.status !== TaskStatus.Completed) return;
     // 已经 merged 的不重复处理
     if (task.merged) return;
 
-    if (result.verdict === 'pass') {
+    if (result.verdict === TaskReviewVerdict.Pass) {
       logger.info(`[PhaseReview] Task ${taskId} passed review: ${result.summary}`);
       await ctx.notifyGoal(state,
         `Review passed: ${ctx.getTaskLabel(state, taskId)} - ${result.summary || 'OK'}`,
-        'success',
+        NotifyType.Success,
       );
 
       if (task.branchName) await ctx.mergeAndCleanup(state, task);
@@ -158,15 +159,15 @@ export async function handleTaskReviewResult(
 
       // 非 phase 边界 → 继续调度
       const refreshed = await ctx.getState(goalId);
-      if (refreshed && refreshed.status === 'running') await ctx.reviewAndDispatch(refreshed, taskId);
-    } else if (result.verdict === 'replan' && task.type === '测试') {
+      if (refreshed && refreshed.status === GoalDriveStatus.Running) await ctx.reviewAndDispatch(refreshed, taskId);
+    } else if (result.verdict === TaskReviewVerdict.Replan && task.type === TaskType.Test) {
       // 测试设计正确，但发现了实现 bug → 合并测试分支，触发修复 replan
       const issueTexts = normalizeIssues(result.issues);
       const bugDetails = issueTexts.join('\n- ') || result.summary || 'Tests reveal implementation bug';
       logger.info(`[PhaseReview] Test task ${taskId} found bug, notifying tech lead: ${bugDetails}`);
       await ctx.notifyGoal(state,
         `🐛 Test task ${ctx.getTaskLabel(state, taskId)} found bug — merging tests, notifying tech lead\n${bugDetails}`,
-        'warning',
+        NotifyType.Warning,
       );
 
       // 先 merge 测试分支（测试是正确的）
@@ -182,7 +183,7 @@ export async function handleTaskReviewResult(
       }
 
       const refreshed = await ctx.getState(goalId);
-      if (refreshed && refreshed.status === 'running') {
+      if (refreshed && refreshed.status === GoalDriveStatus.Running) {
         await ctx.reviewAndDispatch(refreshed, taskId);
       }
     } else {
@@ -193,13 +194,13 @@ export async function handleTaskReviewResult(
       logger.info(`[PhaseReview] Task ${taskId} failed review: ${issues}`);
       await ctx.notifyGoal(state,
         `Review failed: ${ctx.getTaskLabel(state, taskId)}\nIssues: ${issues}`,
-        'warning',
+        NotifyType.Warning,
       );
 
       const refixCount = (task.auditRetries ?? 0) + 1;
       if (refixCount > MAX_REVIEW_RETRIES) {
         // 超限 → 标记失败，关闭 audit session
-        task.status = 'failed';
+        task.status = TaskStatus.Failed;
         task.error = `Review failed after ${refixCount} attempts: ${issues}`;
         const guildIdForAudit = ctx.getGuildId();
         if (guildIdForAudit && task.auditSessionKey) {
@@ -209,7 +210,7 @@ export async function handleTaskReviewResult(
         await ctx.saveState(state);
         await ctx.notifyGoal(state,
           `Task ${ctx.getTaskLabel(state, taskId)} failed review ${refixCount} times, marking as failed`,
-          'error',
+          NotifyType.Error,
         );
         return;
       }
@@ -217,7 +218,7 @@ export async function handleTaskReviewResult(
       // 恢复为 running，发送 check-in 带 issues 信息让 subtask 修复
       // 同时将 issues 存入 metadata，供后续周期性 check-in 继续传递上下文
       const reviewIssuesText = `- ${issues}`;
-      task.status = 'running';
+      task.status = TaskStatus.Running;
       task.auditRetries = refixCount;
       task.metadata = { ...task.metadata, lastReviewIssues: reviewIssuesText };
       await ctx.saveState(state);
@@ -252,7 +253,7 @@ export function triggerConflictReview(
       });
       await ctx.notifyGoal(state,
         `[GoalOrchestrator] Conflict review queued: ${ctx.getTaskLabel(state, task.id)}`,
-        'pipeline',
+        NotifyType.Pipeline,
       );
       await ctx.deps.messageHandler.handleBackgroundChat(guildId, techLeadChannelId, prompt, 'review');
     } catch (err: any) {
@@ -293,7 +294,7 @@ export function nudgeConflictReview(
 
       await ctx.notifyGoal(state,
         `[GoalOrchestrator] Conflict review nudge #${attempt} for ${ctx.getTaskLabel(state, task.id)} (tech lead stalled)`,
-        'warning',
+        NotifyType.Warning,
       );
       triggerConflictReview(ctx, state, task, guildId, {
         branchName,
@@ -325,7 +326,7 @@ export async function handleConflictResolutionResult(
       await ctx.saveState(state);
       await ctx.notifyGoal(state,
         `Reviewer resolved conflict and merged: ${ctx.getTaskLabel(state, taskId)} — ${result.summary ?? 'OK'}`,
-        'success',
+        NotifyType.Success,
       );
 
       // 清理 subtask worktree 和分支
@@ -354,14 +355,14 @@ export async function handleConflictResolutionResult(
         return;
       }
       const refreshed = await ctx.getState(goalId);
-      if (refreshed && refreshed.status === 'running') await ctx.reviewAndDispatch(refreshed, taskId);
+      if (refreshed && refreshed.status === GoalDriveStatus.Running) await ctx.reviewAndDispatch(refreshed, taskId);
     } else {
-      task.status = 'blocked';
+      task.status = TaskStatus.Blocked;
       task.error = `merge conflict (tech lead could not resolve: ${result.summary ?? 'unknown'})`;
       await ctx.saveState(state);
       await ctx.notifyGoal(state,
         `Reviewer could not resolve conflict for ${ctx.getTaskLabel(state, taskId)}: ${result.summary ?? 'unknown'}\nManual resolution needed.`,
-        'error',
+        NotifyType.Error,
       );
     }
   });
@@ -397,7 +398,7 @@ export function triggerPhaseEvaluation(ctx: GoalOrchestrator, state: GoalDriveSt
 
       // 提取调研任务报告内容（task.description 含 "输出路径: <relative>.md"）
       const researchReports = phaseTasks
-        .filter(t => t.type === '调研' && t.merged)
+        .filter(t => t.type === TaskType.Research && t.merged)
         .map(t => {
           const match = t.description.match(/输出路径[:：]\s*(\S+\.md)/);
           if (!match) return `- **${t.id}** (${t.description.slice(0, 60)}): 报告路径未在 description 中指定`;
@@ -425,7 +426,7 @@ export function triggerPhaseEvaluation(ctx: GoalOrchestrator, state: GoalDriveSt
 
       await ctx.notifyGoal(state,
         `[GoalOrchestrator] Phase ${phase} complete — triggering evaluation`,
-        'pipeline',
+        NotifyType.Pipeline,
       );
 
       logger.info(`[PhaseReview] Triggering phase ${phase} evaluation for goal ${goalId}`);
@@ -433,7 +434,7 @@ export function triggerPhaseEvaluation(ctx: GoalOrchestrator, state: GoalDriveSt
 
       // Fallback: 检查事件
       const phaseResult = ctx.deps.taskEventRepo.read<{
-        decision?: string;
+        decision?: PhaseDecision;
         summary?: string;
         issues?: string[];
       }>(phaseTaskId, TaskEventType.ReviewPhaseResult);
@@ -446,12 +447,12 @@ export function triggerPhaseEvaluation(ctx: GoalOrchestrator, state: GoalDriveSt
         logger.warn(`[PhaseReview] No review.phase_result event for phase ${phase}, pausing goal`);
         const pauseState = await ctx.getState(goalId);
         if (pauseState) {
-          pauseState.status = 'paused';
+          pauseState.status = GoalDriveStatus.Paused;
           await ctx.saveState(pauseState);
         }
         await ctx.notifyGoal(state,
           `Phase ${phase} 评估未收到结果，goal 已暂停，请手动决定是否继续。`,
-          'warning',
+          NotifyType.Warning,
         );
       }
     } catch (err: any) {
@@ -459,12 +460,12 @@ export function triggerPhaseEvaluation(ctx: GoalOrchestrator, state: GoalDriveSt
       logger.error(`[PhaseReview] Phase ${phase} evaluation failed:`, err);
       const pauseState = await ctx.getState(goalId);
       if (pauseState) {
-        pauseState.status = 'paused';
+        pauseState.status = GoalDriveStatus.Paused;
         await ctx.saveState(pauseState);
       }
       await ctx.notifyGoal(state,
         `Phase ${phase} 评估失败: ${err.message}，goal 已暂停，请手动干预。`,
-        'error',
+        NotifyType.Error,
       );
     }
   })();
@@ -505,17 +506,17 @@ export async function handleFailedTaskReviewResult(
   ctx: GoalOrchestrator,
   goalId: string,
   taskId: string,
-  payload: { verdict?: string; reason?: string },
+  payload: { verdict?: FailedTaskVerdict; reason?: string },
 ): Promise<void> {
   const { verdict, reason } = payload;
 
-  if (verdict === 'retry') {
+  if (verdict === FailedTaskVerdict.Retry) {
     logger.info(`[FailedTaskReview] Tech lead decided to retry task ${taskId}: ${reason}`);
     const ok = await ctx.retryTask(goalId, taskId);
     if (!ok) {
       logger.warn(`[FailedTaskReview] retryTask returned false for ${taskId}`);
     }
-  } else if (verdict === 'replan') {
+  } else if (verdict === FailedTaskVerdict.Replan) {
     // Tech lead 已通过 MCP 工具直接修改任务图，这里只需 skip 失败任务并继续调度
     logger.info(`[FailedTaskReview] Tech lead decided to skip failed task ${taskId} and adjust tasks: ${reason}`);
     await ctx.withStateLock(goalId, async () => {
@@ -523,18 +524,18 @@ export async function handleFailedTaskReviewResult(
       if (!state) return;
       const task = state.tasks.find(t => t.id === taskId);
       if (!task) return;
-      task.status = 'skipped';
+      task.status = TaskStatus.Skipped;
       await ctx.saveState(state);
       await ctx.notifyGoal(state,
         `Tech lead skipped failed task ${ctx.getTaskLabel(state, taskId)} and adjusted plan.\n${reason ? `Reason: ${reason}` : ''}`,
-        'info',
+        NotifyType.Info,
       );
     });
     const refreshed = await ctx.getState(goalId);
-    if (refreshed && refreshed.status === 'running') {
+    if (refreshed && refreshed.status === GoalDriveStatus.Running) {
       await ctx.reviewAndDispatch(refreshed, taskId);
     }
-  } else if (verdict === 'escalate_user') {
+  } else if (verdict === FailedTaskVerdict.EscalateUser) {
     // tech lead 确认需要人工干预
     await ctx.withStateLock(goalId, async () => {
       const state = await ctx.getState(goalId);
@@ -542,7 +543,7 @@ export async function handleFailedTaskReviewResult(
       logger.info(`[FailedTaskReview] Tech lead escalates task ${taskId} to user: ${reason}`);
       await ctx.notifyGoal(state,
         `⚠️ Tech lead escalates **${ctx.getTaskLabel(state, taskId)}** to user.\n${reason ? `Reason: ${reason}\n` : ''}Manual intervention required.`,
-        'error',
+        NotifyType.Error,
       );
     });
   } else {
@@ -553,12 +554,12 @@ export async function handleFailedTaskReviewResult(
       const task = state.tasks.find(t => t.id === taskId);
       if (!task) return;
       logger.info(`[FailedTaskReview] Tech lead decided to skip task ${taskId}: ${reason}`);
-      task.status = 'completed';
+      task.status = TaskStatus.Completed;
       task.completedAt = Date.now();
       await ctx.saveState(state);
       await ctx.notifyGoal(state,
         `Tech lead skipped **${ctx.getTaskLabel(state, taskId)}**.${reason ? ` Reason: ${reason}` : ''}`,
-        'warning',
+        NotifyType.Warning,
       );
       await ctx.reviewAndDispatch(state, taskId);
     });
@@ -584,7 +585,7 @@ export function triggerTechLeadConsultation(
       const techLeadChannelId = state.techLeadChannelId!;
 
       const stuckTasks = state.tasks
-        .filter(t => ['failed', 'blocked_feedback', 'blocked'].includes(t.status))
+        .filter(t => [TaskStatus.Failed, TaskStatus.BlockedFeedback, TaskStatus.Blocked].includes(t.status as TaskStatus))
         .map(t =>
           `- **${t.id}**: ${t.description} [${t.status}]` +
           (t.error ? `\n  Error: ${t.error}` : '') +
@@ -613,17 +614,17 @@ export async function handlePhaseResult(
   ctx: GoalOrchestrator,
   goalId: string,
   _triggerTaskId: string,
-  result: { decision?: string; summary?: string; issues?: string[] },
+  result: { decision?: PhaseDecision; summary?: string; issues?: string[] },
 ): Promise<void> {
   await ctx.withStateLock(goalId, async () => {
     const state = await ctx.getState(goalId);
-    if (!state || state.status !== 'running') return;
+    if (!state || state.status !== GoalDriveStatus.Running) return;
 
-    if (result.decision === 'replan') {
+    if (result.decision === PhaseDecision.Replan) {
       logger.info(`[PhaseReview] Phase evaluation recommends task adjustment: ${result.summary}`);
       await ctx.notifyGoal(state,
         `**Phase evaluation → needs adjustment:** ${result.summary}`,
-        'warning',
+        NotifyType.Warning,
       );
 
       // 通知 tech lead 修改任务
@@ -636,13 +637,13 @@ export async function handlePhaseResult(
       }
 
       const refreshed = await ctx.getState(goalId);
-      if (refreshed && refreshed.status === 'running') await ctx.reviewAndDispatch(refreshed);
+      if (refreshed && refreshed.status === GoalDriveStatus.Running) await ctx.reviewAndDispatch(refreshed);
     } else {
       // continue
       logger.info(`[PhaseReview] Phase evaluation: continue — ${result.summary}`);
       await ctx.notifyGoal(state,
         `**Phase evaluation → continue:** ${result.summary || 'OK'}`,
-        'success',
+        NotifyType.Success,
       );
       await ctx.reviewAndDispatch(state);
     }

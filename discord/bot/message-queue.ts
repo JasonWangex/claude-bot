@@ -42,6 +42,11 @@ export const EmbedColors = {
 
 export type EmbedColor = typeof EmbedColors[keyof typeof EmbedColors] | number;
 
+export enum MessagePriority {
+  High   = 'high',
+  Normal = 'normal',
+}
+
 // --- 操作类型 ---
 
 interface SendOp {
@@ -51,7 +56,7 @@ interface SendOp {
   options?: {
     components?: ActionRowBuilder<MessageActionRowComponentBuilder>[];
     silent?: boolean;  // 抑制 @everyone 提及 (suppressNotifications)
-    priority?: 'high' | 'normal';
+    priority?: MessagePriority;
     embedColor?: EmbedColor;  // 设置后以 Embed 格式发送
   };
   resolve: (messageId: string) => void;
@@ -204,15 +209,15 @@ export class MessageQueue {
   send(channelId: string, text: string, options?: {
     components?: ActionRowBuilder<MessageActionRowComponentBuilder>[];
     silent?: boolean;
-    priority?: 'high' | 'normal';
+    priority?: MessagePriority;
     embedColor?: EmbedColor;
   }): Promise<string> {
-    const priority = options?.priority || 'normal';
+    const priority = options?.priority || MessagePriority.Normal;
     const buffer = this.threadBuffers.get(channelId);
 
     const isFirst = !buffer?.firstSent;
     const hasSpecialFormat = !!(options?.components || options?.embedColor);
-    if (priority === 'high' || isFirst || hasSpecialFormat) {
+    if (priority === MessagePriority.High || isFirst || hasSpecialFormat) {
       this.flushThreadBuffer(channelId);
       this.ensureBuffer(channelId).firstSent = true;
       return new Promise((resolve, reject) => {
@@ -258,7 +263,7 @@ export class MessageQueue {
   sendLong(channelId: string, text: string, options?: {
     components?: ActionRowBuilder<MessageActionRowComponentBuilder>[];
     silent?: boolean;
-    priority?: 'high' | 'normal';
+    priority?: MessagePriority;
     embedColor?: EmbedColor;
   }): Promise<string> {
     if (text.length > this.MAX_EMBED_LENGTH) {
@@ -268,13 +273,13 @@ export class MessageQueue {
 
     if (text.length > this.MAX_MESSAGE_LENGTH) {
       const embedColor = options?.embedColor ?? 0x5865F2;
-      return this.send(channelId, text, { ...options, embedColor, priority: 'high' });
+      return this.send(channelId, text, { ...options, embedColor, priority: MessagePriority.High });
     }
 
-    const priority = options?.priority || 'normal';
+    const priority = options?.priority || MessagePriority.Normal;
     const buffer = this.threadBuffers.get(channelId);
     const isFirst = !buffer?.firstSent;
-    if (priority === 'high' || isFirst || options?.components) {
+    if (priority === MessagePriority.High || isFirst || options?.components) {
       this.flushThreadBuffer(channelId);
       this.ensureBuffer(channelId).firstSent = true;
       return new Promise((resolve, reject) => {

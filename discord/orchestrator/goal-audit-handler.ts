@@ -7,6 +7,7 @@
 
 import type { GoalDriveState } from '../types/index.js';
 import type { GoalOrchestrator } from './index.js';
+import { NotifyType } from './orchestrator-types.js';
 import { execGit } from './git-ops.js';
 import { logger } from '../utils/logger.js';
 
@@ -35,7 +36,7 @@ async function runGoalAudit(
   // 1. 获取 goal worktree 目录
   const goalWorktreeDir = await ctx.getGoalWorktreeDir(state);
   if (!goalWorktreeDir) {
-    await ctx.notifyGoal(state, '[GoalAudit] Goal worktree not found, skipping code review.', 'warning');
+    await ctx.notifyGoal(state, '[GoalAudit] Goal worktree not found, skipping code review.', NotifyType.Warning);
     return;
   }
 
@@ -74,7 +75,7 @@ async function runGoalAudit(
   await ctx.notifyGoal(state,
     `**代码审查开始** — Goal \`${state.goalName}\` 已完成，正在对分支 \`${state.branch}\` 进行自动代码审查...\n` +
     `变更文件数: ${changedFilesCount}`,
-    'info',
+    NotifyType.Info,
   );
 
   // 5. 构建审查 prompt
@@ -85,11 +86,11 @@ async function runGoalAudit(
   ctx.deps.messageHandler.handleBackgroundChat(guildId, auditChannelId, prompt, 'goal-audit')
     .then(() => {
       logger.info(`[GoalAudit] Code review completed for goal ${state.goalId}`);
-      ctx.appendTimeline(state.goalId, `代码审查完成`, 'success');
+      ctx.appendTimeline(state.goalId, `代码审查完成`, NotifyType.Success);
     })
     .catch(err => {
       logger.error(`[GoalAudit] handleBackgroundChat error:`, err);
-      ctx.notifyGoal(state, `[GoalAudit] 代码审查执行出错: ${err.message}`, 'error').catch(() => {});
+      ctx.notifyGoal(state, `[GoalAudit] 代码审查执行出错: ${err.message}`, NotifyType.Error).catch(() => {});
     });
 }
 

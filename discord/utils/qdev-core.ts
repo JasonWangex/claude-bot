@@ -17,6 +17,7 @@ import { forkTaskCore, type ForkTaskDeps, type ForkTaskResult } from './fork-tas
 import { TaskRepo } from '../db/repo/task-repo.js';
 import { getDb } from '../db/index.js';
 import { logger } from './logger.js';
+import { TaskType, TaskStatus } from '../types/index.js';
 
 let taskRepo: TaskRepo | null = null;
 function getTaskRepo(): TaskRepo {
@@ -103,8 +104,8 @@ export async function qdevCore(options: QdevOptions, deps: ForkTaskDeps): Promis
     await repo.save({
       id: forkResult.channelId,
       description,
-      type: '代码',
-      status: 'dispatched',
+      type: TaskType.Code,
+      status: TaskStatus.Dispatched,
       branchName: forkResult.branchName || undefined,
       channelId: forkResult.channelId,
       dispatchedAt: Date.now(),

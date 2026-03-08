@@ -17,9 +17,10 @@ import { generateBranchName } from '../../utils/git-utils.js';
 import { generateTopicTitle } from '../../utils/llm.js';
 import { forkTaskCore } from '../../utils/fork-task.js';
 import { logger } from '../../utils/logger.js';
-import { EmbedColors } from '../message-queue.js';
+import { EmbedColors, MessagePriority } from '../message-queue.js';
 import { getDb } from '../../db/index.js';
 import { GoalRepo } from '../../db/repo/index.js';
+import { GoalStatus } from '../../types/db.js';
 import type { CommandDeps } from './types.js';
 import { requireAuth, requireThread } from './utils.js';
 
@@ -71,16 +72,16 @@ async function handleGoal(
     try {
       const db = getDb();
       const goalMetaRepo = new GoalRepo(db);
-      const collectingGoals = await goalMetaRepo.findGoalsByStatus('Collecting');
-      const plannedGoals = await goalMetaRepo.findGoalsByStatus('Planned');
-      const processingGoals = await goalMetaRepo.findGoalsByStatus('Processing');
-      const blockingGoals = await goalMetaRepo.findGoalsByStatus('Blocking');
+      const collectingGoals = await goalMetaRepo.findGoalsByStatus(GoalStatus.Collecting);
+      const plannedGoals = await goalMetaRepo.findGoalsByStatus(GoalStatus.Planned);
+      const processingGoals = await goalMetaRepo.findGoalsByStatus(GoalStatus.Processing);
+      const blockingGoals = await goalMetaRepo.findGoalsByStatus(GoalStatus.Blocking);
       const allGoals = [...collectingGoals, ...plannedGoals, ...processingGoals, ...blockingGoals];
 
       if (allGoals.length === 0) {
         await messageQueue.send(channelId, 'No active goals found.', {
           embedColor: EmbedColors.GRAY,
-          priority: 'high',
+          priority: MessagePriority.High,
         });
         return;
       }
@@ -120,7 +121,7 @@ async function handleGoal(
         {
           components: rows as any,
           embedColor: EmbedColors.PURPLE,
-          priority: 'high',
+          priority: MessagePriority.High,
         },
       );
     } catch (err: any) {

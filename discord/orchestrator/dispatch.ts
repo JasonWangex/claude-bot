@@ -9,8 +9,17 @@ import { ChannelType, DiscordAPIError, EmbedBuilder } from 'discord.js';
 import { StateManager } from '../bot/state.js';
 import { EmbedColors } from '../bot/message-queue.js';
 import type { GoalDriveState, GoalTask } from '../types/index.js';
-import { ClaudeErrorType, ClaudeExecutionError } from '../types/index.js';
+import {
+  ClaudeErrorType,
+  ClaudeExecutionError,
+  TaskStatus,
+  TaskType,
+  PipelinePhase,
+  GoalDriveStatus,
+  FeedbackType,
+} from '../types/index.js';
 import type { GoalOrchestrator } from './index.js';
+import { NotifyType } from './orchestrator-types.js';
 import { logger } from '../utils/logger.js';
 import { execGit } from './git-ops.js';
 import { createSubtaskBranch } from './goal-branch.js';
@@ -40,12 +49,12 @@ export async function reviewAndDispatch(
   state: GoalDriveState,
   completedTaskId?: string,
 ): Promise<void> {
-  if (state.status !== 'running') return;
+  if (state.status !== GoalDriveStatus.Running) return;
 
   // ── 审查 1: 占位任务拦截 ──
   // 查看待分发队列中是否有占位任务变为可达状态（前一阶段已完成）
   const pendingPlaceholders = state.tasks.filter(t => {
-    if (t.status !== 'pending' || t.type !== '占位') return false;
+    if (t.status !== TaskStatus.Pending || t.type !== TaskType.Placeholder) return false;
     const phase = getPhaseNumber(t);
     return phase <= 1 || isPhaseFullyMerged(state, phase - 1);
   });
@@ -55,14 +64,14 @@ export async function reviewAndDispatch(
 
     // skip 所有占位任务
     for (const ph of pendingPlaceholders) {
-      ph.status = 'skipped';
+      ph.status = TaskStatus.Skipped;
     }
     await ctx.saveState(state);
 
     await ctx.notifyGoal(state,
       `**占位任务需替换:** ${placeholderIds}\n` +
       `占位任务的依赖已满足，已自动跳过。请通过 bot_goal_tasks 添加具体任务替换。`,
-      'warning',
+      NotifyType.Warning,
     );
 
     // 通知 tech lead
@@ -85,9 +94,9 @@ export async function reviewAndDispatch(
     const completedTask = state.tasks.find(t => t.id === completedTaskId);
     if (
       completedTask &&
-      completedTask.type === '调研' &&
-      completedTask.status === 'completed' &&
-      (!completedTask.feedback || completedTask.feedback.type !== 'replan')
+      completedTask.type === TaskType.Research &&
+      completedTask.status === TaskStatus.Completed &&
+      (!completedTask.feedback || completedTask.feedback.type !== FeedbackType.Replan)
     ) {
       logger.info(
         `[Orchestrator] Research task ${completedTaskId} completed without replan feedback — notifying tech lead`,
@@ -95,7 +104,7 @@ export async function reviewAndDispatch(
       await ctx.notifyGoal(state,
         `**调研任务完成:** ${completedTask.id} - ${completedTask.description}\n` +
         `调研任务完成但未提交 replan feedback，已通知 tech lead 评估。`,
-        'info',
+        NotifyType.Info,
       );
 
       // 通知 tech lead 评估调研结果
@@ -115,18 +124,18 @@ export async function reviewAndDispatch(
 
   // ── 审查 3: Feedback 待处理任务路由 ──
   // 检查是否有 blocked_feedback 状态的任务需要按 type 路由处理
-  const feedbackTasks = state.tasks.filter(t => t.status === 'blocked_feedback' && t.feedback);
+  const feedbackTasks = state.tasks.filter(t => t.status === TaskStatus.BlockedFeedback && t.feedback);
   for (const task of feedbackTasks) {
     const fb = task.feedback!;
     switch (fb.type) {
-      case 'blocked':
-      case 'clarify': {
+      case FeedbackType.Blocked:
+      case FeedbackType.Clarify: {
         // blocked/clarify：如果有 thread 上下文，启动 AI 调查
         if (task.channelId) {
           const guildId = ctx.getGuildId();
           if (guildId) {
-            task.status = 'running';
-            task.pipelinePhase = 'execute';
+            task.status = TaskStatus.Running;
+            task.pipelinePhase = PipelinePhase.Execute;
             await ctx.saveState(state);
             ctx.startFeedbackInvestigation(state, task, guildId);
             // 不 return —— 继续处理其他任务，调查异步进行
@@ -137,11 +146,11 @@ export async function reviewAndDispatch(
         break;
       }
 
-      case 'replan': {
+      case FeedbackType.Replan: {
         // replan 类型正常应该在 onTaskCompleted 中已处理
         // 这里作为兜底：标记完成，通知 tech lead
         logger.warn(`[Orchestrator] Unexpected replan feedback in blocked_feedback state: ${task.id}`);
-        task.status = 'completed';
+        task.status = TaskStatus.Completed;
         task.completedAt = Date.now();
         await ctx.saveState(state);
 
@@ -179,10 +188,10 @@ export async function dispatchNext(
   ctx: GoalOrchestrator,
   state: GoalDriveState,
 ): Promise<void> {
-  if (state.status !== 'running') return;
+  if (state.status !== GoalDriveStatus.Running) return;
 
   if (isGoalComplete(state)) {
-    state.status = 'completed';
+    state.status = GoalDriveStatus.Completed;
     await ctx.saveState(state);
 
     // 检查未完成的 todo
@@ -201,7 +210,7 @@ export async function dispatchNext(
       `${getNotifyMention()} **Goal "${state.goalName}" completed!**\n` +
       `Review branch \`${state.branch}\` and merge to main.` +
       todoWarning,
-      'success',
+      NotifyType.Success,
       { driveChannel: true },
     );
 
@@ -226,14 +235,14 @@ export async function dispatchNext(
       );
       await ctx.notifyGoal(state,
         `Goal "${state.goalName}" is stuck — consulting tech lead`,
-        'warning',
+        NotifyType.Warning,
       );
     } else {
       await ctx.notifyGoal(state,
         `Goal "${state.goalName}" is stuck\n` +
         `May have unresolved dependencies or failed tasks\n` +
         `Progress: ${getProgressSummary(state)}`,
-        'warning',
+        NotifyType.Warning,
       );
     }
     return;
@@ -241,13 +250,13 @@ export async function dispatchNext(
 
   const batch = getNextBatch(state);
 
-  const blockedTasks = state.tasks.filter(t => t.status === 'blocked');
+  const blockedTasks = state.tasks.filter(t => t.status === TaskStatus.Blocked);
   for (const task of blockedTasks) {
     if (!task.notifiedBlocked) {
       task.notifiedBlocked = true;
       await ctx.notifyGoal(state,
         `Manual task pending: ${ctx.getTaskLabel(state, task.id)} - ${task.description}\nReply "done ${task.id}" when complete.`,
-        'warning'
+        NotifyType.Warning
       );
     }
   }
@@ -273,7 +282,7 @@ export async function dispatchTask(
   // 优先复用已有分支名（上次 dispatch 中途失败时已保存），避免 AI 翻译产生不同名字
   const branchName = task.branchName ?? await ctx.generateBranchName(task, state);
   task.branchName = branchName;
-  task.status = 'dispatched';
+  task.status = TaskStatus.Dispatched;
   task.dispatchedAt = Date.now();
   await ctx.saveState(state);
 
@@ -314,7 +323,7 @@ export async function dispatchTask(
 
       if (existingChannel) {
         // channel 存在 → 直接 resume，跳过创建
-        task.status = 'running';
+        task.status = TaskStatus.Running;
         await ctx.saveState(state);
 
         // 确保 session 存在（bot 重启后可能丢失）
@@ -326,7 +335,7 @@ export async function dispatchTask(
 
         await ctx.notifyGoal(state,
           `Resumed (branch existed): ${taskLabel} - ${task.description} → \`${branchName}\``,
-          'info'
+          NotifyType.Info
         );
         // 用轻量 continuation prompt 而非完整 buildTaskPrompt，
         // 避免向已有 channel 重复发送初始任务描述
@@ -377,23 +386,23 @@ export async function dispatchTask(
     ctx.deps.stateManager.setSessionForkInfo(guildId, newThreadId, state.channelId, branchName);
 
     task.channelId = newThreadId;
-    task.status = 'running';
+    task.status = TaskStatus.Running;
     await ctx.saveState(state);
 
     const dispatchMsg = isExisting
       ? `Resumed (branch existed, new channel): ${taskLabel} - ${task.description} → \`${branchName}\``
       : `Dispatched: ${taskLabel} - ${task.description} → \`${branchName}\``;
-    await ctx.notifyGoal(state, dispatchMsg, 'info');
+    await ctx.notifyGoal(state, dispatchMsg, NotifyType.Info);
 
     executeTaskPipeline(ctx, state.goalId, task.id, guildId, newThreadId, task, state);
 
   } catch (err: any) {
-    task.status = 'failed';
+    task.status = TaskStatus.Failed;
     task.error = err.message;
     await ctx.saveState(state);
     await ctx.notifyGoal(state,
       `Dispatch failed: ${ctx.getTaskLabel(state, task.id)} - ${task.description}\nError: ${err.message}`,
-      'error'
+      NotifyType.Error
     );
   }
 }
@@ -417,15 +426,15 @@ export function executeTaskPipeline(
   (async () => {
     try {
       // 统一 pipeline：单次执行，Claude 自驱动
-      const model = task.type === '调研'
+      const model = task.type === TaskType.Research
         ? ctx.deps.config.pipelineOpusModel
         : ctx.deps.config.pipelineSonnetModel;
-      ctx.switchSessionModel(guildId, channelId, model, 'execute');
-      await ctx.updatePipelinePhase(goalId, taskId, 'execute');
+      ctx.switchSessionModel(guildId, channelId, model, PipelinePhase.Execute);
+      await ctx.updatePipelinePhase(goalId, taskId, PipelinePhase.Execute);
 
       await ctx.notifyGoal(state,
-        `[GoalOrchestrator] ${taskId}: ${task.type === '调研' ? 'Opus' : 'Sonnet'} 执行 (${task.type})`,
-        'pipeline',
+        `[GoalOrchestrator] ${taskId}: ${task.type === TaskType.Research ? 'Opus' : 'Sonnet'} 执行 (${task.type})`,
+        NotifyType.Pipeline,
       );
 
       const taskPrompt = ctx.buildTaskPrompt(task, state);

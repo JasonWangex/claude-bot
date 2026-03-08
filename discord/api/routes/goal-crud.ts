@@ -12,25 +12,26 @@
 import type { RouteHandler } from '../types.js';
 import { sendJson, readJsonBody } from '../middleware.js';
 import { getDb, GoalRepo, GoalTimelineRepo } from '../../db/index.js';
-import type { Goal, GoalStatus, GoalType } from '../../types/repository.js';
+import type { Goal } from '../../types/repository.js';
+import { GoalStatus, GoalType } from '../../types/db.js';
 
 const VALID_STATUSES: GoalStatus[] = [
-  'Pending', 'Collecting', 'Planned', 'Processing', 'Blocking',
-  'Completed', 'Merged', 'Paused', 'Failed',
+  GoalStatus.Pending, GoalStatus.Collecting, GoalStatus.Planned, GoalStatus.Processing, GoalStatus.Blocking,
+  GoalStatus.Completed, GoalStatus.Merged, GoalStatus.Paused, GoalStatus.Failed,
 ];
-const VALID_TYPES: GoalType[] = ['探索型', '交付型'];
+const VALID_TYPES: GoalType[] = [GoalType.Exploratory, GoalType.Deliverable];
 
 /** 合法的状态转换 */
 const VALID_TRANSITIONS: Partial<Record<GoalStatus, GoalStatus[]>> = {
-  Pending:    ['Collecting'],
-  Collecting: ['Planned', 'Pending'],
-  Planned:    ['Processing', 'Collecting'],
-  Processing: ['Completed', 'Blocking', 'Paused', 'Failed'],
-  Blocking:   ['Processing', 'Completed', 'Paused'],
-  Paused:     ['Processing', 'Failed'],
-  Completed:  ['Merged', 'Processing'],
-  Merged:     [],
-  Failed:     ['Processing'],
+  [GoalStatus.Pending]:    [GoalStatus.Collecting],
+  [GoalStatus.Collecting]: [GoalStatus.Planned, GoalStatus.Pending],
+  [GoalStatus.Planned]:    [GoalStatus.Processing, GoalStatus.Collecting],
+  [GoalStatus.Processing]: [GoalStatus.Completed, GoalStatus.Blocking, GoalStatus.Paused, GoalStatus.Failed],
+  [GoalStatus.Blocking]:   [GoalStatus.Processing, GoalStatus.Completed, GoalStatus.Paused],
+  [GoalStatus.Paused]:     [GoalStatus.Processing, GoalStatus.Failed],
+  [GoalStatus.Completed]:  [GoalStatus.Merged, GoalStatus.Processing],
+  [GoalStatus.Merged]:     [],
+  [GoalStatus.Failed]:     [GoalStatus.Processing],
 };
 
 function getRepo() {
@@ -140,7 +141,7 @@ export const createGoal: RouteHandler = async (req, res) => {
     const goal: Goal = {
       id,
       name: body.name.trim(),
-      status: body.status || 'Pending',
+      status: body.status || GoalStatus.Pending,
       type: body.type || null,
       project: body.project?.trim() || null,
       date: body.date || new Date().toISOString().slice(0, 10),

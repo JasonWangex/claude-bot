@@ -57,7 +57,13 @@ export interface NotifyOptions {
   driveChannel?: boolean;
 }
 
-export type NotifyType = 'success' | 'error' | 'warning' | 'info' | 'pipeline';
+export enum NotifyType {
+  Success  = 'success',
+  Error    = 'error',
+  Warning  = 'warning',
+  Info     = 'info',
+  Pipeline = 'pipeline',
+}
 
 // Constants
 export const CHECK_IN_COOLDOWN = 10 * 60 * 1000;  // 10 分钟

@@ -5,7 +5,8 @@
  */
 
 import type Database from 'better-sqlite3';
-import type { IIdeaRepo, Idea, IdeaStatus, IdeaType } from '../types/repository.js';
+import type { IIdeaRepo, Idea } from '../types/repository.js';
+import { IdeaStatus, IdeaType } from '../types/repository.js';
 import type { IdeaRow } from '../types/db.js';
 
 /** IdeaRow → Idea */
@@ -14,7 +15,7 @@ function rowToIdea(row: IdeaRow): Idea {
     id: row.id,
     name: row.name,
     status: row.status as IdeaStatus,
-    type: (row.type ?? 'manual') as IdeaType,
+    type: (row.type ?? IdeaType.Manual) as IdeaType,
     project: row.project,
     date: row.date,
     body: row.body ?? null,

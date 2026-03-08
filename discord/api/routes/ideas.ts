@@ -11,10 +11,11 @@
 import type { RouteHandler } from '../types.js';
 import { sendJson, readJsonBody } from '../middleware.js';
 import { getDb, IdeaRepository } from '../../db/index.js';
-import type { Idea, IdeaStatus, IdeaType } from '../../types/repository.js';
+import type { Idea } from '../../types/repository.js';
+import { IdeaStatus, IdeaType } from '../../types/repository.js';
 
-const VALID_STATUSES: IdeaStatus[] = ['Idea', 'Processing', 'Active', 'Paused', 'Done', 'Dropped'];
-const VALID_TYPES: IdeaType[] = ['manual', 'todo'];
+const VALID_STATUSES = Object.values(IdeaStatus);
+const VALID_TYPES = Object.values(IdeaType);
 
 function getRepo() {
   return new IdeaRepository(getDb());
@@ -102,13 +103,13 @@ export const createIdea: RouteHandler = async (req, res) => {
     return;
   }
 
-  const status = body.status || 'Idea';
+  const status = body.status || IdeaStatus.Idea;
   if (!VALID_STATUSES.includes(status)) {
     sendJson(res, 400, { ok: false, error: `Invalid status. Must be one of: ${VALID_STATUSES.join(', ')}` });
     return;
   }
 
-  const type = body.type || 'manual';
+  const type = body.type || IdeaType.Manual;
   if (!VALID_TYPES.includes(type)) {
     sendJson(res, 400, { ok: false, error: `Invalid type. Must be one of: ${VALID_TYPES.join(', ')}` });
     return;

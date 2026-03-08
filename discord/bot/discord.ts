@@ -10,10 +10,10 @@ import {
 } from 'discord.js';
 import { StateManager } from './state.js';
 import { InteractionRegistry } from './interaction-registry.js';
-import { MessageQueue, EmbedColors } from './message-queue.js';
+import { MessageQueue, EmbedColors, MessagePriority } from './message-queue.js';
 import { MessageHandler } from './handlers.js';
 import { ClaudeClient } from '../claude/client.js';
-import { DiscordBotConfig, ClaudeErrorType, ClaudeExecutionError } from '../types/index.js';
+import { DiscordBotConfig, ClaudeErrorType, ClaudeExecutionError, TaskStatus } from '../types/index.js';
 import { checkAuth } from './auth.js';
 import { logger } from '../utils/logger.js';
 import { DiscordTransport } from '../utils/transports/discord-transport.js';
@@ -31,6 +31,7 @@ import { TaskEventRepo } from '../db/repo/task-event-repo.js';
 import { GoalTimelineRepo } from '../db/repo/goal-timeline-repo.js';
 import { GoalEventRepo } from '../db/repo/goal-event-repo.js';
 import { IdeaRepository } from '../db/idea-repo.js';
+import { IdeaStatus } from '../types/repository.js';
 import { GuildRepository } from '../db/repo/guild-repo.js';
 import { ChannelRepository } from '../db/repo/channel-repo.js';
 import { ClaudeSessionRepository } from '../db/repo/claude-session-repo.js';
@@ -607,7 +608,7 @@ export class DiscordBot {
           }
 
           // 标记为 Processing
-          idea.status = 'Processing';
+          idea.status = IdeaStatus.Processing;
           idea.updatedAt = Date.now();
           await ideaRepo.save(idea);
 
@@ -667,7 +668,7 @@ export class DiscordBot {
             return;
           }
 
-          idea.status = 'Processing';
+          idea.status = IdeaStatus.Processing;
           idea.updatedAt = Date.now();
           await ideaRepo.save(idea);
 
@@ -947,14 +948,14 @@ export class DiscordBot {
       logger.info(`[Reconnect] channel=${info.channelId} status=${info.status}`);
 
       try {
-        if (info.status === 'completed') {
+        if (info.status === TaskStatus.Completed) {
           if (info.result?.trim()) {
             await this.messageQueue.sendLong(info.channelId, info.result);
           }
           await this.messageQueue.send(
             info.channelId,
             `✅ ${getNotifyMention()} Done`,
-            { priority: 'high', embedColor: EmbedColors.GREEN },
+            { priority: MessagePriority.High, embedColor: EmbedColors.GREEN },
           );
           // Done 发送成功后再设置 doneSentAt，防止 Stop hook 5s 后重复发送
           this.stateManager.setDoneSentAt(info.channelId);
@@ -965,7 +966,7 @@ export class DiscordBot {
           await this.messageQueue.send(
             info.channelId,
             '⚠️ Bot 重启后检测到任务未能完成',
-            { priority: 'high', embedColor: EmbedColors.RED },
+            { priority: MessagePriority.High, embedColor: EmbedColors.RED },
           );
         }
       } catch (err: any) {

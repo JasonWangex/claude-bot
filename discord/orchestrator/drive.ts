@@ -14,7 +14,10 @@ import { createGoalBranch } from './goal-branch.js';
 import { parseTaskDetailPlans, formatDetailPlanForPrompt } from './goal-body-parser.js';
 import { StateManager } from '../bot/state.js';
 import type { GoalDriveState, GoalTask } from '../types/index.js';
+import { GoalDriveStatus, TaskStatus } from '../types/index.js';
 import type { StartDriveParams } from './orchestrator-types.js';
+import { NotifyType } from './orchestrator-types.js';
+import { GoalStatus } from '../types/db.js';
 import type { GoalOrchestrator } from './index.js';
 
 // ── startDrive ──────────────────────────────────────────────────────────
@@ -25,13 +28,13 @@ export async function startDrive(ctx: GoalOrchestrator, params: StartDriveParams
   // 已有 drive 时：paused → 自动 resume；running → 直接返回当前状态
   const existing = await ctx.deps.goalRepo.get(goalId);
   if (existing) {
-    if (existing.status === 'paused') {
+    if (existing.status === GoalDriveStatus.Paused) {
       logger.info(`[Orchestrator] Goal "${goalName}" is paused, auto-resuming`);
       await resumeDrive(ctx, goalId);
       return (await ctx.deps.goalRepo.get(goalId)) ?? existing;
     }
-    if (existing.status === 'running') {
-      await ctx.notify(goalChannelId, `Goal "${goalName}" is already running.`, 'info');
+    if (existing.status === GoalDriveStatus.Running) {
+      await ctx.notify(goalChannelId, `Goal "${goalName}" is already running.`, NotifyType.Info);
       return existing;
     }
   }
@@ -43,7 +46,7 @@ export async function startDrive(ctx: GoalOrchestrator, params: StartDriveParams
       logger.info(`[Orchestrator] Normalized baseCwd: ${inputCwd} → ${baseCwd}`);
     }
   } catch (err: any) {
-    await ctx.notify(goalChannelId, `Invalid working directory: ${inputCwd}\nError: ${err.message}`, 'error');
+    await ctx.notify(goalChannelId, `Invalid working directory: ${inputCwd}\nError: ${err.message}`, NotifyType.Error);
     throw err;
   }
 
@@ -53,7 +56,7 @@ export async function startDrive(ctx: GoalOrchestrator, params: StartDriveParams
   try {
     goalWorktreeDir = await createGoalBranch(baseCwd, branch, ctx.deps.config.worktreesDir);
   } catch (err: any) {
-    await ctx.notify(goalChannelId, `Failed to create goal branch: ${err.message}`, 'error');
+    await ctx.notify(goalChannelId, `Failed to create goal branch: ${err.message}`, NotifyType.Error);
     throw err;
   }
 
@@ -65,7 +68,7 @@ export async function startDrive(ctx: GoalOrchestrator, params: StartDriveParams
   const storedTasks = await ctx.deps.taskRepo.getAllByGoal(goalId);
   if (storedTasks.length === 0) {
     const err = new Error(`No tasks found for goal ${goalId}. Use bot_goal_tasks(action="set") to initialize tasks before starting drive.`);
-    await ctx.notify(goalChannelId, err.message, 'error');
+    await ctx.notify(goalChannelId, err.message, NotifyType.Error);
     throw err;
   }
   logger.info(`[Orchestrator] Loaded ${storedTasks.length} tasks from DB for goal ${goalId}`);
@@ -84,7 +87,7 @@ export async function startDrive(ctx: GoalOrchestrator, params: StartDriveParams
     branch,
     channelId: goalChannelId,
     cwd: baseCwd,
-    status: 'running',
+    status: GoalDriveStatus.Running,
     createdAt: Date.now(),
     updatedAt: Date.now(),
     maxConcurrent,
@@ -139,7 +142,7 @@ export async function startDrive(ctx: GoalOrchestrator, params: StartDriveParams
     `Tasks: ${state.tasks.length}\n` +
     `Max concurrent: ${maxConcurrent}` +
     (state.techLeadChannelId ? `\nTech Lead: <#${state.techLeadChannelId}>` : ''),
-    'success',
+    NotifyType.Success,
     { driveChannel: true },
   );
 
@@ -151,10 +154,10 @@ export async function startDrive(ctx: GoalOrchestrator, params: StartDriveParams
 
 export async function pauseDrive(ctx: GoalOrchestrator, goalId: string): Promise<boolean> {
   const state = await ctx.getState(goalId);
-  if (!state || state.status !== 'running') return false;
-  state.status = 'paused';
+  if (!state || state.status !== GoalDriveStatus.Running) return false;
+  state.status = GoalDriveStatus.Paused;
   await ctx.saveState(state);
-  await ctx.notifyGoal(state, `Goal "${state.goalName}" paused`, 'warning');
+  await ctx.notifyGoal(state, `Goal "${state.goalName}" paused`, NotifyType.Warning);
   return true;
 }
 
@@ -164,7 +167,7 @@ export async function pauseDrive(ctx: GoalOrchestrator, goalId: string): Promise
  * 暂停所有活跃 Goal（紧急模式用）
  */
 export async function pauseAllRunningDrives(ctx: GoalOrchestrator): Promise<void> {
-  const activeGoals = await ctx.deps.goalRepo.findByStatuses(['Processing', 'Paused', 'Blocking']);
+  const activeGoals = await ctx.deps.goalRepo.findByStatuses([GoalStatus.Processing, GoalStatus.Paused, GoalStatus.Blocking]);
   const results = await Promise.allSettled(
     activeGoals.map(state => pauseDrive(ctx, state.goalId)),
   );
@@ -180,10 +183,10 @@ export async function pauseAllRunningDrives(ctx: GoalOrchestrator): Promise<void
 
 export async function resumeDrive(ctx: GoalOrchestrator, goalId: string): Promise<boolean> {
   const state = await ctx.getState(goalId);
-  if (!state || state.status !== 'paused') return false;
-  state.status = 'running';
+  if (!state || state.status !== GoalDriveStatus.Paused) return false;
+  state.status = GoalDriveStatus.Running;
   await ctx.saveState(state);
-  await ctx.notifyGoal(state, `Goal "${state.goalName}" resumed`, 'success');
+  await ctx.notifyGoal(state, `Goal "${state.goalName}" resumed`, NotifyType.Success);
 
   // 确保 tech lead session 存在
   const guildId = ctx.getGuildId();
@@ -204,19 +207,19 @@ export async function getStatus(ctx: GoalOrchestrator, goalId: string): Promise<
 // ── restoreRunningDrives ────────────────────────────────────────────────
 
 export async function restoreRunningDrives(ctx: GoalOrchestrator): Promise<void> {
-  const states = await ctx.deps.goalRepo.findByStatuses(['Processing']);
+  const states = await ctx.deps.goalRepo.findByStatuses([GoalStatus.Processing]);
   for (const state of states) {
     try {
       await stat(state.cwd);
     } catch {
       logger.error(`[Orchestrator] cwd does not exist for ${state.goalName}: ${state.cwd}`);
-      state.status = 'paused';
+      state.status = GoalDriveStatus.Paused;
       await ctx.saveState(state);
       await ctx.notifyGoal(state,
         `Goal "${state.goalName}" restore failed: working directory not found\n` +
         `Path: ${state.cwd}\n` +
         `Auto-paused. Check and resume manually.`,
-        'error'
+        NotifyType.Error
       );
       continue;
     }
@@ -224,7 +227,7 @@ export async function restoreRunningDrives(ctx: GoalOrchestrator): Promise<void>
     // Reset running/dispatched tasks: worktree missing → failed, else → pending (re-dispatch)
     let stateModified = false;
     for (const task of state.tasks) {
-      if ((task.status === 'running' || task.status === 'dispatched') && task.branchName) {
+      if ((task.status === TaskStatus.Running || task.status === TaskStatus.Dispatched) && task.branchName) {
         try {
           const stdout = await execGit(
             ['worktree', 'list', '--porcelain'],
@@ -234,11 +237,11 @@ export async function restoreRunningDrives(ctx: GoalOrchestrator): Promise<void>
           const worktreeDir = ctx.findWorktreeDir(stdout, task.branchName);
           if (!worktreeDir) {
             logger.warn(`[Orchestrator] Worktree missing for task ${task.id} (${task.branchName}), marking failed`);
-            task.status = 'failed';
+            task.status = TaskStatus.Failed;
             task.error = 'Worktree not found after restart';
           } else {
             logger.info(`[Orchestrator] Resetting task ${task.id} to pending for re-dispatch`);
-            task.status = 'pending';
+            task.status = TaskStatus.Pending;
             task.branchName = undefined;
             task.channelId = undefined;
             task.dispatchedAt = undefined;
@@ -247,7 +250,7 @@ export async function restoreRunningDrives(ctx: GoalOrchestrator): Promise<void>
           }
           stateModified = true;
         } catch {
-          task.status = 'failed';
+          task.status = TaskStatus.Failed;
           task.error = 'Cannot verify worktree after restart';
           stateModified = true;
         }
@@ -259,7 +262,7 @@ export async function restoreRunningDrives(ctx: GoalOrchestrator): Promise<void>
     const guildIdForAudit = ctx.getGuildId();
     if (guildIdForAudit) {
       for (const task of state.tasks) {
-        if (task.status === 'completed' && !task.merged && task.auditSessionKey) {
+        if (task.status === TaskStatus.Completed && !task.merged && task.auditSessionKey) {
           ctx.deps.stateManager.archiveSession(guildIdForAudit, task.auditSessionKey, undefined, 'restart-cleanup');
           ctx.deps.stateManager.getOrCreateSession(guildIdForAudit, task.auditSessionKey, {
             name: `audit-${task.id}`,

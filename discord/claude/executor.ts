@@ -7,7 +7,7 @@ import { promisify } from 'util';
 import { openSync, closeSync, readSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, statSync, renameSync } from 'fs';
 import { join, dirname, basename, relative } from 'path';
 import { fileURLToPath } from 'url';
-import { ClaudeResponse, ClaudeOptions, StreamEvent, ProgressCallback, ClaudeErrorType, ClaudeExecutionError, ProcessRegistryEntry, ReconnectedResult } from '../types/index.js';
+import { ClaudeResponse, ClaudeOptions, StreamEvent, ProgressCallback, ClaudeErrorType, ClaudeExecutionError, ProcessRegistryEntry, ReconnectedResult, TaskStatus } from '../types/index.js';
 import { logger } from '../utils/logger.js';
 
 const execFileAsync = promisify(execFile);
@@ -1035,7 +1035,7 @@ export class ClaudeExecutor {
           channelId: entry.channelId,
           lockKey: entry.lockKey,
           claudeSessionId: parseResult.sessionId || entry.claudeSessionId,
-          status: 'completed',
+          status: TaskStatus.Completed,
           result: parseResult.resultEvent.result,
           usage: parseResult.resultEvent.usage,
           duration_ms: parseResult.resultEvent.duration_ms,
@@ -1053,7 +1053,7 @@ export class ClaudeExecutor {
           guildId: entry.guildId,
           channelId: entry.channelId,
           lockKey: entry.lockKey,
-          status: 'failed',
+          status: TaskStatus.Failed,
         });
         this.cleanupOutputFiles(entry);
       }
@@ -1076,7 +1076,7 @@ export class ClaudeExecutor {
           channelId: entry.channelId,
           lockKey: entry.lockKey,
           claudeSessionId: parseResult.sessionId || entry.claudeSessionId,
-          status: parseResult.resultEvent ? 'completed' : 'failed',
+          status: parseResult.resultEvent ? TaskStatus.Completed : TaskStatus.Failed,
           result: parseResult.resultEvent?.result,
           usage: parseResult.resultEvent?.usage,
           duration_ms: parseResult.resultEvent?.duration_ms,

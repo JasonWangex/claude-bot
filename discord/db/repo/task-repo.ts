@@ -9,7 +9,8 @@
 
 import type Database from 'better-sqlite3';
 import type { ITaskRepo } from '../../types/repository.js';
-import type { Task, TaskStatus, PipelinePhase, ChatUsageResult } from '../../types/index.js';
+import type { Task, ChatUsageResult } from '../../types/index.js';
+import { TaskStatus, TaskType, TaskComplexity, PipelinePhase } from '../../types/index.js';
 import type { TaskRow } from '../../types/db.js';
 
 export class TaskRepo implements ITaskRepo {
@@ -246,9 +247,9 @@ function rowToTask(row: TaskRow): Task {
     id: row.id,
     goalId: row.goal_id ?? undefined,
     description: row.description,
-    type: row.type,
+    type: row.type as TaskType,
     phase: row.phase ?? undefined,
-    complexity: row.complexity ?? undefined,
+    complexity: row.complexity as TaskComplexity ?? undefined,
     pipelinePhase: validatePipelinePhase(row.pipeline_phase),
     auditRetries: row.audit_retries ?? 0,
     status: row.status as TaskStatus,
@@ -274,7 +275,7 @@ function rowToTask(row: TaskRow): Task {
   };
 }
 
-const VALID_PIPELINE_PHASES: PipelinePhase[] = ['execute'];
+const VALID_PIPELINE_PHASES: PipelinePhase[] = [PipelinePhase.Execute];
 
 function validatePipelinePhase(value: string | null): PipelinePhase | undefined {
   if (!value) return undefined;
