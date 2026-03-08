@@ -7,7 +7,7 @@
 import type { RouteHandler } from '../types.js';
 import { sendJson, readJsonBody } from '../middleware.js';
 import { getDb } from '../../db/index.js';
-import { GoalEventRepo, GOAL_EVENT_TYPES, type GoalEventType } from '../../db/repo/goal-event-repo.js';
+import { GoalEventRepo, GoalEventType } from '../../db/repo/goal-event-repo.js';
 
 interface CreateGoalEventRequest {
   event_type: string;
@@ -22,16 +22,16 @@ export const createGoalEvent: RouteHandler = async (req, res, params) => {
     return;
   }
 
-  if (!GOAL_EVENT_TYPES.includes(body.event_type as GoalEventType)) {
+  if (!Object.values(GoalEventType).includes(body.event_type as GoalEventType)) {
     sendJson(res, 400, {
       ok: false,
-      error: `Invalid event_type. Must be one of: ${GOAL_EVENT_TYPES.join(', ')}`,
+      error: `Invalid event_type. Must be one of: ${Object.values(GoalEventType).join(', ')}`,
     });
     return;
   }
 
   // event_type 特定 payload 校验
-  if (body.event_type === 'goal.drive') {
+  if (body.event_type === GoalEventType.Drive) {
     const p = body.payload ?? {};
     if (!p.goalName || !p.goalChannelId || !p.baseCwd) {
       sendJson(res, 400, {

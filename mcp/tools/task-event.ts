@@ -8,6 +8,12 @@
 import { z } from 'zod/v4';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { apiPost } from '../api-client.js';
+import { TaskEventType } from '../../discord/db/repo/task-event-repo.js';
+
+// AI-writable event types (excludes MergeConflict which is written by the orchestrator)
+const AI_TASK_EVENT_TYPES = Object.values(TaskEventType).filter(
+  v => v !== TaskEventType.MergeConflict,
+) as [string, ...string[]];
 
 export function registerTaskEventTools(server: McpServer) {
   server.registerTool('bot_task_event', {
@@ -19,14 +25,7 @@ export function registerTaskEventTools(server: McpServer) {
     inputSchema: {
       task_id: z.string().describe('The task ID provided in your prompt (TASK_ID variable)'),
       event_type: z
-        .enum([
-          'task.completed',
-          'task.feedback',
-          'review.task_result',
-          'review.phase_result',
-          'review.conflict_result',
-          'review.failed_task',
-        ])
+        .enum(AI_TASK_EVENT_TYPES)
         .describe('Event type — determines how the orchestrator processes this event'),
       payload: z
         .record(z.string(), z.unknown())

@@ -18,6 +18,7 @@ import { execGit } from './git-ops.js';
 import { cleanupSubtask } from './goal-branch.js';
 import { getPhaseNumber, isPhaseFullyMerged, getProgressSummary } from './task-scheduler.js';
 import { cleanupTaskChannel } from './merge-handler.js';
+import { TaskEventType } from '../db/repo/task-event-repo.js';
 
 export function triggerTaskReview(ctx: GoalOrchestrator, state: GoalDriveState, task: GoalTask, guildId: string): void {
   const taskId = task.id;
@@ -329,7 +330,7 @@ export async function handleConflictResolutionResult(
 
       // 清理 subtask worktree 和分支
       // merge.conflict 事件在前一 scanner tick 已被 markProcessed，需用 readAny 读取历史 payload
-      const conflictPayload = ctx.deps.taskEventRepo.readAny<MergeConflictPayload>(taskId, 'merge.conflict');
+      const conflictPayload = ctx.deps.taskEventRepo.readAny<MergeConflictPayload>(taskId, TaskEventType.MergeConflict);
       if (task.branchName && conflictPayload?.subtaskDir) {
         await cleanupSubtask(state.cwd, conflictPayload.subtaskDir, task.branchName).catch(() => {});
       }
@@ -435,10 +436,10 @@ export function triggerPhaseEvaluation(ctx: GoalOrchestrator, state: GoalDriveSt
         decision?: string;
         summary?: string;
         issues?: string[];
-      }>(phaseTaskId, 'review.phase_result');
+      }>(phaseTaskId, TaskEventType.ReviewPhaseResult);
       if (phaseResult) {
         // 标记已处理，防止 scanner 重复处理
-        ctx.deps.taskEventRepo.markProcessedByTask(phaseTaskId, 'review.phase_result');
+        ctx.deps.taskEventRepo.markProcessedByTask(phaseTaskId, TaskEventType.ReviewPhaseResult);
         await handlePhaseResult(ctx, goalId, phaseTaskId, phaseResult);
       } else {
         // 没写事件 → Pause goal，等待人工干预

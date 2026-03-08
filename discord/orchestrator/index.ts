@@ -22,6 +22,7 @@ import { logger } from '../utils/logger.js';
 
 // Types re-export (external callers import from here)
 import type { OrchestratorDeps, NotifyOptions, NotifyType } from './orchestrator-types.js';
+import { TaskEventType } from '../db/repo/task-event-repo.js';
 export type { StartDriveParams } from './orchestrator-types.js';
 
 // Handler imports
@@ -307,7 +308,7 @@ export class GoalOrchestrator {
       type?: string;
       reason?: string;
       details?: string;
-    }>(task.id, 'task.feedback');
+    }>(task.id, TaskEventType.Feedback);
     if (!parsed || !parsed.type || !parsed.reason) return null;
     return { type: parsed.type, reason: parsed.reason, details: parsed.details };
   }

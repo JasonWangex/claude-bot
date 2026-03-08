@@ -13,23 +13,21 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
 
-export const EVENT_TYPES = [
-  'task.completed',
-  'task.feedback',
-  'review.task_result',
-  'review.phase_result',
-  'merge.conflict',
-  'review.conflict_result',
-  'review.failed_task',
-] as const;
-
-export type EventType = (typeof EVENT_TYPES)[number];
+export enum TaskEventType {
+  Completed            = 'task.completed',
+  Feedback             = 'task.feedback',
+  ReviewTaskResult     = 'review.task_result',
+  ReviewPhaseResult    = 'review.phase_result',
+  MergeConflict        = 'merge.conflict',
+  ReviewConflictResult = 'review.conflict_result',
+  ReviewFailedTask     = 'review.failed_task',
+}
 
 export interface PendingEvent {
   id: string;
   taskId: string;
   goalId: string | null;
-  eventType: EventType;
+  eventType: TaskEventType;
   payload: unknown;
 }
 
@@ -96,7 +94,7 @@ export class TaskEventRepo {
   write(
     taskId: string,
     goalId: string | null,
-    type: EventType,
+    type: TaskEventType,
     payload: unknown,
     source: 'ai' | 'orchestrator',
   ): void {
@@ -116,7 +114,7 @@ export class TaskEventRepo {
    * 仅返回 processed_at IS NULL 的记录，用于"是否有待处理事件"的判断。
    * 如需读取已处理的历史记录（如获取 payload 用于清理），请用 readAny。
    */
-  read<T = unknown>(taskId: string, type: EventType): T | null {
+  read<T = unknown>(taskId: string, type: TaskEventType): T | null {
     const row = this.stmts.read.get(taskId, type) as TaskEventRow | undefined;
     if (!row) return null;
     try {
@@ -130,7 +128,7 @@ export class TaskEventRepo {
    * 读取指定 task 的任意事件（含已处理），找不到返回 null。
    * 用于 handleConflictResolutionResult 等需要读取已处理事件 payload 的场景。
    */
-  readAny<T = unknown>(taskId: string, type: EventType): T | null {
+  readAny<T = unknown>(taskId: string, type: TaskEventType): T | null {
     const row = this.db
       .prepare(`SELECT * FROM task_events WHERE task_id = ? AND event_type = ? LIMIT 1`)
       .get(taskId, type) as TaskEventRow | undefined;
@@ -149,7 +147,7 @@ export class TaskEventRepo {
       id: row.id,
       taskId: row.task_id,
       goalId: row.goal_id,
-      eventType: row.event_type as EventType,
+      eventType: row.event_type as TaskEventType,
       payload: (() => {
         try {
           return JSON.parse(row.payload);
@@ -166,7 +164,7 @@ export class TaskEventRepo {
   }
 
   /** 按 task_id + event_type 标记事件为已处理（UNIQUE 约束保证最多一条） */
-  markProcessedByTask(taskId: string, eventType: EventType): void {
+  markProcessedByTask(taskId: string, eventType: TaskEventType): void {
     this.db
       .prepare(`UPDATE task_events SET processed_at = ? WHERE task_id = ? AND event_type = ?`)
       .run(Date.now(), taskId, eventType);

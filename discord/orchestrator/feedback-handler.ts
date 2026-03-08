@@ -10,6 +10,7 @@ import type { GoalDriveState, GoalTask } from '../types/index.js';
 import type { GoalOrchestrator } from './index.js';
 import { logger } from '../utils/logger.js';
 import { triggerTechLeadConsultation } from './review-handler.js';
+import { TaskEventType } from '../db/repo/task-event-repo.js';
 
 /**
  * 启动 feedback 调查流程（fire-and-forget async）
@@ -230,7 +231,7 @@ export async function readInvestigationResult(
   const defaultResult = { action: 'escalate', reason: 'No investigation event found in DB' };
 
   const result = ctx.deps.taskEventRepo.read<{ action: string; reason: string; details?: string }>(
-    task.id, 'task.feedback',
+    task.id, TaskEventType.Feedback,
   );
   if (!result) return defaultResult;
 

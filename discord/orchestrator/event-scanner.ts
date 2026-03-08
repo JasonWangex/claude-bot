@@ -14,6 +14,8 @@ import { logger } from '../utils/logger.js';
 import { StateManager } from '../bot/state.js';
 import type { MergeConflictPayload } from './orchestrator-types.js';
 import { CHECK_IN_COOLDOWN, MAX_CHECK_INS } from './orchestrator-types.js';
+import { TaskEventType } from '../db/repo/task-event-repo.js';
+import { GoalEventType } from '../db/repo/goal-event-repo.js';
 
 /**
  * 启动事件扫描器（5s 间隔），自动轮询 goal/task 事件和 orphan 检测。
@@ -48,7 +50,7 @@ export async function processGoalEvents(ctx: GoalOrchestrator): Promise<void> {
   const pending = ctx.deps.goalEventRepo.findPending();
   for (const ev of pending) {
     try {
-      if (ev.eventType === 'goal.drive') {
+      if (ev.eventType === GoalEventType.Drive) {
         const p = ev.payload as {
           goalName: string;
           goalChannelId: string;
@@ -117,8 +119,8 @@ export async function processPendingEvents(ctx: GoalOrchestrator): Promise<void>
 
     try {
       switch (ev.eventType) {
-        case 'task.completed':
-        case 'task.feedback':
+        case TaskEventType.Completed:
+        case TaskEventType.Feedback:
           // 任务完成/反馈事件 — 只处理 running 状态的任务
           if (task.status !== 'running') {
             ctx.deps.taskEventRepo.markProcessed(ev.id);
@@ -128,7 +130,7 @@ export async function processPendingEvents(ctx: GoalOrchestrator): Promise<void>
           await ctx.onTaskCompleted(ev.goalId, ev.taskId);
           break;
 
-        case 'review.task_result': {
+        case TaskEventType.ReviewTaskResult: {
           // Per-task 审核结果 — 处理 completed 但未 merged 的任务
           if (task.status !== 'completed' || task.merged) {
             ctx.deps.taskEventRepo.markProcessed(ev.id);
@@ -144,7 +146,7 @@ export async function processPendingEvents(ctx: GoalOrchestrator): Promise<void>
           break;
         }
 
-        case 'review.phase_result': {
+        case TaskEventType.ReviewPhaseResult: {
           // Phase 评估结果
           logger.info(`[Scanner] Processing review.phase_result for task ${ev.taskId}`);
           const pp = (ev.payload ?? {}) as Record<string, unknown>;
@@ -156,7 +158,7 @@ export async function processPendingEvents(ctx: GoalOrchestrator): Promise<void>
           break;
         }
 
-        case 'merge.conflict': {
+        case TaskEventType.MergeConflict: {
           // Merge 冲突等待 tech lead 处理 — tech lead 忙时跳过，下轮再试
           if (task.merged) {
             ctx.deps.taskEventRepo.markProcessed(ev.id);
@@ -174,7 +176,7 @@ export async function processPendingEvents(ctx: GoalOrchestrator): Promise<void>
           break;
         }
 
-        case 'review.conflict_result': {
+        case TaskEventType.ReviewConflictResult: {
           // Reviewer 已解决冲突，继续 merge 流程
           if (task.merged) {
             ctx.deps.taskEventRepo.markProcessed(ev.id);
@@ -189,7 +191,7 @@ export async function processPendingEvents(ctx: GoalOrchestrator): Promise<void>
           break;
         }
 
-        case 'review.failed_task': {
+        case TaskEventType.ReviewFailedTask: {
           // Tech lead 对失败任务的裁决 — 只处理 failed 状态的任务
           if (task.status !== 'failed') {
             ctx.deps.taskEventRepo.markProcessed(ev.id);
@@ -238,8 +240,8 @@ export async function checkOrphanedTasks(ctx: GoalOrchestrator): Promise<void> {
       if (task.status !== 'running' || !task.channelId) continue;
 
       // 检查是否有未处理的事件（scanner 会处理这些，不需要 check-in）
-      const hasCompletedEvent = ctx.deps.taskEventRepo.read(task.id, 'task.completed') !== null;
-      const hasFeedbackEvent = ctx.deps.taskEventRepo.read(task.id, 'task.feedback') !== null;
+      const hasCompletedEvent = ctx.deps.taskEventRepo.read(task.id, TaskEventType.Completed) !== null;
+      const hasFeedbackEvent = ctx.deps.taskEventRepo.read(task.id, TaskEventType.Feedback) !== null;
       if (hasCompletedEvent || hasFeedbackEvent) continue;
 
       // 检查 Claude 进程是否还在运行（比 session 状态更可靠，防止状态滞后导致误触发）
@@ -284,7 +286,7 @@ export async function checkOrphanedTasks(ctx: GoalOrchestrator): Promise<void> {
         if (ctx.deps.claudeClient.isRunning(auditLockKey)) continue;
 
         // session 不在运行，但事件已写入 → 等 event scanner 处理
-        const pendingResult = ctx.deps.taskEventRepo.read(task.id, 'review.task_result');
+        const pendingResult = ctx.deps.taskEventRepo.read(task.id, TaskEventType.ReviewTaskResult);
         if (pendingResult) continue;
       }
 

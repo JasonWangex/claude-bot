@@ -7,8 +7,10 @@
 import type Database from 'better-sqlite3';
 import { randomUUID } from 'crypto';
 
-export const GOAL_EVENT_TYPES = ['goal.drive'] as const;
-export type GoalEventType = typeof GOAL_EVENT_TYPES[number];
+export enum GoalEventType {
+  Drive = 'goal.drive',
+}
+
 
 export interface PendingGoalEvent {
   id: string;

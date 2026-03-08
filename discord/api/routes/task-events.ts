@@ -8,7 +8,7 @@
 import type { RouteHandler } from '../types.js';
 import { sendJson, readJsonBody } from '../middleware.js';
 import { getDb } from '../../db/index.js';
-import { TaskEventRepo, EVENT_TYPES, type EventType } from '../../db/repo/task-event-repo.js';
+import { TaskEventRepo, TaskEventType } from '../../db/repo/task-event-repo.js';
 import { TaskRepo } from '../../db/repo/index.js';
 
 // GET /api/events
@@ -46,10 +46,10 @@ export const createTaskEvent: RouteHandler = async (req, res, params) => {
 
   const { event_type, payload } = body;
 
-  if (!event_type || !EVENT_TYPES.includes(event_type as EventType)) {
+  if (!event_type || !Object.values(TaskEventType).includes(event_type as TaskEventType)) {
     sendJson(res, 400, {
       ok: false,
-      error: `Invalid event_type. Must be one of: ${EVENT_TYPES.join(', ')}`,
+      error: `Invalid event_type. Must be one of: ${Object.values(TaskEventType).join(', ')}`,
     });
     return;
   }
@@ -71,7 +71,7 @@ export const createTaskEvent: RouteHandler = async (req, res, params) => {
     }
 
     const eventRepo = new TaskEventRepo(db);
-    eventRepo.write(taskId, task.goalId ?? null, event_type as EventType, payload, 'ai');
+    eventRepo.write(taskId, task.goalId ?? null, event_type as TaskEventType, payload, 'ai');
 
     sendJson(res, 201, { ok: true, data: { task_id: taskId, event_type, recorded: true } });
   } catch (error: any) {

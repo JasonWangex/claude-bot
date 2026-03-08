@@ -9,6 +9,7 @@ import {
   abortMerge,
 } from './goal-branch.js';
 import { logger } from '../utils/logger.js';
+import { TaskEventType } from '../db/repo/task-event-repo.js';
 
 /**
  * 删除子任务的 Discord channel（归档 session + 调用 Discord API 删除）。
@@ -107,7 +108,7 @@ export async function doMergeAndCleanup(ctx: GoalOrchestrator, state: GoalDriveS
         `${reason}: \`${branchName}\` → \`${state.branch}\`. Queued for tech lead...`,
         'warning'
       );
-      ctx.deps.taskEventRepo.write(task.id, state.goalId, 'merge.conflict', {
+      ctx.deps.taskEventRepo.write(task.id, state.goalId, TaskEventType.MergeConflict, {
         branchName,
         goalWorktreeDir,
         subtaskDir: subtaskDir ?? null,
@@ -126,7 +127,7 @@ export async function doMergeAndCleanup(ctx: GoalOrchestrator, state: GoalDriveS
         `Merge exception (treated as conflict): \`${branchName}\` → \`${state.branch}\`. Queued for tech lead...\nError: ${err.message}`,
         'warning'
       );
-      ctx.deps.taskEventRepo.write(task.id, state.goalId, 'merge.conflict', {
+      ctx.deps.taskEventRepo.write(task.id, state.goalId, TaskEventType.MergeConflict, {
         branchName,
         goalWorktreeDir,
         subtaskDir: subtaskDir ?? null,

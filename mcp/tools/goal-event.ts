@@ -8,6 +8,7 @@
 import { z } from 'zod/v4';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { apiPost } from '../api-client.js';
+import { GoalEventType } from '../../discord/db/repo/goal-event-repo.js';
 
 export function registerGoalEventTools(server: McpServer) {
   server.registerTool('bot_goal_event', {
@@ -17,7 +18,7 @@ export function registerGoalEventTools(server: McpServer) {
       'Use goal.drive to trigger Drive after tasks have been initialized with bot_goal_tasks(action="set").',
     inputSchema: {
       goal_id: z.string().describe('Goal ID'),
-      event_type: z.enum(['goal.drive']).describe('Event type'),
+      event_type: z.nativeEnum(GoalEventType).describe('Event type'),
       payload: z
         .object({
           goalName: z.string().min(1).describe('Goal display name'),
