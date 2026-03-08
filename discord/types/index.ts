@@ -433,6 +433,8 @@ export interface GoalDriveState {
   channelId: string;          // 调度员 channel（用于通知用户）
   techLeadChannelId?: string; // Tech Lead 专用 channel（Opus 实例运行在此，负责审查、冲突解决、阶段评估）
   phaseMilestones?: Record<string, string>; // Phase 里程碑映射 {phaseNumber: milestone}
+  /** Phase evaluation 待决状态。非 null 表示 tech lead 已收到 prompt 但尚未写回事件，供扫描器检测并重推。 */
+  pendingPhaseEval?: { phase: number; phaseTaskId: string; triggeredAt: number; nudgeCount: number };
   cwd: string;
   status: GoalDriveStatus;
   createdAt: number;

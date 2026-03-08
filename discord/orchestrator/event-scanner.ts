@@ -275,6 +275,50 @@ export async function checkOrphanedTasks(ctx: GoalOrchestrator): Promise<void> {
       sendCheckIn(ctx, state, task, guildId, count + 1, task.metadata?.lastReviewIssues as string | undefined);
     }
 
+    // ── Phase evaluation 监工：tech lead 未写 review.phase_result 事件时重推 ──
+    if (state.pendingPhaseEval) {
+      const { phase, phaseTaskId, triggeredAt, nudgeCount } = state.pendingPhaseEval;
+
+      // 先检查事件是否已在 DB 中（可能 tech lead 写了但 triggerPhaseEvaluation 未读到）
+      const pendingResult = ctx.deps.taskEventRepo.read<{
+        decision?: string; summary?: string; issues?: string[];
+      }>(phaseTaskId, TaskEventType.ReviewPhaseResult);
+
+      if (pendingResult) {
+        // 事件已存在 → 清除 pendingPhaseEval，event scanner 下轮自然处理
+        logger.info(`[PhaseEvalNudge] Found pending review.phase_result for phase ${phase}, clearing pendingPhaseEval`);
+        state.pendingPhaseEval = undefined;
+        await ctx.saveState(state);
+      } else {
+        // 检查 tech lead session 是否空闲（如果还在运行，等它完成）
+        const techLeadChannelId = state.techLeadChannelId ?? state.channelId;
+        const techLeadLockKey = StateManager.channelLockKey(guildId, techLeadChannelId);
+        if (!ctx.deps.claudeClient.isRunning(techLeadLockKey)) {
+          // tech lead 空闲且无事件 → 检查 cooldown
+          if (now - triggeredAt >= CHECK_IN_COOLDOWN) {
+            if (nudgeCount >= MAX_CHECK_INS) {
+              // 超限 → pause goal
+              logger.warn(`[PhaseEvalNudge] Phase ${phase} evaluation exceeded max nudges (${MAX_CHECK_INS}), pausing goal`);
+              state.pendingPhaseEval = undefined;
+              state.status = GoalDriveStatus.Paused;
+              await ctx.saveState(state);
+              await ctx.notifyGoal(state,
+                `Phase ${phase} 评估经 ${MAX_CHECK_INS} 次重推仍未收到结果，goal 已暂停，请手动干预。`,
+                NotifyType.Error,
+              );
+            } else {
+              // 重推 phase evaluation
+              logger.info(`[PhaseEvalNudge] Re-triggering phase ${phase} evaluation (nudge #${nudgeCount + 1})`);
+              state.pendingPhaseEval = { phase, phaseTaskId, triggeredAt: now, nudgeCount: nudgeCount + 1 };
+              await ctx.saveState(state);
+              const { triggerPhaseEvaluation } = await import('./review-handler.js');
+              triggerPhaseEvaluation(ctx, state, phase, guildId);
+            }
+          }
+        }
+      }
+    }
+
     // ── Reviewer 监工：completed + unmerged 任务 ──
     // 纯状态检测，不依赖事件（bot 重启后事件可能丢失）
     // 每个任务使用独立 hidden audit session，互不阻塞

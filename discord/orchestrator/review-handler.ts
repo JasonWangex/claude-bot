@@ -199,7 +199,7 @@ export async function handleTaskReviewResult(
 
       const refixCount = (task.auditRetries ?? 0) + 1;
       if (refixCount > MAX_REVIEW_RETRIES) {
-        // 超限 → 标记失败，关闭 audit session
+        // 超限 → 标记失败，关闭 audit session，清理 channel
         task.status = TaskStatus.Failed;
         task.error = `Review failed after ${refixCount} attempts: ${issues}`;
         const guildIdForAudit = ctx.getGuildId();
@@ -212,6 +212,12 @@ export async function handleTaskReviewResult(
           `Task ${ctx.getTaskLabel(state, taskId)} failed review ${refixCount} times, marking as failed`,
           NotifyType.Error,
         );
+        // 通知 tech lead（若有）；无 tech lead 则直接清理 channel
+        if (guildIdForAudit && state.techLeadChannelId) {
+          triggerFailedTaskReview(ctx, state, task, guildIdForAudit);
+        } else if (guildIdForAudit) {
+          await cleanupTaskChannel(ctx, task, guildIdForAudit);
+        }
         return;
       }
 
@@ -429,32 +435,36 @@ export function triggerPhaseEvaluation(ctx: GoalOrchestrator, state: GoalDriveSt
         NotifyType.Pipeline,
       );
 
+      // 写入 pendingPhaseEval，让扫描器在 tech lead 未响应时能检测并重推
+      // 保留已有 nudgeCount（由 scanner 递增），避免重推时被重置归零
+      const freshState = await ctx.getState(goalId);
+      if (freshState) {
+        const existingNudgeCount = freshState.pendingPhaseEval?.nudgeCount ?? 0;
+        freshState.pendingPhaseEval = { phase, phaseTaskId, triggeredAt: Date.now(), nudgeCount: existingNudgeCount };
+        await ctx.saveState(freshState);
+      }
+
       logger.info(`[PhaseReview] Triggering phase ${phase} evaluation for goal ${goalId}`);
       await ctx.deps.messageHandler.handleBackgroundChat(guildId, techLeadChannelId, prompt, 'review');
 
-      // Fallback: 检查事件
+      // 检查事件（tech lead 在 session 中同步写入的场景）
       const phaseResult = ctx.deps.taskEventRepo.read<{
         decision?: PhaseDecision;
         summary?: string;
         issues?: string[];
       }>(phaseTaskId, TaskEventType.ReviewPhaseResult);
       if (phaseResult) {
-        // 标记已处理，防止 scanner 重复处理
+        // 标记已处理，清除 pendingPhaseEval，防止扫描器重复处理
         ctx.deps.taskEventRepo.markProcessedByTask(phaseTaskId, TaskEventType.ReviewPhaseResult);
-        await handlePhaseResult(ctx, goalId, phaseTaskId, phaseResult);
-      } else {
-        // 没写事件 → Pause goal，等待人工干预
-        logger.warn(`[PhaseReview] No review.phase_result event for phase ${phase}, pausing goal`);
-        const pauseState = await ctx.getState(goalId);
-        if (pauseState) {
-          pauseState.status = GoalDriveStatus.Paused;
-          await ctx.saveState(pauseState);
+        const stateAfter = await ctx.getState(goalId);
+        if (stateAfter) {
+          stateAfter.pendingPhaseEval = undefined;
+          await ctx.saveState(stateAfter);
         }
-        await ctx.notifyGoal(state,
-          `Phase ${phase} 评估未收到结果，goal 已暂停，请手动决定是否继续。`,
-          NotifyType.Warning,
-        );
+        await handlePhaseResult(ctx, goalId, phaseTaskId, phaseResult);
       }
+      // 未写事件：保留 pendingPhaseEval，由扫描器在下一个 tick 检测并重推
+      // （scanner 会在 tech lead session idle 时重新触发评估，超限后才 pause）
     } catch (err: any) {
       // 评估失败 → Pause goal
       logger.error(`[PhaseReview] Phase ${phase} evaluation failed:`, err);
@@ -530,6 +540,8 @@ export async function handleFailedTaskReviewResult(
         `Tech lead skipped failed task ${ctx.getTaskLabel(state, taskId)} and adjusted plan.\n${reason ? `Reason: ${reason}` : ''}`,
         NotifyType.Info,
       );
+      const guildId = ctx.getGuildId();
+      if (guildId) await cleanupTaskChannel(ctx, task, guildId);
     });
     const refreshed = await ctx.getState(goalId);
     if (refreshed && refreshed.status === GoalDriveStatus.Running) {
@@ -540,11 +552,16 @@ export async function handleFailedTaskReviewResult(
     await ctx.withStateLock(goalId, async () => {
       const state = await ctx.getState(goalId);
       if (!state) return;
+      const task = state.tasks.find(t => t.id === taskId);
       logger.info(`[FailedTaskReview] Tech lead escalates task ${taskId} to user: ${reason}`);
       await ctx.notifyGoal(state,
         `⚠️ Tech lead escalates **${ctx.getTaskLabel(state, taskId)}** to user.\n${reason ? `Reason: ${reason}\n` : ''}Manual intervention required.`,
         NotifyType.Error,
       );
+      if (task) {
+        const guildId = ctx.getGuildId();
+        if (guildId) await cleanupTaskChannel(ctx, task, guildId);
+      }
     });
   } else {
     // skip — 标记完成，继续推进 goal
@@ -561,6 +578,8 @@ export async function handleFailedTaskReviewResult(
         `Tech lead skipped **${ctx.getTaskLabel(state, taskId)}**.${reason ? ` Reason: ${reason}` : ''}`,
         NotifyType.Warning,
       );
+      const guildId = ctx.getGuildId();
+      if (guildId) await cleanupTaskChannel(ctx, task, guildId);
       await ctx.reviewAndDispatch(state, taskId);
     });
   }
@@ -619,6 +638,9 @@ export async function handlePhaseResult(
   await ctx.withStateLock(goalId, async () => {
     const state = await ctx.getState(goalId);
     if (!state || state.status !== GoalDriveStatus.Running) return;
+
+    // 清除 pendingPhaseEval（无论 decision 如何，评估已收到结果）
+    state.pendingPhaseEval = undefined;
 
     if (result.decision === PhaseDecision.Replan) {
       logger.info(`[PhaseReview] Phase evaluation recommends task adjustment: ${result.summary}`);

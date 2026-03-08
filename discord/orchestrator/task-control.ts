@@ -192,6 +192,8 @@ export async function pauseTask(ctx: GoalOrchestrator, goalId: string, taskId: s
 /**
  * Hard stop：杀 session + 标记 failed。
  * 用于需要立即终止任务的场景。
+ * 状态设为 Failed（非 Cancelled），使后续 review.failed_task 事件可被 scanner 正确处理。
+ * 如有 tech lead，自动触发 failed_task_review；否则 reviewAndDispatch 继续推进其他任务。
  */
 export async function stopTask(ctx: GoalOrchestrator, goalId: string, taskId: string): Promise<boolean> {
   const state = await ctx.getState(goalId);
@@ -201,13 +203,20 @@ export async function stopTask(ctx: GoalOrchestrator, goalId: string, taskId: st
 
   abortTaskSession(ctx, task);
 
-  task.status = TaskStatus.Cancelled;
+  task.status = TaskStatus.Failed;
   task.error = 'Stopped by user';
   await ctx.saveState(state);
   await ctx.notifyGoal(state,
     `Stopped task: ${ctx.getTaskLabel(state, task.id)} - ${task.description}`,
     NotifyType.Error
   );
+
+  const guildId = ctx.getGuildId();
+  if (guildId && state.techLeadChannelId) {
+    // 通知 tech lead 决定后续处理（retry / skip / replan）
+    const { triggerFailedTaskReview } = await import('./review-handler.js');
+    triggerFailedTaskReview(ctx, state, task, guildId);
+  }
   if (state.status === GoalDriveStatus.Running) await ctx.reviewAndDispatch(state);
   return true;
 }
