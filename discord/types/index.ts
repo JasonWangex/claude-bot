@@ -9,7 +9,6 @@ export type {
   GoalType,
   DevLog,
   Idea,
-  IdeaStatus,
   IGuildRepo,
   IGoalRepo,
   ITaskRepo,
@@ -17,6 +16,7 @@ export type {
   IDevLogRepo,
   IIdeaRepo,
 } from './repository.js';
+export { IdeaStatus, IdeaType } from './repository.js';
 
 // 会话（内存状态，用 channelId 标识）
 export interface Session {
@@ -226,7 +226,7 @@ export interface ReconnectedResult {
   channelId: string;
   lockKey: string;
   claudeSessionId?: string;
-  status: 'completed' | 'running' | 'failed';
+  status: TaskStatus.Completed | TaskStatus.Running | TaskStatus.Failed;
   result?: string;
   usage?: { input_tokens: number; output_tokens: number };
   duration_ms?: number;
@@ -287,19 +287,84 @@ export interface DiscordBotConfig {
 
 // ========== Goal Orchestrator ==========
 
-export type GoalDriveStatus = 'running' | 'paused' | 'completed' | 'failed';
-export type TaskStatus = 'pending' | 'dispatched' | 'running' | 'completed' | 'failed' | 'blocked' | 'blocked_feedback' | 'paused' | 'cancelled' | 'skipped';
-export type TaskType = '代码' | '手动' | '调研' | '占位' | '测试';
+export enum GoalDriveStatus {
+  Running   = 'running',
+  Paused    = 'paused',
+  Completed = 'completed',
+  Failed    = 'failed',
+}
+
+export enum TaskStatus {
+  Pending         = 'pending',
+  Dispatched      = 'dispatched',
+  Running         = 'running',
+  Completed       = 'completed',
+  Failed          = 'failed',
+  Blocked         = 'blocked',
+  BlockedFeedback = 'blocked_feedback',
+  Paused          = 'paused',
+  Cancelled       = 'cancelled',
+  Skipped         = 'skipped',
+}
+
+export enum TaskType {
+  Code        = '代码',
+  Manual      = '手动',
+  Research    = '调研',
+  Placeholder = '占位',
+  Test        = '测试',
+}
+
+export enum FeedbackType {
+  Blocked = 'blocked',
+  Clarify = 'clarify',
+  Replan  = 'replan',
+}
 
 /** Feedback 文件内容结构（feedback/<taskId>.json） */
 export interface TaskFeedback {
-  type: string;        // e.g. 'needs_revision' | 'question' | 'blocked'
+  type: FeedbackType;  // e.g. 'blocked' | 'clarify' | 'replan'
   reason: string;      // 简短原因
   details?: string;    // 详细说明
 }
 
-export type TaskComplexity = 'simple' | 'complex';
-export type PipelinePhase = 'execute' | 'conflict';
+export enum TaskComplexity {
+  Simple  = 'simple',
+  Complex = 'complex',
+}
+
+export enum PipelinePhase {
+  Execute  = 'execute',
+  Conflict = 'conflict',
+}
+
+/** Task review 裁决（reviewer session 的输出） */
+export enum TaskReviewVerdict {
+  Pass   = 'pass',
+  Replan = 'replan',
+}
+
+/** 失败任务的 tech lead 裁决 */
+export enum FailedTaskVerdict {
+  Retry        = 'retry',
+  Replan       = 'replan',
+  EscalateUser = 'escalate_user',
+  Skip         = 'skip',
+}
+
+/** Feedback 调查结论（AI 调查后的行动决策） */
+export enum FeedbackInvestigationAction {
+  Continue = 'continue',
+  Retry    = 'retry',
+  Replan   = 'replan',
+  Escalate = 'escalate',
+}
+
+/** Phase 评估决策 */
+export enum PhaseDecision {
+  Continue = 'continue',
+  Replan   = 'replan',
+}
 
 export interface Task {
   id: string;
@@ -348,15 +413,15 @@ export interface Task {
 
 // ========== Deprecated aliases ==========
 /** @deprecated Use TaskStatus */
-export type GoalTaskStatus = TaskStatus;
+export { TaskStatus as GoalTaskStatus };
 /** @deprecated Use TaskType */
-export type GoalTaskType = TaskType;
+export { TaskType as GoalTaskType };
 /** @deprecated Use TaskFeedback */
 export type GoalTaskFeedback = TaskFeedback;
 /** @deprecated Use TaskComplexity */
-export type GoalTaskComplexity = TaskComplexity;
+export { TaskComplexity as GoalTaskComplexity };
 /** @deprecated Use PipelinePhase */
-export type GoalPipelinePhase = PipelinePhase;
+export { PipelinePhase as GoalPipelinePhase };
 /** @deprecated Use Task */
 export type GoalTask = Task;
 

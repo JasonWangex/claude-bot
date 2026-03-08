@@ -53,10 +53,20 @@ export interface DevLog {
 }
 
 /** Idea 状态 */
-export type IdeaStatus = 'Idea' | 'Processing' | 'Active' | 'Paused' | 'Done' | 'Dropped';
+export enum IdeaStatus {
+  Idea       = 'Idea',
+  Processing = 'Processing',
+  Active     = 'Active',
+  Paused     = 'Paused',
+  Done       = 'Done',
+  Dropped    = 'Dropped',
+}
 
 /** Idea 类型 */
-export type IdeaType = 'manual' | 'todo';
+export enum IdeaType {
+  Manual = 'manual',
+  Todo   = 'todo',
+}
 
 /** 想法记录 */
 export interface Idea {

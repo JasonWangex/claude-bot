@@ -16,13 +16,26 @@
 // ================================================================
 
 /** Goal 状态 */
-export type GoalStatus = 'Pending' | 'Collecting' | 'Planned' | 'Processing' | 'Blocking' | 'Completed' | 'Merged' | 'Paused' | 'Failed';
+export enum GoalStatus {
+  Pending    = 'Pending',
+  Collecting = 'Collecting',
+  Planned    = 'Planned',
+  Processing = 'Processing',
+  Blocking   = 'Blocking',
+  Completed  = 'Completed',
+  Merged     = 'Merged',
+  Paused     = 'Paused',
+  Failed     = 'Failed',
+}
 
 /** Goal 类型 */
-export type GoalType = '探索型' | '交付型';
+export enum GoalType {
+  Exploratory = '探索型',
+  Deliverable = '交付型',
+}
 
 /** Goal Drive 运行状态（已有，re-export 保持一致） */
-export type { GoalTaskStatus, GoalTaskType } from './index.js';
+export { TaskStatus as GoalTaskStatus, TaskType as GoalTaskType, TaskComplexity } from './index.js';
 
 // ================================================================
 // guilds 表 — 对应 GuildState 接口
@@ -94,17 +107,17 @@ export interface GoalTaskRow {
   /** 任务描述 */
   description: string;
   /** 任务类型 */
-  type: '代码' | '手动' | '调研' | '占位' | '测试';
+  type: TaskType;
   /** 阶段编号 */
   phase: number | null;
   /** 代码任务复杂度 */
-  complexity: 'simple' | 'complex' | null;
+  complexity: TaskComplexity | null;
   /** 当前流水线阶段 */
   pipeline_phase: string | null;
   /** audit 重试计数 */
   audit_retries: number;
   /** 执行状态 */
-  status: 'pending' | 'dispatched' | 'running' | 'completed' | 'failed' | 'blocked' | 'blocked_feedback' | 'paused' | 'cancelled' | 'skipped';
+  status: TaskStatus;
   /** git 分支名 */
   branch_name: string | null;
   /** 对应的 Discord Thread ID */
@@ -348,9 +361,9 @@ export interface TaskRow {
   id: string;                    // 全局唯一 PK
   goal_id: string | null;       // nullable
   description: string;
-  type: '代码' | '手动' | '调研' | '占位' | '测试';
+  type: TaskType;
   phase: number | null;
-  complexity: 'simple' | 'complex' | null;
+  complexity: TaskComplexity | null;
   pipeline_phase: string | null;
   audit_retries: number;
   status: string;
@@ -412,9 +425,8 @@ export interface PromptConfigRow {
 // 运行时类型转换辅助
 // ================================================================
 
-import type {
-  GuildState,
-} from './index.js';
+import type { GuildState } from './index.js';
+import { TaskType, TaskComplexity, TaskStatus } from './index.js';
 
 /** GuildState → GuildRow */
 export type GuildStateToRow = (guild: GuildState) => GuildRow;
