@@ -107,11 +107,6 @@ export class GoalOrchestrator {
   // 核心工具方法（被多个 handler 共用，保留在类内）
   // ============================================================
 
-  /** 任务标签（task ID 已含 goal seq 前缀，如 g2t1） */
-  getTaskLabel(_state: GoalDriveState, taskId: string): string {
-    return taskId;
-  }
-
   /** 串行化对同一 goal 的状态操作，防止并发 read-modify-write race condition */
   async withStateLock<T>(goalId: string, fn: () => Promise<T>): Promise<T> {
     const prev = this.stateLocks.get(goalId) ?? Promise.resolve();
@@ -150,7 +145,7 @@ export class GoalOrchestrator {
   getNextStepSummary(state: GoalDriveState): string {
     const running = state.tasks.filter(t => t.status === TaskStatus.Dispatched || t.status === TaskStatus.Running);
     if (running.length > 0) {
-      const labels = running.map(t => this.getTaskLabel(state, t.id)).join(', ');
+      const labels = running.map(t => t.id).join(', ');
       return `正在执行: ${labels}`;
     }
     return getProgressSummary(state);
@@ -322,18 +317,16 @@ export class GoalOrchestrator {
   async generateBranchName(task: GoalTask, state: GoalDriveState): Promise<string> {
     const prefix = task.type === TaskType.Research ? 'research' : 'feat';
     const translated = await translateToBranchName(task.description);
-    const taskLabel = this.getTaskLabel(state, task.id);
-    return `${prefix}/${taskLabel}-${translated.slice(0, 30) || 'task'}`;
+    return `${prefix}/${task.id}-${translated.slice(0, 30) || 'task'}`;
   }
 
   buildTaskPrompt(task: GoalTask, state: GoalDriveState): string {
     const ps = this.deps.promptService;
-    const label = this.getTaskLabel(state, task.id);
     const parts: string[] = [];
 
     parts.push(ps.render('orchestrator.task', {
       GOAL_NAME: state.goalName,
-      TASK_LABEL: label,
+      TASK_LABEL: task.id,
       TASK_TYPE: task.type,
       TASK_DESCRIPTION: task.description,
     }));

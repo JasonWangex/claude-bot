@@ -37,7 +37,7 @@ export async function skipTask(ctx: GoalOrchestrator, goalId: string, taskId: st
 
   task.status = TaskStatus.Skipped;
   await ctx.saveState(state);
-  await ctx.notifyGoal(state, `Skipped task: ${ctx.getTaskLabel(state, task.id)} - ${task.description}`, NotifyType.Info);
+  await ctx.notifyGoal(state, `Skipped task: ${task.id} - ${task.description}`, NotifyType.Info);
   if (state.status === GoalDriveStatus.Running) await ctx.reviewAndDispatch(state);
   return true;
 }
@@ -53,7 +53,7 @@ export async function markTaskDone(ctx: GoalOrchestrator, goalId: string, taskId
   task.status = TaskStatus.Completed;
   task.completedAt = Date.now();
   await ctx.saveState(state);
-  await ctx.notifyGoal(state, `Manual task completed: ${ctx.getTaskLabel(state, task.id)} - ${task.description}`, NotifyType.Success);
+  await ctx.notifyGoal(state, `Manual task completed: ${task.id} - ${task.description}`, NotifyType.Success);
   if (state.status === GoalDriveStatus.Running) await ctx.reviewAndDispatch(state, taskId);
   return true;
 }
@@ -97,7 +97,7 @@ export async function retryTask(ctx: GoalOrchestrator, goalId: string, taskId: s
       task.auditRetries = 0;
       await ctx.saveState(state);
       await ctx.notifyGoal(state,
-        `Retrying task (resume): ${ctx.getTaskLabel(state, task.id)} - ${task.description}`,
+        `Retrying task (resume): ${task.id} - ${task.description}`,
         NotifyType.Warning,
       );
       const errorHint = savedError ? `\n上次错误：${savedError}` : '';
@@ -123,7 +123,7 @@ export async function retryTask(ctx: GoalOrchestrator, goalId: string, taskId: s
   ctx.deps.taskEventRepo.clearByTask(taskId);
   ctx.clearCheckInState(taskId);
   await ctx.saveState(state);
-  await ctx.notifyGoal(state, `Retrying task (re-dispatch): ${ctx.getTaskLabel(state, task.id)} - ${task.description}`, NotifyType.Warning);
+  await ctx.notifyGoal(state, `Retrying task (re-dispatch): ${task.id} - ${task.description}`, NotifyType.Warning);
   if (state.status === GoalDriveStatus.Running) await ctx.reviewAndDispatch(state);
   return true;
 }
@@ -162,7 +162,7 @@ export async function resetAndStart(ctx: GoalOrchestrator, goalId: string, taskI
   ctx.deps.taskEventRepo.clearByTask(taskId);
   ctx.clearCheckInState(taskId);
   await ctx.saveState(state);
-  await ctx.notifyGoal(state, `Reset and start task: ${ctx.getTaskLabel(state, task.id)} - ${task.description}`, NotifyType.Warning);
+  await ctx.notifyGoal(state, `Reset and start task: ${task.id} - ${task.description}`, NotifyType.Warning);
   if (state.status === GoalDriveStatus.Running) await ctx.reviewAndDispatch(state);
   return true;
 }
@@ -183,7 +183,7 @@ export async function pauseTask(ctx: GoalOrchestrator, goalId: string, taskId: s
   // 保留 branchName, channelId, dispatchedAt — 恢复时复用
   await ctx.saveState(state);
   await ctx.notifyGoal(state,
-    `Paused task: ${ctx.getTaskLabel(state, task.id)} - ${task.description}\nBranch/thread preserved for resume.`,
+    `Paused task: ${task.id} - ${task.description}\nBranch/thread preserved for resume.`,
     NotifyType.Warning
   );
   return true;
@@ -207,7 +207,7 @@ export async function stopTask(ctx: GoalOrchestrator, goalId: string, taskId: st
   task.error = 'Stopped by user';
   await ctx.saveState(state);
   await ctx.notifyGoal(state,
-    `Stopped task: ${ctx.getTaskLabel(state, task.id)} - ${task.description}`,
+    `Stopped task: ${task.id} - ${task.description}`,
     NotifyType.Error
   );
 
@@ -241,7 +241,7 @@ export async function nudgeTask(ctx: GoalOrchestrator, goalId: string, taskId: s
   const guildId = ctx.getGuildId();
   if (!guildId) return { ok: false, message: 'Bot not authorized' };
 
-  const label = ctx.getTaskLabel(state, task.id);
+  const label = task.id;
 
   // 已完成且已合并 → 无需操作，仅通知 goal channel
   if (task.status === TaskStatus.Completed && task.merged) {

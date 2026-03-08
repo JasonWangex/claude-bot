@@ -69,7 +69,7 @@ export async function doMergeAndCleanup(ctx: GoalOrchestrator, state: GoalDriveS
         logger.warn(`[MergeHandler] Auto-committing uncommitted changes in ${subtaskDir} for task ${task.id}`);
         await autoCommit(subtaskDir, `auto: ${task.description}`);
         await ctx.notifyGoal(state,
-          `Task ${ctx.getTaskLabel(state, task.id)} 有未提交的修改，已自动 commit。请检查是否正常。`,
+          `Task ${task.id} 有未提交的修改，已自动 commit。请检查是否正常。`,
           NotifyType.Warning,
         );
       }

@@ -38,12 +38,6 @@ export const setGoalTasks: RouteHandler = async (req, res, params) => {
     return;
   }
 
-  const ids = body.tasks.map(t => t.id);
-  if (new Set(ids).size !== ids.length) {
-    sendJson(res, 400, { ok: false, error: 'Task IDs must be unique' });
-    return;
-  }
-
   const db = getDb();
 
   // 确认 goal 存在
@@ -54,8 +48,15 @@ export const setGoalTasks: RouteHandler = async (req, res, params) => {
     return;
   }
 
-  const tasks: Task[] = body.tasks.map(t => ({
-    id: t.id,
+  const prefix = `g${goal.seq}`;
+  const prefixedIds = body.tasks.map(t => `${prefix}${t.id}`);
+  if (new Set(prefixedIds).size !== prefixedIds.length) {
+    sendJson(res, 400, { ok: false, error: 'Task IDs must be unique' });
+    return;
+  }
+
+  const tasks: Task[] = body.tasks.map((t, i) => ({
+    id: prefixedIds[i],
     goalId,
     description: t.description,
     type: (VALID_TYPES.includes(t.type as ValidType) ? t.type : TaskType.Code) as ValidType,
@@ -103,8 +104,9 @@ export const addGoalTask: RouteHandler = async (req, res, params) => {
     return;
   }
 
+  const taskId = `g${goal.seq}${body.id}`;
   const task: Task = {
-    id: body.id,
+    id: taskId,
     goalId,
     description: body.description,
     type: (VALID_TYPES.includes(body.type as ValidType) ? body.type : TaskType.Code) as ValidType,
@@ -121,9 +123,9 @@ export const addGoalTask: RouteHandler = async (req, res, params) => {
   try {
     const taskRepo = new TaskRepo(db);
     const existing = await taskRepo.getAllByGoal(goalId);
-    const duplicate = existing.find(t => t.id === body.id);
+    const duplicate = existing.find(t => t.id === taskId);
     if (duplicate) {
-      sendJson(res, 409, { ok: false, error: `Task ID already exists: ${body.id}` });
+      sendJson(res, 409, { ok: false, error: `Task ID already exists: ${taskId}` });
       return;
     }
     await taskRepo.saveAll([...existing, task], goalId);

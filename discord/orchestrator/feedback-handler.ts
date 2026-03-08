@@ -209,7 +209,7 @@ export function buildFeedbackInvestigationPrompt(
   state: GoalDriveState,
 ): string {
   const fb = task.feedback!;
-  const label = ctx.getTaskLabel(state, task.id);
+  const label = task.id;
 
   return ctx.deps.promptService.render('orchestrator.feedback_investigation', {
     TASK_LABEL: label,

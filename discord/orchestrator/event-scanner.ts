@@ -347,7 +347,7 @@ export async function checkOrphanedTasks(ctx: GoalOrchestrator): Promise<void> {
         task.error = `Reviewer did not respond after ${MAX_CHECK_INS} nudge attempts`;
         await ctx.saveState(state);
         await ctx.notifyGoal(state,
-          `Task ${ctx.getTaskLabel(state, task.id)} tech lead stalled (${MAX_CHECK_INS} nudges). Manual intervention needed.`,
+          `Task ${task.id} tech lead stalled (${MAX_CHECK_INS} nudges). Manual intervention needed.`,
           NotifyType.Error,
         );
         clearTechLeadNudgeState(ctx, task.id);
@@ -387,7 +387,7 @@ export function sendCheckIn(
     try {
       const ps = ctx.deps.promptService;
       const prompt = ps.render('orchestrator.check_in', {
-        TASK_LABEL: ctx.getTaskLabel(state, taskId),
+        TASK_LABEL: taskId,
         REVIEW_ISSUES: reviewIssues
           ? `\n## Review Issues\nThe following issues were found in a previous review:\n${reviewIssues}`
           : '',

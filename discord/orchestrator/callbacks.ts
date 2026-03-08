@@ -53,7 +53,7 @@ export async function onTaskCompleted(
         await ctx.saveState(state);
 
         await ctx.notifyGoal(state,
-          `**Replan feedback:** ${ctx.getTaskLabel(state, task.id)} - ${task.description}\n` +
+          `**Replan feedback:** ${task.id} - ${task.description}\n` +
           `Reason: ${feedback.reason}`,
           NotifyType.Info
         );
@@ -65,7 +65,7 @@ export async function onTaskCompleted(
         const guildId = ctx.getGuildId();
         if (state.techLeadChannelId && guildId) {
           triggerTechLeadConsultation(ctx, state, guildId,
-            `任务 ${ctx.getTaskLabel(state, task.id)} 提交了 replan feedback`,
+            `任务 ${task.id} 提交了 replan feedback`,
             `Reason: ${feedback.reason}${feedback.details ? `\nDetails: ${feedback.details}` : ''}`,
           );
         } else {
@@ -82,7 +82,7 @@ export async function onTaskCompleted(
       task.status = TaskStatus.BlockedFeedback;
       await ctx.saveState(state);
       await ctx.notifyGoal(state,
-        `**Feedback received:** ${ctx.getTaskLabel(state, task.id)} - ${task.description}\n` +
+        `**Feedback received:** ${task.id} - ${task.description}\n` +
         `Type: ${feedback.type}\n` +
         `Reason: ${feedback.reason}` +
         (feedback.details ? `\nDetails: ${feedback.details}` : ''),
@@ -98,7 +98,7 @@ export async function onTaskCompleted(
     await ctx.saveState(state);
 
     const costInfo = usage ? ` ($${usage.total_cost_usd.toFixed(4)}, ${Math.round(usage.duration_ms / 1000)}s)` : '';
-    await ctx.notifyGoal(state, `Completed: ${ctx.getTaskLabel(state, task.id)} - ${task.description}${costInfo}`, NotifyType.Success);
+    await ctx.notifyGoal(state, `Completed: ${task.id} - ${task.description}${costInfo}`, NotifyType.Success);
 
     // Phase Review: 不立即 merge，先触发 per-task 审核
     const guildId = ctx.getGuildId();
@@ -150,7 +150,7 @@ export async function onTaskFailed(
     if (hasTechLead) {
       // 自动上报 tech lead，由 tech lead 决定是否 retry
       await ctx.notifyGoal(state,
-        `Failed: ${ctx.getTaskLabel(state, task.id)} - ${task.description}${costInfo}\nError: ${error}\n\nEscalated to tech lead for review.`,
+        `Failed: ${task.id} - ${task.description}${costInfo}\nError: ${error}\n\nEscalated to tech lead for review.`,
         NotifyType.Error,
       );
       triggerFailedTaskReview(ctx, state, task, guildId!);
@@ -160,7 +160,7 @@ export async function onTaskFailed(
       const hint = `Reply "retry ${task.id}" to retry.`;
       const buttons = hasContext ? buildTaskFailedButtons(goalId, task.id) : undefined;
       await ctx.notifyGoal(state,
-        `Failed: ${ctx.getTaskLabel(state, task.id)} - ${task.description}${costInfo}\nError: ${error}\n\n${hint}`,
+        `Failed: ${task.id} - ${task.description}${costInfo}\nError: ${error}\n\n${hint}`,
         NotifyType.Error,
         buttons ? { components: buttons } : undefined,
       );

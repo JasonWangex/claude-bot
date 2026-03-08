@@ -255,7 +255,7 @@ export async function dispatchNext(
     if (!task.notifiedBlocked) {
       task.notifiedBlocked = true;
       await ctx.notifyGoal(state,
-        `Manual task pending: ${ctx.getTaskLabel(state, task.id)} - ${task.description}\nReply "done ${task.id}" when complete.`,
+        `Manual task pending: ${task.id} - ${task.description}\nReply "done ${task.id}" when complete.`,
         NotifyType.Warning
       );
     }
@@ -308,7 +308,7 @@ export async function dispatchTask(
     if (!guildId) throw new Error('Bot not authorized');
 
     const guild = await ctx.deps.client.guilds.fetch(guildId);
-    const taskLabel = ctx.getTaskLabel(state, task.id);
+    const taskLabel = task.id;
 
     // 分支已存在且 task 持有 channelId → 验证 channel 是否仍存在后决定是否 resume
     if (isExisting && task.channelId) {
@@ -401,7 +401,7 @@ export async function dispatchTask(
     task.error = err.message;
     await ctx.saveState(state);
     await ctx.notifyGoal(state,
-      `Dispatch failed: ${ctx.getTaskLabel(state, task.id)} - ${task.description}\nError: ${err.message}`,
+      `Dispatch failed: ${task.id} - ${task.description}\nError: ${err.message}`,
       NotifyType.Error
     );
   }

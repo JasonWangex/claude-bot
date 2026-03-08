@@ -75,7 +75,7 @@ export function triggerTaskReview(ctx: GoalOrchestrator, state: GoalDriveState, 
       ? 'orchestrator.test_task_review'
       : 'orchestrator.task_review';
     const prompt = ps.render(promptKey, {
-      TASK_LABEL: ctx.getTaskLabel(state, taskId),
+      TASK_LABEL: taskId,
       TASK_DESCRIPTION: task.description,
       BRANCH_NAME: task.branchName ?? '(unknown)',
       DIFF_STATS: diffStats,
@@ -141,7 +141,7 @@ export async function handleTaskReviewResult(
     if (result.verdict === TaskReviewVerdict.Pass) {
       logger.info(`[PhaseReview] Task ${taskId} passed review: ${result.summary}`);
       await ctx.notifyGoal(state,
-        `Review passed: ${ctx.getTaskLabel(state, taskId)} - ${result.summary || 'OK'}`,
+        `Review passed: ${taskId} - ${result.summary || 'OK'}`,
         NotifyType.Success,
       );
 
@@ -166,7 +166,7 @@ export async function handleTaskReviewResult(
       const bugDetails = issueTexts.join('\n- ') || result.summary || 'Tests reveal implementation bug';
       logger.info(`[PhaseReview] Test task ${taskId} found bug, notifying tech lead: ${bugDetails}`);
       await ctx.notifyGoal(state,
-        `🐛 Test task ${ctx.getTaskLabel(state, taskId)} found bug — merging tests, notifying tech lead\n${bugDetails}`,
+        `🐛 Test task ${taskId} found bug — merging tests, notifying tech lead\n${bugDetails}`,
         NotifyType.Warning,
       );
 
@@ -177,7 +177,7 @@ export async function handleTaskReviewResult(
       const guildIdForBug = ctx.getGuildId();
       if (state.techLeadChannelId && guildIdForBug) {
         triggerTechLeadConsultation(ctx, state, guildIdForBug,
-          `测试任务 ${ctx.getTaskLabel(state, taskId)} 发现 bug，请创建修复任务`,
+          `测试任务 ${taskId} 发现 bug，请创建修复任务`,
           bugDetails,
         );
       }
@@ -193,7 +193,7 @@ export async function handleTaskReviewResult(
       const issues = issueTexts.join('\n- ') || result.summary || 'Review failed';
       logger.info(`[PhaseReview] Task ${taskId} failed review: ${issues}`);
       await ctx.notifyGoal(state,
-        `Review failed: ${ctx.getTaskLabel(state, taskId)}\nIssues: ${issues}`,
+        `Review failed: ${taskId}\nIssues: ${issues}`,
         NotifyType.Warning,
       );
 
@@ -209,7 +209,7 @@ export async function handleTaskReviewResult(
         }
         await ctx.saveState(state);
         await ctx.notifyGoal(state,
-          `Task ${ctx.getTaskLabel(state, taskId)} failed review ${refixCount} times, marking as failed`,
+          `Task ${taskId} failed review ${refixCount} times, marking as failed`,
           NotifyType.Error,
         );
         // 通知 tech lead（若有）；无 tech lead 则直接清理 channel
@@ -250,7 +250,7 @@ export function triggerConflictReview(
       const techLeadChannelId = state.techLeadChannelId ?? state.channelId;
       const ps = ctx.deps.promptService;
       const prompt = ps.render('orchestrator.conflict_review', {
-        TASK_LABEL: ctx.getTaskLabel(state, task.id),
+        TASK_LABEL: task.id,
         BRANCH_NAME: payload.branchName,
         GOAL_BRANCH: state.branch,
         TASK_DESCRIPTION: payload.taskDescription,
@@ -258,7 +258,7 @@ export function triggerConflictReview(
         TASK_ID: task.id,
       });
       await ctx.notifyGoal(state,
-        `[GoalOrchestrator] Conflict review queued: ${ctx.getTaskLabel(state, task.id)}`,
+        `[GoalOrchestrator] Conflict review queued: ${task.id}`,
         NotifyType.Pipeline,
       );
       await ctx.deps.messageHandler.handleBackgroundChat(guildId, techLeadChannelId, prompt, 'review');
@@ -299,7 +299,7 @@ export function nudgeConflictReview(
       const subtaskDir = ctx.findWorktreeDir(stdout, branchName);
 
       await ctx.notifyGoal(state,
-        `[GoalOrchestrator] Conflict review nudge #${attempt} for ${ctx.getTaskLabel(state, task.id)} (tech lead stalled)`,
+        `[GoalOrchestrator] Conflict review nudge #${attempt} for ${task.id} (tech lead stalled)`,
         NotifyType.Warning,
       );
       triggerConflictReview(ctx, state, task, guildId, {
@@ -327,11 +327,12 @@ export async function handleConflictResolutionResult(
     if (!task || task.merged) return;
 
     if (result.resolved) {
+      task.status = TaskStatus.Completed;
       task.merged = true;
       ctx.clearTechLeadNudgeState(taskId);
       await ctx.saveState(state);
       await ctx.notifyGoal(state,
-        `Reviewer resolved conflict and merged: ${ctx.getTaskLabel(state, taskId)} — ${result.summary ?? 'OK'}`,
+        `Reviewer resolved conflict and merged: ${taskId} — ${result.summary ?? 'OK'}`,
         NotifyType.Success,
       );
 
@@ -367,7 +368,7 @@ export async function handleConflictResolutionResult(
       task.error = `merge conflict (tech lead could not resolve: ${result.summary ?? 'unknown'})`;
       await ctx.saveState(state);
       await ctx.notifyGoal(state,
-        `Reviewer could not resolve conflict for ${ctx.getTaskLabel(state, taskId)}: ${result.summary ?? 'unknown'}\nManual resolution needed.`,
+        `Reviewer could not resolve conflict for ${taskId}: ${result.summary ?? 'unknown'}\nManual resolution needed.`,
         NotifyType.Error,
       );
     }
@@ -496,7 +497,7 @@ export function triggerFailedTaskReview(
       const techLeadChannelId = state.techLeadChannelId ?? state.channelId;
       const ps = ctx.deps.promptService;
       const prompt = ps.render('orchestrator.failed_task_review', {
-        TASK_LABEL: ctx.getTaskLabel(state, task.id),
+        TASK_LABEL: task.id,
         TASK_DESCRIPTION: task.description,
         ERROR: task.error ?? '(unknown)',
         TASK_ID: task.id,
@@ -537,7 +538,7 @@ export async function handleFailedTaskReviewResult(
       task.status = TaskStatus.Skipped;
       await ctx.saveState(state);
       await ctx.notifyGoal(state,
-        `Tech lead skipped failed task ${ctx.getTaskLabel(state, taskId)} and adjusted plan.\n${reason ? `Reason: ${reason}` : ''}`,
+        `Tech lead skipped failed task ${taskId} and adjusted plan.\n${reason ? `Reason: ${reason}` : ''}`,
         NotifyType.Info,
       );
       const guildId = ctx.getGuildId();
@@ -555,7 +556,7 @@ export async function handleFailedTaskReviewResult(
       const task = state.tasks.find(t => t.id === taskId);
       logger.info(`[FailedTaskReview] Tech lead escalates task ${taskId} to user: ${reason}`);
       await ctx.notifyGoal(state,
-        `⚠️ Tech lead escalates **${ctx.getTaskLabel(state, taskId)}** to user.\n${reason ? `Reason: ${reason}\n` : ''}Manual intervention required.`,
+        `⚠️ Tech lead escalates **${taskId}** to user.\n${reason ? `Reason: ${reason}\n` : ''}Manual intervention required.`,
         NotifyType.Error,
       );
       if (task) {
@@ -575,7 +576,7 @@ export async function handleFailedTaskReviewResult(
       task.completedAt = Date.now();
       await ctx.saveState(state);
       await ctx.notifyGoal(state,
-        `Tech lead skipped **${ctx.getTaskLabel(state, taskId)}**.${reason ? ` Reason: ${reason}` : ''}`,
+        `Tech lead skipped **${taskId}**.${reason ? ` Reason: ${reason}` : ''}`,
         NotifyType.Warning,
       );
       const guildId = ctx.getGuildId();
