@@ -59,7 +59,7 @@ claude-bot 把 Discord 变成一个完整的 AI 开发工作台。每一个 Disc
 
 ## 和原生 Claude Code / 同类工具的区别
 
-| | 原生 Claude Code | claude-squad / OpenClaw | claude-bot |
+| | 原生 Claude Code | claude-squad | claude-bot |
 |---|---|---|---|
 | 界面 | Terminal | Terminal / TUI | Discord（任意设备） |
 | 并行会话 | 不支持 | 支持（手动管理） | 支持（自动调度） |
