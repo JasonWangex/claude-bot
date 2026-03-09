@@ -33,6 +33,7 @@ export function loadDiscordConfig(): DiscordBotConfig {
   const authorizedGuildId = process.env.AUTHORIZED_GUILD_ID || undefined;
   const generalChannelId = process.env.GENERAL_CHANNEL_ID || undefined;
   const botLogsChannelId = process.env.BOT_LOGS_CHANNEL_ID || undefined;
+  const lostAndFoundChannelId = process.env.LOST_AND_FOUND_CHANNEL_ID || undefined;
 
   const defaultWorkDir = process.env.DEFAULT_WORK_DIR || process.env.HOME || '/tmp';
   const projectsRoot = process.env.PROJECTS_ROOT || defaultWorkDir;
@@ -55,6 +56,7 @@ export function loadDiscordConfig(): DiscordBotConfig {
     authorizedGuildId,
     generalChannelId,
     botLogsChannelId,
+    lostAndFoundChannelId,
     defaultWorkDir,
     claudeCliPath: process.env.CLAUDE_CLI_PATH || 'claude',
     maxTurns: parseIntSafe(process.env.MAX_TURNS, 20),

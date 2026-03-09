@@ -274,6 +274,7 @@ export interface DiscordBotConfig {
   authorizedGuildId?: string;
   generalChannelId?: string;
   botLogsChannelId?: string;
+  lostAndFoundChannelId?: string;
   projectsRoot: string;
   autoCreateProjectDir: boolean;
   topicDirNaming: 'kebab-case' | 'snake_case' | 'original';

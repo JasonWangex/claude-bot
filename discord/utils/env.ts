@@ -103,6 +103,7 @@ export function getBotLogsChannelId(): string | undefined {
   return process.env.BOT_LOGS_CHANNEL_ID || undefined;
 }
 
+
 /**
  * 获取通知 mention 字符串。
  * 若配置了 DISCORD_NOTIFY_USER_ID，返回 <@userId>；否则 fallback 到 @everyone。

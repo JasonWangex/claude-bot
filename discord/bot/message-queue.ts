@@ -133,6 +133,8 @@ export class MessageQueue {
   private pendingAsyncOps = 0;
   private client: Client;
   private channelCache = new Map<string, TextBasedChannel>();
+  private channelNames = new Map<string, string>();
+  private lostAndFoundChannelId: string | null = null;
 
   // Per-thread 缓冲区
   private threadBuffers = new Map<string, ThreadBuffer>();
@@ -159,6 +161,10 @@ export class MessageQueue {
     this.client = client;
   }
 
+  setLostAndFoundChannelId(channelId: string): void {
+    this.lostAndFoundChannelId = channelId;
+  }
+
   private async getChannel(channelId: string): Promise<TextBasedChannel | null> {
     const cached = this.channelCache.get(channelId);
     if (cached) return cached;
@@ -167,12 +173,57 @@ export class MessageQueue {
       const channel = await this.client.channels.fetch(channelId);
       if (channel && channel.isTextBased()) {
         this.channelCache.set(channelId, channel as TextBasedChannel);
+        if ('name' in channel && typeof (channel as any).name === 'string') {
+          this.channelNames.set(channelId, (channel as any).name);
+        }
         return channel as TextBasedChannel;
       }
     } catch (err: any) {
       logger.error(`Failed to fetch channel ${channelId}:`, err);
     }
     return null;
+  }
+
+  /**
+   * 将发送失败的消息重定向到 lost-and-found 频道，附带原频道名称标头
+   */
+  private async redirectToLostAndFound(channelId: string, text: string, embedColor?: EmbedColor): Promise<string | null> {
+    const lfId = this.lostAndFoundChannelId;
+    if (!lfId || lfId === channelId) return null;
+
+    const lfChannel = await this.getChannel(lfId);
+    if (!lfChannel || !('send' in lfChannel)) return null;
+
+    const channelName = this.channelNames.get(channelId) || channelId;
+
+    try {
+      if (embedColor !== undefined) {
+        const embed = new EmbedBuilder()
+          .setAuthor({ name: channelName })
+          .setDescription(text.slice(0, this.MAX_EMBED_LENGTH))
+          .setColor(embedColor);
+        const msg = await (lfChannel as any).send({ embeds: [embed] });
+        return msg.id;
+      }
+
+      const header = `**[${channelName}]**`;
+      const fullText = `${header}\n${text}`;
+
+      if (fullText.length <= this.MAX_MESSAGE_LENGTH) {
+        const msg = await (lfChannel as any).send({ content: fullText });
+        return msg.id;
+      }
+
+      const embed = new EmbedBuilder()
+        .setAuthor({ name: channelName })
+        .setDescription(text.slice(0, this.MAX_EMBED_LENGTH))
+        .setColor(0x5865F2);
+      const msg = await (lfChannel as any).send({ embeds: [embed] });
+      return msg.id;
+    } catch (e: any) {
+      logger.error('redirectToLostAndFound failed:', e);
+      return null;
+    }
   }
 
   // --- Token Bucket ---
@@ -526,7 +577,12 @@ export class MessageQueue {
   private async executeSend(op: SendOp): Promise<void> {
     const channel = await this.getChannel(op.channelId);
     if (!channel || !('send' in channel)) {
-      op.reject(new Error(`Channel ${op.channelId} not found or not sendable`));
+      const lfMsgId = await this.redirectToLostAndFound(op.channelId, op.text, op.options?.embedColor);
+      if (lfMsgId) {
+        op.resolve(lfMsgId);
+      } else {
+        op.reject(new Error(`Channel ${op.channelId} not found or not sendable`));
+      }
       return;
     }
 
@@ -560,6 +616,18 @@ export class MessageQueue {
           await this.backoffRateLimit(error);
           continue;
         }
+        // Unknown Channel (10003): channel was deleted after successful fetch
+        if (error?.code === 10003) {
+          this.channelCache.delete(op.channelId);
+          const lfMsgId = await this.redirectToLostAndFound(op.channelId, op.text, op.options?.embedColor);
+          if (lfMsgId) {
+            op.resolve(lfMsgId);
+          } else {
+            logger.error('MessageQueue send failed (Unknown Channel):', error);
+            op.reject(error);
+          }
+          return;
+        }
         logger.error('MessageQueue send failed:', error);
         op.reject(error);
         return;
@@ -570,7 +638,13 @@ export class MessageQueue {
   private async executeSendDocument(op: SendDocumentOp): Promise<void> {
     const channel = await this.getChannel(op.channelId);
     if (!channel || !('send' in channel)) {
-      op.reject(new Error(`Channel ${op.channelId} not found or not sendable`));
+      const fallbackText = op.caption ? `${op.caption}\n\n[附件: ${op.filename}]` : `[附件: ${op.filename}]`;
+      const lfMsgId = await this.redirectToLostAndFound(op.channelId, fallbackText);
+      if (lfMsgId) {
+        op.resolve(lfMsgId);
+      } else {
+        op.reject(new Error(`Channel ${op.channelId} not found or not sendable`));
+      }
       return;
     }
 
@@ -623,6 +697,18 @@ export class MessageQueue {
         if (this.isRateLimit(error) && attempt < this.MAX_RETRY) {
           await this.backoffRateLimit(error);
           continue;
+        }
+        if (error?.code === 10003) {
+          this.channelCache.delete(op.channelId);
+          const fallbackText = op.caption ? `${op.caption}\n\n[附件: ${op.filename}]` : `[附件: ${op.filename}]`;
+          const lfMsgId = await this.redirectToLostAndFound(op.channelId, fallbackText);
+          if (lfMsgId) {
+            op.resolve(lfMsgId);
+          } else {
+            logger.error('MessageQueue sendDocument failed (Unknown Channel):', error);
+            op.reject(error);
+          }
+          return;
         }
         logger.error('MessageQueue sendDocument failed:', error);
         op.reject(error);

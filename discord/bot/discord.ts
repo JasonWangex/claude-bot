@@ -98,6 +98,9 @@ export class DiscordBot {
       config.stallTimeout,
     );
     this.messageQueue = new MessageQueue(this.client);
+    if (config.lostAndFoundChannelId) {
+      this.messageQueue.setLostAndFoundChannelId(config.lostAndFoundChannelId);
+    }
     this.messageHandler = new MessageHandler(this.stateManager, this.claudeClient, this.interactionRegistry, this.messageQueue);
     this.messageHandler.setErrorReporter((guildId, channelId, source, error) => this.sendErrorToGeneral(guildId, channelId, source, error));
 
