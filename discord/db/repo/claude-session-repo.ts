@@ -18,6 +18,7 @@ function rowToClaudeSession(row: ClaudeSessionRow): ClaudeSession {
     prevClaudeSessionId: row.prev_claude_session_id ?? undefined,
     channelId: row.channel_id ?? undefined,
     model: row.model ?? undefined,
+    effort: row.effort ?? undefined,
     planMode: row.plan_mode === 1,
     status: row.status,
     createdAt: row.created_at,
@@ -51,6 +52,7 @@ function claudeSessionToParams(session: ClaudeSession): Record<string, unknown> 
     prev_claude_session_id: session.prevClaudeSessionId ?? null,
     channel_id: session.channelId ?? null,
     model: session.model ?? null,
+    effort: session.effort ?? null,
     plan_mode: session.planMode ? 1 : 0,
     status: session.status,
     created_at: session.createdAt,
@@ -105,12 +107,12 @@ export class ClaudeSessionRepository {
       upsert: this.db.prepare(`
         INSERT INTO claude_sessions (
           claude_session_id, prev_claude_session_id,
-          channel_id, model, plan_mode, status, created_at, closed_at,
+          channel_id, model, effort, plan_mode, status, created_at, closed_at,
           purpose, parent_session_id, last_activity_at, last_usage_json, last_stop_at, title,
           task_id, goal_id, cwd, git_branch, project_path, hidden
         ) VALUES (
           @claude_session_id, @prev_claude_session_id,
-          @channel_id, @model, @plan_mode, @status, @created_at, @closed_at,
+          @channel_id, @model, @effort, @plan_mode, @status, @created_at, @closed_at,
           @purpose, @parent_session_id, @last_activity_at, @last_usage_json, @last_stop_at, @title,
           @task_id, @goal_id, @cwd, @git_branch, @project_path, @hidden
         )
@@ -118,6 +120,7 @@ export class ClaudeSessionRepository {
           prev_claude_session_id = @prev_claude_session_id,
           channel_id = @channel_id,
           model = @model,
+          effort = @effort,
           plan_mode = @plan_mode,
           status = @status,
           closed_at = @closed_at,

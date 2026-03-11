@@ -319,11 +319,35 @@ export class DiscordBot {
     // Thread 模型切换
     if (customId === 'model_select') {
       const channelId = interaction.channelId;
+      const session = this.stateManager.getSession(guildId, channelId);
+      if (!session) {
+        await interaction.update({ content: 'No active session.', components: [] });
+        return;
+      }
       const model = selected === 'follow_default' ? undefined : selected;
       this.stateManager.setSessionModel(guildId, channelId, model);
       const label = model ? getModelLabel(model) : `${getModelLabel(this.stateManager.getGuildDefaultModel(guildId))} (follow default)`;
+      const effortLabel = session.effort ?? 'default';
       await interaction.update({
-        content: `Model set to: **${label}**`,
+        content: `**Model:** ${label} | **Effort:** ${effortLabel}`,
+        components: [],
+      });
+      return;
+    }
+
+    // Thread effort 切换
+    if (customId === 'effort_select') {
+      const channelId = interaction.channelId;
+      const session = this.stateManager.getSession(guildId, channelId);
+      if (!session) {
+        await interaction.update({ content: 'No active session.', components: [] });
+        return;
+      }
+      const effort = selected === 'effort_default' ? undefined : selected;
+      this.stateManager.setSessionEffort(guildId, channelId, effort);
+      const modelLabel = session.model ? getModelLabel(session.model) : `${getModelLabel(this.stateManager.getGuildDefaultModel(guildId))} (follow default)`;
+      await interaction.update({
+        content: `**Model:** ${modelLabel} | **Effort:** ${effort ?? 'default'}`,
         components: [],
       });
       return;

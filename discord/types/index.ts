@@ -32,6 +32,7 @@ export interface Session {
   lastMessageAt?: number;
   planMode?: boolean;        // 是否处于 plan mode 等待确认
   model?: string;            // 用户选择的 Claude 模型
+  effort?: string;           // Claude CLI effort level (low/medium/high/max)
   messageCount: number;       // 消息历史条数（从 DB message_count 字段）
   parentChannelId?: string;   // 父 Channel ID（fork 产生的子 channel）
   worktreeBranch?: string;    // worktree 分支名（fork 创建的）
@@ -255,6 +256,7 @@ export interface ClaudeOptions {
   permissionMode?: string;
   forkSession?: boolean;
   model?: string;
+  effort?: string;
   guildId?: string;
   channelId?: string;
   images?: ImageAttachment[];
@@ -491,6 +493,7 @@ export interface ClaudeSession {
   prevClaudeSessionId?: string;
   channelId?: string;
   model?: string;
+  effort?: string;
   planMode: boolean;
   status: 'active' | 'waiting' | 'idle' | 'closed';  // 扩展状态支持
   createdAt: number;

@@ -66,6 +66,7 @@ import migration050 from './migrations/050_update_consultation_prompt_replan.js'
 import migration051 from './migrations/051_goals_add_tech_lead_channel.js';
 import migration052 from './migrations/052_goal_schema_refactor.js';
 import migration053 from './migrations/053_acceptance_criteria.js';
+import migration054 from './migrations/054_add_pending_phase_eval.js';
 
 const allMigrations: Migration[] = [
   migration001,
@@ -121,6 +122,7 @@ const allMigrations: Migration[] = [
   migration051,
   migration052,
   migration053,
+  migration054,
 ];
 
 const __dirname = dirname(fileURLToPath(import.meta.url));

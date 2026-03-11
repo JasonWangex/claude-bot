@@ -105,13 +105,15 @@ export class GoalRepo implements IGoalRepo {
           branch, channel_id, cwd,
           max_concurrent,
           tech_lead_channel_id,
-          phase_milestones
+          phase_milestones,
+          pending_phase_eval
         ) VALUES (
           @id, @name, @status,
           @branch, @channel_id, @cwd,
           @max_concurrent,
           @tech_lead_channel_id,
-          @phase_milestones
+          @phase_milestones,
+          @pending_phase_eval
         )
         ON CONFLICT(id) DO UPDATE SET
           name = @name,
@@ -121,7 +123,8 @@ export class GoalRepo implements IGoalRepo {
           cwd = @cwd,
           max_concurrent = @max_concurrent,
           tech_lead_channel_id = @tech_lead_channel_id,
-          phase_milestones = @phase_milestones
+          phase_milestones = @phase_milestones,
+          pending_phase_eval = @pending_phase_eval
       `).run(goalDriveStateToGoalRow(state));
 
       if (state.tasks.length === 0) {
@@ -317,6 +320,7 @@ function goalDriveStateToGoalRow(state: GoalDriveState): Record<string, unknown>
     max_concurrent: state.maxConcurrent,
     tech_lead_channel_id: state.techLeadChannelId ?? null,
     phase_milestones: state.phaseMilestones ? JSON.stringify(state.phaseMilestones) : null,
+    pending_phase_eval: state.pendingPhaseEval ? JSON.stringify(state.pendingPhaseEval) : null,
   };
 }
 
@@ -332,6 +336,7 @@ function rowsToGoalDriveState(
     channelId: goal.channel_id ?? '',
     techLeadChannelId: goal.tech_lead_channel_id ?? undefined,
     phaseMilestones: goal.phase_milestones ? (() => { try { return JSON.parse(goal.phase_milestones); } catch { return undefined; } })() : undefined,
+    pendingPhaseEval: goal.pending_phase_eval ? (() => { try { return JSON.parse(goal.pending_phase_eval); } catch { return undefined; } })() : undefined,
     cwd: goal.cwd ?? '',
     status: goalStatusToDriveStatus(goal.status),
     createdAt: 0,

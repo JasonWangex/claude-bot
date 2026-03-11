@@ -113,7 +113,7 @@ async function handleCompact(
     return;
   }
 
-  await interaction.deferReply();
+  await interaction.reply('Compacting...');
 
   let preTokens: number | null = null;
   let postTokens: number | null = null;
@@ -129,21 +129,21 @@ async function handleCompact(
     }
   };
 
-  try {
-    const lockKey = StateManager.channelLockKey(guildId, channelId);
-    await claudeClient.compact(session.claudeSessionId, session.cwd, lockKey, onProgress);
-
-    let info = 'Context compacted';
-    if (preTokens) {
-      info += `\nBefore: ${Math.round(preTokens / 1000)}K tokens`;
-      if (postTokens) {
-        info += ` → After: ${Math.round(postTokens / 1000)}K tokens`;
+  const lockKey = StateManager.channelLockKey(guildId, channelId);
+  claudeClient.compact(session.claudeSessionId, session.cwd, lockKey, onProgress)
+    .then(async () => {
+      let info = 'Context compacted';
+      if (preTokens) {
+        info += `\nBefore: ${Math.round(preTokens / 1000)}K tokens`;
+        if (postTokens) {
+          info += ` → After: ${Math.round(postTokens / 1000)}K tokens`;
+        }
       }
-    }
-    await interaction.editReply(info);
-  } catch (error: any) {
-    await interaction.editReply(`Compact failed: ${error.message}`);
-  }
+      await interaction.editReply(info).catch(() => {});
+    })
+    .catch(async (error: any) => {
+      await interaction.editReply(`Compact failed: ${error.message}`).catch(() => {});
+    });
 }
 
 // ========== /rewind ==========

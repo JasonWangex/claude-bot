@@ -126,6 +126,7 @@ export class StateManager {
         lastMessage: ch.lastMessage,
         lastMessageAt: ch.lastMessageAt,
         model: latestLink?.model,
+        effort: latestLink?.effort,
         messageCount: ch.messageCount,
         parentChannelId: ch.parentChannelId,
         worktreeBranch: ch.worktreeBranch,
@@ -181,6 +182,7 @@ export class StateManager {
           prevClaudeSessionId: session.prevClaudeSessionId,
           channelId: session.channelId,
           model: session.model,
+          effort: session.effort,
           planMode: session.planMode ?? false,
           status: existingSession?.status ?? 'active',
           createdAt: session.createdAt,
@@ -364,6 +366,13 @@ export class StateManager {
     const session = this.getSession(guildId, channelId);
     if (!session) return;
     session.model = model;
+    this.persistSession(guildId, channelId);
+  }
+
+  setSessionEffort(guildId: string, channelId: string, effort: string | undefined): void {
+    const session = this.getSession(guildId, channelId);
+    if (!session) return;
+    session.effort = effort;
     this.persistSession(guildId, channelId);
   }
 

@@ -635,6 +635,10 @@ export class ClaudeExecutor {
       args.push('--model', options.model);
     }
 
+    if (options.effort) {
+      args.push('--effort', options.effort);
+    }
+
     if (options.appendSystemPrompt) {
       args.push('--append-system-prompt', options.appendSystemPrompt);
     }

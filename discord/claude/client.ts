@@ -52,6 +52,7 @@ export class ClaudeClient {
       lockKey?: string;
       permissionMode?: string;
       model?: string;
+      effort?: string;
       guildId?: string;
       channelId?: string;
       images?: import('../types/index.js').ImageAttachment[];
@@ -115,6 +116,7 @@ export class ClaudeClient {
       lockKey?: string;
       permissionMode?: string;
       model?: string;
+      effort?: string;
       guildId?: string;
       channelId?: string;
       images?: import('../types/index.js').ImageAttachment[];
@@ -143,6 +145,7 @@ export class ClaudeClient {
       lockKey: options.lockKey,
       permissionMode: options.permissionMode,
       model: options.model,
+      effort: options.effort,
       guildId: options.guildId,
       channelId: options.channelId,
       images: options.images,

@@ -819,6 +819,7 @@ export class MessageHandler {
         lockKey,
         permissionMode: mode === 'plan' ? 'plan' : undefined,
         model: effectiveModel,
+        effort: session.effort,
         guildId,
         channelId,
         images,

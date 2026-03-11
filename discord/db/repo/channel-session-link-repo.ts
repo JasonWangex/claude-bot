@@ -77,7 +77,7 @@ export class ChannelSessionLinkRepository {
 
       // 查 channel 所有活跃 link（走 idx_csl_channel_active）
       getActiveLinks: this.db.prepare(`
-        SELECT csl.*, cs.model
+        SELECT csl.*, cs.model, cs.effort
         FROM channel_session_links csl
         JOIN claude_sessions cs ON cs.claude_session_id = csl.claude_session_id
         WHERE csl.channel_id = ? AND csl.unlinked_at IS NULL
@@ -158,11 +158,12 @@ export class ChannelSessionLinkRepository {
   /**
    * 获取 channel 所有活跃 link（含 model 信息）
    */
-  getActiveLinks(channelId: string): Array<ChannelSessionLink & { model?: string }> {
-    const rows = this.stmts.getActiveLinks.all(channelId) as Array<ChannelSessionLinkRow & { model: string | null }>;
+  getActiveLinks(channelId: string): Array<ChannelSessionLink & { model?: string; effort?: string }> {
+    const rows = this.stmts.getActiveLinks.all(channelId) as Array<ChannelSessionLinkRow & { model: string | null; effort: string | null }>;
     return rows.map(row => ({
       ...rowToLink(row),
       model: row.model ?? undefined,
+      effort: row.effort ?? undefined,
     }));
   }
 

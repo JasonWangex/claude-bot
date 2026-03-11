@@ -90,6 +90,8 @@ export interface GoalRow {
   tech_lead_channel_id: string | null;
   /** Phase 里程碑 JSON（{"1": "milestone...", "2": "..."}） */
   phase_milestones: string | null;
+  /** Pending phase evaluation JSON（调度器用于 phase 评估重推） */
+  pending_phase_eval: string | null;
 }
 
 // ================================================================
@@ -302,6 +304,7 @@ export interface ClaudeSessionRow {
   prev_claude_session_id: string | null;
   channel_id: string | null;
   model: string | null;
+  effort: string | null;
   plan_mode: number;             // 0/1
   status: 'active' | 'waiting' | 'idle' | 'closed';  // 扩展状态支持
   created_at: number;
