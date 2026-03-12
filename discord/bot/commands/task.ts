@@ -175,11 +175,15 @@ async function handleInfo(
       : 'None';
     const modelLabel = getModelLabel(session.model);
 
+    const effortLabel = session.effort ?? 'default';
+    const branchLabel = session.worktreeBranch ?? 'main';
+
     await interaction.reply(
       `**Channel Details**\n\n` +
       `Channel: \`${escapeMarkdown(session.name)}\`\n` +
       `Working directory: \`${escapeMarkdown(session.cwd)}\`\n` +
-      `Model: ${escapeMarkdown(modelLabel)}\n` +
+      `Branch: \`${escapeMarkdown(branchLabel)}\`\n` +
+      `Model: ${escapeMarkdown(modelLabel)} | Effort: ${escapeMarkdown(effortLabel)}\n` +
       `Claude context: ${session.claudeSessionId ? `\`${session.claudeSessionId}\`` : '(new session)'}\n` +
       `Created: ${created}\n` +
       `Last activity: ${lastMsgTime}\n` +
